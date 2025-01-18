@@ -1,3 +1,13 @@
+from setuptools import setup, Extension, find_packages
+from Cython.Build import cythonize
+import Cython.Compiler.Options
+Cython.Compiler.Options.annotate = True
+import numpy
+
+extensions = [Extension("cycore.*", ["nes/cycore/*.pyx"], include_dirs=[numpy.get_include()])]
+extensions = cythonize(extensions, compiler_directives={"language_level": 3, "profile": False, "boundscheck": False, "nonecheck": False, "cdivision": True}, annotate=True)
+
+
 import numpy
 print(numpy.get_include())
 
@@ -14,7 +24,9 @@ from tests.blargg_tests import run_tests
 nes = None
 
 # Mapper 0
-nes = NES("./roms/Dragon Warrior (USA) (Rev A).nes", sync_mode=SYNC_AUDIO, opengl=True)
+#nes = NES("./roms/Dragon Warrior (USA) (Rev A).nes", sync_mode=SYNC_AUDIO, opengl=True)
+nes = NES("./roms/Super_mario_brothers.nes", sync_mode=SYNC_AUDIO, opengl=True)
+
 #nes = NES("./roms/Super Mario Bros. (Japan, USA).nes", sync_mode=SYNC_AUDIO, opengl=True)
 #nes = NES("./roms/Balloon_fight.nes", log_file="./logs/nes.log", log_level=logging.INFO)
 #nes = NES("./roms/donkey kong.nes", log_file="./logs/nes.log", log_level=logging.INFO)

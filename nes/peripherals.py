@@ -260,6 +260,9 @@ class ControllerBase:
         self.is_pressed[self.LEFT] = state[self.LEFT]
         self.is_pressed[self.RIGHT] = state[self.RIGHT]
 
+    def is_any_pressed(self):
+        return any(self.is_pressed)
+
     def set_strobe(self, value):
         """
         Set the strobe bit to the given value

@@ -1,3 +1,7 @@
+import math
+import torch
+
+from torch.distributions import Normal
 import multiprocessing
 import time
 import torch
@@ -10,95 +14,79 @@ import torch_optimizer as optim
 from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-
+from nes.ai.deep_parallel_gmm import DeepParallelGMM
 from nes.ai.game_sim_dataset import GameSimulationDataset
 
-def _linear_block(in_features, out_features):
-    return [
-        nn.Linear(in_features, out_features),
-        nn.LeakyReLU(),
-        nn.BatchNorm1d(out_features)
-    ]
-
-NUM_CLASSES = 2
-NUM_OBJECTS = 512
-
-class ForwardModel(nn.Module):
-    def __init__(self):
-        super(ForwardModel, self).__init__()
-        self.model = nn.Sequential(
-            *_linear_block(NUM_OBJECTS, 2048),
-            *_linear_block(2048, 2048),
-            *_linear_block(2048, 2048),
-            nn.Linear(2048, NUM_OBJECTS * NUM_CLASSES),
-        )
-
-    def l1_regularization(self):
-        l1_reg = 0
-        for param in self.parameters():
-            l1_reg += torch.sum(torch.abs(param))
-        return l1_reg / len(list(self.parameters()))
-
-    def forward(self, x):
-        logits = self.model(x.float())
-        logits = logits.reshape(-1, NUM_OBJECTS, NUM_CLASSES)
-        return logits
+WORLD_DIMENSIONS = 1
 
 class ForwardLightningModel(pl.LightningModule):
     def __init__(self):
         super().__init__()
-        self.model = ForwardModel()
-        self.softmax = torch.nn.Softmax(dim=1)
-        self.loss_fn = nn.CrossEntropyLoss()
+        self.model = DeepParallelGMM(WORLD_DIMENSIONS, 1024, WORLD_DIMENSIONS, 1)
 
     def forward(self, x):
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        x = x[0]
-        y = y[0]
-        logits = self(x)
+        input_data, output_data = batch
 
-        logits = logits.reshape(-1, NUM_CLASSES)
+        assert input_data.shape[0] == 1
+        input_data = input_data.squeeze(0).float()
 
-        y = y.reshape(-1)
+        assert output_data.shape[0] == 1
+        output_data = output_data.squeeze(0).float()
 
-        assert logits.shape[0] == y.shape[0]
-        assert logits.shape[1] == NUM_CLASSES
+        outputs, means, stds, weights = self.model(input_data / 255.0, output_data)
+        model_loss = 1.0 * (-torch.mean(outputs))
 
-        l1_penalty = self.model.l1_regularization()
+        weight_l1_loss = 1.0 * torch.abs(weights).mean()
+        mean_l1_loss = 100.0 * torch.nn.L1Loss()(means.mean(),output_data.mean())
 
-        loss = self.loss_fn(logits, y) + (0.0001 * l1_penalty)
+        weight_clamp_loss = (1000 * torch.nn.L1Loss()(weights,torch.clamp(weights.detach(), min=2e-2)))
+        std_clamp_loss = (1000 * torch.nn.L1Loss()(stds,torch.clamp(stds.detach(), min=2e-2)))
 
-        predicted_class = torch.argmax(logits, dim=1)
+        loss = model_loss + weight_l1_loss + mean_l1_loss + weight_clamp_loss + std_clamp_loss
 
-        metric = MulticlassAccuracy()
-        metric.update(predicted_class, y)
+        self.log('lr', self.lr_schedulers().get_last_lr()[0], prog_bar=True)
+        self.log('loss', loss, prog_bar=True)
+        self.log('model_loss', model_loss, prog_bar=True)
+        self.log('weight_l1_loss', weight_l1_loss, prog_bar=True)
+        self.log('mean_l1_loss', mean_l1_loss, prog_bar=True)
+        self.log('weight_clamp_loss', weight_clamp_loss, prog_bar=True)
+        self.log('std_clamp_loss', std_clamp_loss, prog_bar=True)
 
-        self.log('train_loss', loss, prog_bar=True)
-        self.log('train_acc', metric.compute().item(), prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        x, y = batch
-        x = x[0]
-        y = y[0]
-        logits = self(x)
+        input_data, output_data = batch
 
-        logits = logits.reshape(-1, NUM_CLASSES)
+        assert input_data.shape[0] == 1
+        input_data = input_data.squeeze(0)
+        input_data_float = input_data.float()
 
-        y = y.reshape(-1)
+        assert output_data.shape[0] == 1
+        output_data = output_data.squeeze(0)
+        output_data_float = output_data
 
-        assert logits.shape[0] == y.shape[0]
-        assert logits.shape[1] == NUM_CLASSES
+        model_output_float = self.model.sample(input_data_float / 255.0)
 
-        predicted_class = torch.argmax(logits, dim=1)
+        assert model_output_float.shape == output_data_float.shape
 
-        metric = MulticlassAccuracy()
-        metric.update(predicted_class, y)
+        model_output = torch.round(torch.clamp(model_output_float, min=0, max=255.0)).to(dtype=torch.int)
+
+        metric = MulticlassAccuracy(num_classes=256)
+        metric.update(model_output.flatten(), output_data.flatten())
 
         self.log('val_acc', metric.compute().item(), prog_bar=True)
+
+        #print("SCORES")
+        #print(quantized_scores)
+        #print(y)
+
+        l1_diff = torch.mean(torch.abs(model_output - output_data_float).float())
+
+        self.log('val_diff', l1_diff, prog_bar=True)
+
         return metric.compute().item()
 
     def configure_optimizers(self):
@@ -107,9 +95,9 @@ class ForwardLightningModel(pl.LightningModule):
             "optimizer":optimizer,
             "lr_scheduler": {
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer, mode="max", factor=0.5, patience=2, verbose=True
+                    optimizer, mode="min", factor=math.sqrt(0.1), patience=10
                 ),
-                "monitor": "val_acc",
+                "monitor": "loss",
                 "frequency": 1
                 # If "monitor" references validation metrics, then "frequency" should be set to a
                 # multiple of "trainer.check_val_every_n_epoch".
@@ -145,24 +133,26 @@ def main(queue: multiprocessing.Queue):
 
     train_dataset = GameSimulationDataset(
         "train",
-        100,
+        WORLD_DIMENSIONS,
+        10,
         3000,
         queue,
     )
     val_dataset = GameSimulationDataset(
         "val",
-        10,
-        50,
+        WORLD_DIMENSIONS,
+        1,
+        3000,
         queue,
     )
 
-    trainer = pl.Trainer(max_epochs=1000, callbacks=[
+    trainer = pl.Trainer(max_epochs=10000, accelerator="mps", callbacks=[
         LearningRateMonitor(logging_interval="step"),
                 EarlyStopping(
                     monitor="val_acc",
                     min_delta=0.0001,
                     mode="max",
-                    patience=20,
+                    patience=500,
                     verbose=True,
                 ),
     ])
@@ -180,12 +170,13 @@ def main(queue: multiprocessing.Queue):
     )
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
+
 def push_games(queue: multiprocessing.Queue):
     while True:
-        x = torch.randint(0, 256, (NUM_OBJECTS,), dtype=torch.uint8)
-        y = (x>128).int() * x.int()
+        x = torch.randint(0, 256, (WORLD_DIMENSIONS,), dtype=torch.int)
+        y = (x>128).int()
         try:
-            queue.put((x, y), timeout=1.0)
+            queue.put((x.numpy(), y.numpy()), timeout=1.0)
         except BaseException as e:
             print(e)
             time.sleep(5.0)

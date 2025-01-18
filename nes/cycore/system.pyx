@@ -13,6 +13,7 @@ from nes.ai.vlm import GptVisionLanguageModel
 import logging
 import time
 import warnings
+import os
 
 import numpy as np
 from PIL import Image
@@ -347,64 +348,71 @@ cdef class NES:
         t_start = time.time()
 
         last_ram = np.copy(self.memory.ram).astype(np.int32)
-        while True:
-            vblank_started=False
-            while not vblank_started:
-                vblank_started = self.step(log_cpu)
+        import shelve
+        print("OPENING SHELVES")
+        try:
+            import contextlib
 
-            # update the controllers once per frame
-            self.controller1.update()
-            self.controller2.update()
+            with contextlib.suppress(FileNotFoundError):
+                import os
+                os.remove("expert_controller.shelve")
+                os.remove("expert_input.shelve")
+            expert_controller = shelve.open("expert_controller.shelve")
+            expert_input = shelve.open("expert_input.shelve")
+            data_frame = 0
+            while True:
+                vblank_started=False
+                while not vblank_started:
+                    vblank_started = self.step(log_cpu)
 
-            cpu_cycles = self.cpu.cycles_since_reset
+                # update the controllers once per frame
+                self.controller1.update()
+                self.controller2.update()
 
-            if time.time() - t_start > self.STATS_CALC_PERIOD_S:
-                # calcualte the fps and adaptive audio rate (only used when non-audio sync is in use)
-                dt = time.time() - t_start
-                fps = (frame - frame_start) * 1.0 / dt
-                buffer_surplus = self.apu.buffer_remaining() - TARGET_AUDIO_BUFFER_SAMPLES
+                cpu_cycles = self.cpu.cycles_since_reset
 
-                # adjust the rate based on the buffer change
-                adaptive_rate = int(SAMPLE_RATE - 0.5 * buffer_surplus / dt)
-                adaptive_rate = max(SAMPLE_RATE - MAX_RATE_DELTA, min(adaptive_rate, SAMPLE_RATE + MAX_RATE_DELTA))
-                t_start = time.time()
-                frame_start = frame
-            if show_hud:
-                # display information on the HUD (turn on/off with '1' key)
-                self.screen.add_text("{:.0f} fps, {}Hz, {} samples".format(fps, self.apu.get_rate(), self.apu.buffer_remaining()),
-                                     (self.OSD_FPS_X, self.OSD_Y),
-                                     self.OSD_TEXT_COLOR if fps > TARGET_FPS - 3 else self.OSD_WARN_COLOR)
-                if log_cpu:
-                    self.screen.add_text("logging cpu", (self.OSD_NOTE_X, self.OSD_Y), self.OSD_NOTE_COLOR)
-                if mute:
-                    self.screen.add_text("MUTE", (self.OSD_MUTE_X, self.OSD_Y), self.OSD_TEXT_COLOR)
+                if time.time() - t_start > self.STATS_CALC_PERIOD_S:
+                    # calcualte the fps and adaptive audio rate (only used when non-audio sync is in use)
+                    dt = time.time() - t_start
+                    fps = (frame - frame_start) * 1.0 / dt
+                    buffer_surplus = self.apu.buffer_remaining() - TARGET_AUDIO_BUFFER_SAMPLES
+
+                    # adjust the rate based on the buffer change
+                    adaptive_rate = int(SAMPLE_RATE - 0.5 * buffer_surplus / dt)
+                    adaptive_rate = max(SAMPLE_RATE - MAX_RATE_DELTA, min(adaptive_rate, SAMPLE_RATE + MAX_RATE_DELTA))
+                    t_start = time.time()
+                    frame_start = frame
+                if show_hud:
+                    # display information on the HUD (turn on/off with '1' key)
+                    self.screen.add_text("{:.0f} fps, {}Hz, {} samples".format(fps, self.apu.get_rate(), self.apu.buffer_remaining()),
+                                        (self.OSD_FPS_X, self.OSD_Y),
+                                        self.OSD_TEXT_COLOR if fps > TARGET_FPS - 3 else self.OSD_WARN_COLOR)
+                    if log_cpu:
+                        self.screen.add_text("logging cpu", (self.OSD_NOTE_X, self.OSD_Y), self.OSD_NOTE_COLOR)
+                    if mute:
+                        self.screen.add_text("MUTE", (self.OSD_MUTE_X, self.OSD_Y), self.OSD_TEXT_COLOR)
 
 
-            diff = self.memory.ram.astype(np.int32) - last_ram
-            #print("RAM diff1:", np.where(diff != 0))
-            #print("RAM diff2:", diff[np.where(diff != 0)])
-            last_ram[:] = self.memory.ram[:]
+                diff = self.memory.ram.astype(np.int32) - last_ram
+                #print("RAM diff1:", np.where(diff != 0))
+                #print("RAM diff2:", diff[np.where(diff != 0)])
+                last_ram[:] = self.memory.ram[:]
 
-            # Check for an exit
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    pygame.quit()
-                    if audio:
-                        player.stop_stream()
-                        player.close()
-                        p.terminate()
-                    return
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_1:
-                        show_hud = not show_hud
-                    if event.key == pygame.K_0:
-                        if not mute:
-                            self.apu.set_volume(0)
-                            mute = True
-                        else:
-                            self.apu.set_volume(volume)
-                            mute = False
-                    if event.key == pygame.K_3:
+                #print("CONTROLLER", self.controller1.is_pressed)
+
+                if frame > 0 and frame % 1 == 0:
+
+                    if False:
+                        # Data Collect
+                        if frame == 1:
+                            print("RESETTING")
+                            import shutil
+                            shutil.rmtree("expert_images", ignore_errors=True)
+                            import os
+                            os.mkdir("expert_images")
+                            expert_controller.clear()
+                            expert_input.clear()
+                        expert_controller[str(data_frame)] = np.array(self.controller1.is_pressed)
                         h = 240 if self.v_overscan else 224
                         w = 256 if self.h_overscan else 240
                         sb = np.zeros((w, h), dtype=np.uint32)
@@ -412,111 +420,181 @@ cdef class NES:
                         sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
                         image = Image.fromarray(sb)
                         assert image.size == (w,h)
-                        image = image.resize((w*2, h*2))
-                        import pytesseract
+                        image = image.resize((224, 224))
+                        #expert_input[str(data_frame)] = np.array(image)
+                        image.save("expert_images/" + str(data_frame) + ".png")
+                        if data_frame % 60 == 0:
+                            print("SAVING")
+                            expert_controller.sync()
+                            expert_input.sync()
 
-                        print(pytesseract.get_languages(config=''))
-                        text = pytesseract.image_to_string(image)
-                        print("OCR:", text)
-                        vlm = GptVisionLanguageModel("test")
-                        text = vlm.vlm(image, prompt="<|image_1|>What words are in this image?", system_prompt="OCR this image.  Only return the words from the image with no other text.  Do not respond like a human.")
-                        print("VLM:", text)
-                        image.save("test.png")
+                    if False:
+                        # Replay
+                        controller = expert_controller[str(data_frame)]
+                        self.controller1.set_state(controller)
 
-                        import easyocr
+                    if True:
+                        # Score model
+                        from nes.ai.imitation_learning_score import score_image
+                        h = 240 if self.v_overscan else 224
+                        w = 256 if self.h_overscan else 240
+                        sb = np.zeros((w, h), dtype=np.uint32)
+                        self.ppu.copy_screen_buffer_to(sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan)
+                        sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
+                        image = Image.fromarray(sb)
+                        assert image.size == (w,h)
+                        image = image.resize((224, 224))
+                        new_state = score_image(image)
+                        self.controller1.update()
+                        if not self.controller1.is_any_pressed():
+                            self.controller1.set_state(new_state)
 
-                        # Create an OCR reader object
-                        reader = easyocr.Reader(['en'])
+                    data_frame += 1
 
-                        # Read text from an image
-                        result = reader.readtext('test.png')
+                # Check for an exit
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        pygame.quit()
+                        if audio:
+                            player.stop_stream()
+                            player.close()
+                            p.terminate()
+                        return
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_1:
+                            show_hud = not show_hud
+                        if event.key == pygame.K_0:
+                            if not mute:
+                                self.apu.set_volume(0)
+                                mute = True
+                            else:
+                                self.apu.set_volume(volume)
+                                mute = False
+                        if event.key == pygame.K_3:
+                            h = 240 if self.v_overscan else 224
+                            w = 256 if self.h_overscan else 240
+                            sb = np.zeros((w, h), dtype=np.uint32)
+                            self.ppu.copy_screen_buffer_to(sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan)
+                            sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
+                            image = Image.fromarray(sb)
+                            assert image.size == (w,h)
+                            image = image.resize((w*2, h*2))
+                            import pytesseract
 
-                        # Print the extracted text
-                        for detection in result:
-                            print(detection[0], detection[1])
+                            print(pytesseract.get_languages(config=''))
+                            text = pytesseract.image_to_string(image)
+                            print("OCR:", text)
+                            vlm = GptVisionLanguageModel("test")
+                            text = vlm.vlm(image, prompt="<|image_1|>What words are in this image?", system_prompt="OCR this image.  Only return the words from the image with no other text.  Do not respond like a human.")
+                            print("VLM:", text)
+                            image.save("test.png")
 
-                        import keras_ocr
-                        pipeline = keras_ocr.pipeline.Pipeline()
-                        images = [keras_ocr.tools.read('test.png')]
-                        prediction_groups = pipeline.recognize(images)
-                        print("Keras OCR:", prediction_groups)
+                            import easyocr
 
-                    if event.key == pygame.K_MINUS:
-                        volume = max(0, volume - 0.1)
-                        self.apu.set_volume(volume)
-                        self.screen.add_text("volume: " + "|" * int(10 * volume),
-                                             (self.OSD_VOL_X, self.OSD_Y),
-                                             self.OSD_TEXT_COLOR, ttl=30)
-                        mute=False
-                    if event.key == pygame.K_EQUALS:
-                        volume = min(1, volume + 0.1)
-                        self.apu.set_volume(volume)
-                        self.screen.add_text("volume: " + "|" * int(10 * volume),
-                                             (self.OSD_VOL_X, self.OSD_Y),
-                                             self.OSD_TEXT_COLOR, ttl=30)
-                        mute=False
-                    if event.key == pygame.K_2:
-                        log_cpu = not log_cpu
-                    if event.key == pygame.K_5:
-                        print("SAVING")
-                        import pickle
-                        with open("save.pickle", "wb") as f:
-                            pickle.dump(self.save(), f)
-                        self.screen.add_text("State save",
-                                             (self.OSD_VOL_X, self.OSD_Y),
-                                             self.OSD_TEXT_COLOR, ttl=30)
-                    if event.key == pygame.K_6:
-                        import pickle
-                        with open("save.pickle", "rb") as f:
-                            pickled_state = pickle.load(f)
-                            print(pickled_state)
-                            self.load(pickled_state)
-                        self.screen.add_text("State load",
-                                             (self.OSD_VOL_X, self.OSD_Y),
-                                             self.OSD_TEXT_COLOR, ttl=30)
+                            # Create an OCR reader object
+                            reader = easyocr.Reader(['en'])
+
+                            # Read text from an image
+                            result = reader.readtext('test.png')
+
+                            # Print the extracted text
+                            for detection in result:
+                                print(detection[0], detection[1])
+
+                            import keras_ocr
+                            pipeline = keras_ocr.pipeline.Pipeline()
+                            images = [keras_ocr.tools.read('test.png')]
+                            prediction_groups = pipeline.recognize(images)
+                            print("Keras OCR:", prediction_groups)
+
+                        if event.key == pygame.K_MINUS:
+                            volume = max(0, volume - 0.1)
+                            self.apu.set_volume(volume)
+                            self.screen.add_text("volume: " + "|" * int(10 * volume),
+                                                (self.OSD_VOL_X, self.OSD_Y),
+                                                self.OSD_TEXT_COLOR, ttl=30)
+                            mute=False
+                        if event.key == pygame.K_EQUALS:
+                            volume = min(1, volume + 0.1)
+                            self.apu.set_volume(volume)
+                            self.screen.add_text("volume: " + "|" * int(10 * volume),
+                                                (self.OSD_VOL_X, self.OSD_Y),
+                                                self.OSD_TEXT_COLOR, ttl=30)
+                            mute=False
+                        if event.key == pygame.K_2:
+                            log_cpu = not log_cpu
+                        if event.key == pygame.K_5:
+                            print("SAVING")
+                            import pickle
+                            with open("save.pickle", "wb") as f:
+                                pickle.dump(self.save(), f)
+                            self.screen.add_text("State save",
+                                                (self.OSD_VOL_X, self.OSD_Y),
+                                                self.OSD_TEXT_COLOR, ttl=30)
+                        if event.key == pygame.K_6:
+                            import pickle
+                            with open("save.pickle", "rb") as f:
+                                pickled_state = pickle.load(f)
+                                print(pickled_state)
+                                self.load(pickled_state)
+                            self.screen.add_text("State load",
+                                                (self.OSD_VOL_X, self.OSD_Y),
+                                                self.OSD_TEXT_COLOR, ttl=30)
+                        if event.key == pygame.K_7:
+                            h = 240 if self.v_overscan else 224
+                            w = 256 if self.h_overscan else 240
+                            sb = np.zeros((w, h), dtype=np.uint32)
+                            self.ppu.copy_screen_buffer_to(sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan)
+                            sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
+                            image = Image.fromarray(sb)
+                            assert image.size == (w,h)
+                            image = image.resize((224,224))
 
 
-            # show the display (if using SYNC_VSYNC mode, this should provide a sync, which must be at 60Hz)
-            self.screen.show()
+                # show the display (if using SYNC_VSYNC mode, this should provide a sync, which must be at 60Hz)
+                self.screen.show()
 
-            if self.sync_mode == SYNC_AUDIO:
-                # wait for the audio buffer to empty, but only if the audio is playing
-                while self.apu.buffer_remaining() > TARGET_AUDIO_BUFFER_SAMPLES and audio and player.is_active():
-                    clock.tick(500)  # wait for about 2ms (~= 96 samples)
-            elif self.sync_mode == SYNC_VSYNC or self.sync_mode == SYNC_PYGAME:
-                # here we rely on an external sync source, but allow the audio to adapt to it
-                if frame > 2 * TARGET_FPS:  # wait a bit before doing this since startup can be slow
-                    self.apu.set_rate(adaptive_rate)
-            else:
-                # no sync at all, go as fast as we can!
-                pass
+                if self.sync_mode == SYNC_AUDIO:
+                    # wait for the audio buffer to empty, but only if the audio is playing
+                    while self.apu.buffer_remaining() > TARGET_AUDIO_BUFFER_SAMPLES and audio and player.is_active():
+                        clock.tick(500)  # wait for about 2ms (~= 96 samples)
+                elif self.sync_mode == SYNC_VSYNC or self.sync_mode == SYNC_PYGAME:
+                    # here we rely on an external sync source, but allow the audio to adapt to it
+                    if frame > 2 * TARGET_FPS:  # wait a bit before doing this since startup can be slow
+                        self.apu.set_rate(adaptive_rate)
+                else:
+                    # no sync at all, go as fast as we can!
+                    pass
 
-            if self.sync_mode == SYNC_PYGAME:
-                # if we are using pygame sync, we have to supply our own clock tick here
-                clock.tick(TARGET_FPS)
+                if self.sync_mode == SYNC_PYGAME:
+                    # if we are using pygame sync, we have to supply our own clock tick here
+                    clock.tick(TARGET_FPS)
 
-            if (audio
-                and not player.is_active()
-                and self.apu.buffer_remaining() > TARGET_AUDIO_BUFFER_SAMPLES
-                and (frame % 10 == 0)
-                ):
-                # sometimes the audio stream stops (e.g. if it runs out of samples) and has to be restarted or else the
-                # sound will stop.  Here try to (re)start the stream if it is not running if there is audio waiting.
-                audio_drop=True
-                player.stop_stream()
-                player.close()
-                player = p.open(format=pyaudio.paInt16,
-                                channels=1,
-                                rate=SAMPLE_RATE,
-                                output=True,
-                                frames_per_buffer=AUDIO_CHUNK_SAMPLES,  # 400 is a half-frame at 60Hz, 48kHz sound
-                                stream_callback=self.apu.pyaudio_callback,
-                                )
-                player.start_stream()
-            else:
-                audio_drop = False
+                if (audio
+                    and not player.is_active()
+                    and self.apu.buffer_remaining() > TARGET_AUDIO_BUFFER_SAMPLES
+                    and (frame % 10 == 0)
+                    ):
+                    # sometimes the audio stream stops (e.g. if it runs out of samples) and has to be restarted or else the
+                    # sound will stop.  Here try to (re)start the stream if it is not running if there is audio waiting.
+                    audio_drop=True
+                    player.stop_stream()
+                    player.close()
+                    player = p.open(format=pyaudio.paInt16,
+                                    channels=1,
+                                    rate=SAMPLE_RATE,
+                                    output=True,
+                                    frames_per_buffer=AUDIO_CHUNK_SAMPLES,  # 400 is a half-frame at 60Hz, 48kHz sound
+                                    stream_callback=self.apu.pyaudio_callback,
+                                    )
+                    player.start_stream()
+                else:
+                    audio_drop = False
 
-            frame += 1
+                frame += 1
+        finally:
+            expert_controller.close()
+            expert_input.close()
 
     cpdef object run_frame_headless(self, int run_frames=1, object controller1_state=[False] * 8, object controller2_state=[False] * 8):
         """
