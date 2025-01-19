@@ -68,7 +68,7 @@ dls = ImageDataLoaders.from_name_func(
 learn = vision_learner(dls, 'vit_tiny_patch16_224', metrics=error_rate, cbs=[
         fastai.callback.tracker.SaveModelCallback(monitor='error_rate', fname='best_model', with_opt=True),
         fastai.callback.tracker.EarlyStoppingCallback (monitor='error_rate', comp=None, min_delta=0.0,
-                        patience=100, reset_on_fit=True),
+                        patience=10, reset_on_fit=True),
     ])
 shutil.rmtree(Path('./fastai_output'), ignore_errors=True)
 learn.path = Path('./fastai_output')
@@ -77,7 +77,7 @@ learn.fine_tune(200000, freeze_epochs=10)
 print(learn.path)
 print(learn.dls.vocab)
 
-labels = ['[false, false, false, false, false, false, false, false]', '[false, false, false, false, false, false, false, true]', '[false, false, false, true, false, false, false, false]', '[false, true, false, false, false, false, false, true]', '[true, true, false, false, false, false, false, true]']
+labels = ['[false, false, false, false, false, false, false, false]', '[false, false, false, false, false, false, false, true]', '[false, true, false, false, false, false, false, true]', '[true, true, false, false, false, false, false, true]']
 
 assert json.dumps(list(learn.dls.vocab)) == json.dumps(labels)
 

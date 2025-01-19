@@ -10,7 +10,7 @@ import numpy as np
 import shelve
 expert_controller = shelve.open("expert_controller.shelve")
 
-labels = ['[false, false, false, false, false, false, false, false]', '[false, false, false, false, false, false, false, true]', '[false, false, false, true, false, false, false, false]', '[false, true, false, false, false, false, false, true]', '[true, true, false, false, false, false, false, true]']
+labels = ['[false, false, false, false, false, false, false, false]', '[false, false, false, false, false, false, false, true]', '[false, true, false, false, false, false, false, true]', '[true, true, false, false, false, false, false, true]']
 
 seen_values = {}
 
