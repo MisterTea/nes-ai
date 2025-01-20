@@ -1,6 +1,7 @@
 import torch
 from PIL import Image
 from torchvision import transforms
+import json
 
 from nes.ai.helpers import upscale_and_get_labels
 
@@ -14,29 +15,47 @@ DEFAULT_TRANSFORM = transforms.Compose(
 
 
 class NESDataset(torch.utils.data.Dataset):
-    def __init__(self):
-        self.image_files_upscaled, self.file_label_map = upscale_and_get_labels()
+    def __init__(self, train:bool):
+        self.image_files, self.file_to_frame, image_files_upscaled, self.file_label_map, label_upsample_map = upscale_and_get_labels()
+        self.example_weights = torch.nn.functional.normalize(torch.FloatTensor([label_upsample_map[self.file_label_map[f.name]] for f in self.image_files]), p=1, dim=0)
+        print(self.example_weights)
+        print(self.example_weights.sum())
+        self.train = train
         self.label_int_map = {}
+        self.int_label_map = {}
         for label in self.file_label_map.values():
             if label not in self.label_int_map:
                 self.label_int_map[label] = len(self.label_int_map)
-        print("LABEL SIZE", len(self.label_int_map))
+                self.int_label_map[self.label_int_map[label]] = json.loads(label)
+        self.max_frame = max(self.file_to_frame.values())
+
+        print("LABELS", self.label_int_map)
 
     def __len__(self):
-        return len(self.image_files_upscaled) - 10
+        return len(self.image_files)
 
-    def get_image_at_frame(self, frame):
-        image_filename = self.image_files_upscaled[frame]
+    def get_image_and_input_at_frame(self, frame):
+        image_filename = self.image_files[frame]
+        #print("frame to file", frame, image_filename)
         image = Image.open(image_filename)
         image = DEFAULT_TRANSFORM(image)
-        return image
+        #print("Replay buffer image",frame, image.mean())
+        return image, self.file_label_map[self.image_files[frame].name]
 
     def __getitem__(self, idx):
-        image_stack = torch.stack([self.get_image_at_frame(idx + i) for i in range(4)])
+        frame = self.file_to_frame[self.image_files[idx]]
+        while frame + 4 >= self.max_frame:
+            frame -= 1
+        image_list, input_list = zip(*[self.get_image_and_input_at_frame(frame + i) for i in range(4)])
+        assert len(image_list) == 4
+        assert len(input_list) == 4
+        image_stack = torch.stack(image_list)
+        past_inputs = torch.zeros((3,8), dtype=torch.float)
+        for i in range(3):
+            past_inputs[i, :] = torch.Tensor(json.loads(input_list[i]))
 
         return (
             image_stack,
-            self.label_int_map[
-                self.file_label_map[self.image_files_upscaled[idx].name]
-            ],
+            past_inputs,
+            self.label_int_map[input_list[-1]]
         )

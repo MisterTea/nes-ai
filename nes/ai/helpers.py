@@ -2,46 +2,36 @@ from collections import Counter
 from pathlib import Path
 import shutil
 import torch
-from fastai.vision.all import *
 import fastai
 import json
 import numpy as np
+import copy
+import os
 
 import shelve
 
 def upscale_and_get_labels():
     expert_controller = shelve.open("expert_controller.shelve")
 
-    seen_values = {}
-
     def get_label(x):
         data_frame_str = str(x).split("/")[-1].split(".")[-2]
         controller_array = expert_controller[data_frame_str]
+        controller_array[3] = False # Do not press start with AI
         return json.dumps(controller_array.tolist())
-        controller_int_value = 0
-        for i, value in enumerate(controller_array):
-            controller_int_value += value * (2 ** i)
-        #print(controller_array, controller_int_value)
-        return controller_int_value
-        if controller_int_value not in seen_values:
-            seen_values[controller_int_value] = len(seen_values)+1
-        return seen_values[controller_int_value]
 
     path = "./expert_images"
-    image_files = get_image_files(path)
+    image_files = []
+    i = 0
+    while True:
+        if os.path.exists(f"{path}/{i}.png"):
+            image_files.append(Path(f"{path}/{i}.png"))
+            i += 1
+        else:
+            break
     labels = [get_label(item) for item in image_files]
     file_label_map = {}
     for i in range(len(labels)):
-        filename = str(image_files[i]).split("/")[-1]
-        file_label_map[filename] = labels[i]
-
-    mark_for_deletion = []
-    for i in range(len(labels)):
-        # Remove the start button press from the dataset.  We'll press this manually
-        if labels[i] == '[false, false, false, true, false, false, false, false]':
-            mark_for_deletion.append(i)
-    image_files = [item for i, item in enumerate(image_files) if i not in mark_for_deletion]
-    labels = [item for i, item in enumerate(labels) if i not in mark_for_deletion]
+        file_label_map[image_files[i].name] = labels[i]
 
     count = Counter(labels)
     print(count)
@@ -55,11 +45,15 @@ def upscale_and_get_labels():
     upsample_factors = []
     for freq in label_freq:
         upsample_factors.append(lcm // freq)
+    upsample_factors_raw = copy.deepcopy(upsample_factors)
     print("UPSAMPLE FACTORS", upsample_factors)
     while min(upsample_factors) > 8:
         upsample_factors = [factor // 2 for factor in upsample_factors]
         print("UPSAMPLE FACTORS", upsample_factors)
     print("UPSAMPLE FACTORS (done)", upsample_factors)
+    label_upsample_map = {}
+    for i in range(len(label_names)):
+        label_upsample_map[label_names[i]] = upsample_factors[i]
 
     image_files_upscaled = []
     for i, item in enumerate(image_files):
@@ -67,4 +61,7 @@ def upscale_and_get_labels():
         for j in range(upsample_factors[label_names.index(label)]):
             image_files_upscaled.append(item)
 
-    return image_files_upscaled, file_label_map
+    file_to_frame = {}
+    for i, item in enumerate(image_files):
+        file_to_frame[item] = i
+    return image_files, file_to_frame, image_files_upscaled, file_label_map, label_upsample_map

@@ -2,7 +2,7 @@ from setuptools import setup, Extension, find_packages
 from Cython.Build import cythonize
 import Cython.Compiler.Options
 Cython.Compiler.Options.annotate = True
-import numpy
+#import numpy
 
 #extensions = [Extension("cycore.*", ["nes/cycore/*.pyx"], include_dirs=[numpy.get_include()])]
 #extensions = cythonize(extensions, compiler_directives={"language_level": 3, "profile": False, "boundscheck": False, "nonecheck": False, "cdivision": True}, annotate=True)

@@ -25,7 +25,7 @@ nes = None
 
 # Mapper 0
 #nes = NES("./roms/Dragon Warrior (USA) (Rev A).nes", sync_mode=SYNC_AUDIO, opengl=True)
-nes = NES("./roms/Super_mario_brothers.nes", sync_mode=SYNC_AUDIO, opengl=True)
+nes = NES("./roms/Super_mario_brothers.nes", sync_mode=SYNC_PYGAME, opengl=True)
 
 #nes = NES("./roms/Super Mario Bros. (Japan, USA).nes", sync_mode=SYNC_AUDIO, opengl=True)
 #nes = NES("./roms/Balloon_fight.nes", log_file="./logs/nes.log", log_level=logging.INFO)

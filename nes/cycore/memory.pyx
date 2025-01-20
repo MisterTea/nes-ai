@@ -29,7 +29,7 @@ cdef class NESMappedRAM(MemoryBase):
     """
     def __init__(self, ppu=None, apu=None, cart=None, controller1=None, controller2=None, interrupt_listener=None):
         super().__init__()
-        self.ram = np.empty(RAM_SIZE, np.uint8)
+        self.ram = np.zeros(RAM_SIZE, np.uint8)
         self.ppu = ppu
         self.apu = apu
         self.cart = cart

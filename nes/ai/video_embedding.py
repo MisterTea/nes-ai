@@ -130,7 +130,7 @@ def main():
 
     videos = []
     video_labels = []
-    for x in range(100, len(image_files) - 10, 7):
+    for x in range(100, len(image_files) - 10, 5):
         video_arr = None
         for y in range(10):
             img = Image.open(f"{image_files[x+y]}")
@@ -178,7 +178,7 @@ def main():
 
     training_args = TrainingArguments(
         output_dir="./results",
-        num_train_epochs=100,
+        num_train_epochs=1000,
         per_device_train_batch_size=2,
         per_device_eval_batch_size=2,
         learning_rate=1e-03,
@@ -186,13 +186,13 @@ def main():
         logging_dir="./logs",
         logging_steps=10,
         seed=42,
-        evaluation_strategy="steps",
-        eval_steps=100,
+        evaluation_strategy="epoch",
+        save_strategy="epoch",
         warmup_steps=int(0.1 * 20),
         optim="adamw_torch",
         lr_scheduler_type="linear",
-        # fp16=True,
-        fp16=False,
+        fp16=True,
+        #fp16=False,
         load_best_model_at_end=True,
     )
 
@@ -216,7 +216,7 @@ def main():
     )
     shuffled_dataset = shuffled_dataset.train_test_split(test_size=0.1)
 
-    optimizer = AdamW(model.parameters(), lr=5e-05, betas=(0.9, 0.999), eps=1e-08)
+    optimizer = AdamW(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-08)
     # Define the trainer
     trainer = Trainer(
         model=model,
@@ -225,7 +225,7 @@ def main():
         eval_dataset=shuffled_dataset["test"],
         optimizers=(optimizer, None),
         callbacks=[
-            TFEarlyStoppingCallback(3),
+            #TFEarlyStoppingCallback(3),
             # GradientAccumulationCallback(accumulation_steps=2),
         ],
     )

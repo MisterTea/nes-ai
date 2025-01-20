@@ -9,7 +9,8 @@ import Cython.Compiler.Options
 Cython.Compiler.Options.annotate = True
 import numpy
 
-extensions = [Extension("cycore.*", ["nes/cycore/*.pyx"], include_dirs=[numpy.get_include()])]
+extensions = [Extension("cycore.*", ["nes/cycore/*.pyx"], include_dirs=[numpy.get_include()], extra_compile_args=["-fsanitize=address"],
+                            extra_link_args=["-fsanitize=address"],)]
 extensions = cythonize(extensions, compiler_directives={"language_level": 3, "profile": False, "boundscheck": False, "nonecheck": False, "cdivision": True}, annotate=True)
 
 

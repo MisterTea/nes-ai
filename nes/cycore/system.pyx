@@ -17,6 +17,7 @@ import os
 
 import numpy as np
 from PIL import Image
+import torch
 
 # unfortunately, pygame's audio handling does not do what we need with gapless playback of short samples
 # we therefore use pyaudio, but it would be nice to make it optional
@@ -360,6 +361,8 @@ cdef class NES:
             expert_controller = shelve.open("expert_controller.shelve")
             expert_input = shelve.open("expert_input.shelve")
             data_frame = 0
+            controller_buffer = torch.zeros((3,8), dtype=torch.float)
+            screen_buffer = torch.zeros((4, 3, 224, 224), dtype=torch.float)
             while True:
                 vblank_started=False
                 while not vblank_started:
@@ -393,14 +396,38 @@ cdef class NES:
                         self.screen.add_text("MUTE", (self.OSD_MUTE_X, self.OSD_Y), self.OSD_TEXT_COLOR)
 
 
-                diff = self.memory.ram.astype(np.int32) - last_ram
+                #diff = self.memory.ram.astype(np.int32) - last_ram
                 #print("RAM diff1:", np.where(diff != 0))
                 #print("RAM diff2:", diff[np.where(diff != 0)])
-                last_ram[:] = self.memory.ram[:]
+                #last_ram[:] = self.memory.ram[:]
 
                 #print("CONTROLLER", self.controller1.is_pressed)
 
-                if frame > 0 and frame % 1 == 0:
+
+                if frame > 10 and frame % 1 == 0:
+                    h = 240 if self.v_overscan else 224
+                    w = 256 if self.h_overscan else 240
+                    sb = np.zeros((w, h), dtype=np.uint32)
+                    self.ppu.copy_screen_buffer_to(sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan)
+                    sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
+                    image = Image.fromarray(sb)
+                    assert image.size == (w,h)
+                    image = image.resize((224, 224))
+                    from nes.ai.timm_imitation_learning import find_image_input
+                    find_image_input(image, str(data_frame))
+                    from torchvision import transforms
+                    DEFAULT_TRANSFORM = transforms.Compose(
+                        [
+                            transforms.ToTensor(),
+                            transforms.Resize((224, 224)),
+                            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                        ]
+                    )
+                    image = DEFAULT_TRANSFORM(image)
+                    print("Environment Image ", data_frame, image.mean())
+                    for buffer_i in range(3):
+                        screen_buffer[buffer_i,:,:,:] = screen_buffer[buffer_i+1,:,:,:]
+                    screen_buffer[3,:,:,:] = image[:,:,:]
 
                     if False:
                         # Data Collect
@@ -433,7 +460,7 @@ cdef class NES:
                         controller = expert_controller[str(data_frame)]
                         self.controller1.set_state(controller)
 
-                    if True:
+                    if False:
                         # Score model
                         from nes.ai.imitation_learning_score import score_image
                         h = 240 if self.v_overscan else 224
@@ -449,6 +476,25 @@ cdef class NES:
                         if not self.controller1.is_any_pressed():
                             self.controller1.set_state(new_state)
 
+                    if True:
+                        if frame > 300:
+                            # Score model timm
+                            from nes.ai.timm_imitation_learning import score
+                            print(screen_buffer.shape, image.shape)
+                            ground_truth_controller = expert_controller[str(data_frame)]
+                            new_state = score(screen_buffer, controller_buffer, ground_truth_controller, str(data_frame))
+                            self.controller1.update()
+                            if not self.controller1.is_any_pressed():
+                                print(new_state)
+                                self.controller1.set_state(new_state)
+                        else:
+                            # Use expert for intro
+                            controller = expert_controller[str(data_frame)]
+                            self.controller1.set_state(controller)
+
+                    for buffer_i in range(2):
+                        controller_buffer[buffer_i,:] = controller_buffer[buffer_i + 1,:]
+                    controller_buffer[2,:] = torch.FloatTensor(self.controller1.is_pressed)
                     data_frame += 1
 
                 # Check for an exit
