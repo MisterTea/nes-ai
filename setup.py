@@ -4,8 +4,8 @@ import Cython.Compiler.Options
 Cython.Compiler.Options.annotate = True
 import numpy
 
-extensions = [Extension("cycore.*", ["nes/cycore/*.pyx"], include_dirs=[numpy.get_include()])]
-extensions = cythonize(extensions, compiler_directives={"language_level": 3, "profile": False, "boundscheck": False, "nonecheck": False, "cdivision": True}, annotate=True)
+#extensions = [Extension("cycore.*", ["nes/cycore/*.pyx"], include_dirs=[numpy.get_include()])]
+#extensions = cythonize(extensions, compiler_directives={"language_level": 3, "profile": False, "boundscheck": False, "nonecheck": False, "cdivision": True}, annotate=True)
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
@@ -27,5 +27,5 @@ setup(
     ],
     python_requires='>=3.6',
     #ext_modules = cythonize("nes/cycore/*.pyx")
-    ext_modules = extensions
+    #ext_modules = extensions
 )
