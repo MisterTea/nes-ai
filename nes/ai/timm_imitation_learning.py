@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import math
 import shutil
@@ -14,6 +16,8 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
 from torcheval.metrics import MulticlassAccuracy
 from torchvision import datasets, transforms
+from pydantic import BaseModel
+from torch.distributions.categorical import Categorical
 
 from nes.ai.helpers import upscale_and_get_labels
 from nes.ai.nes_dataset import NESDataset
@@ -21,7 +25,49 @@ from nes.ai.nes_dataset import NESDataset
 avail_pretrained_models = timm.list_models(pretrained=True)
 print(len(avail_pretrained_models), avail_pretrained_models)
 
-BATCH_SIZE = 64
+BATCH_SIZE = 32
+REWARD_VECTOR_SIZE = 8
+
+class RewardMap(BaseModel):
+    score: int
+    coins: int
+    lives: int
+    world: int
+    level: int
+    left_pos: int
+    powerup_level: int
+    player_is_dying: bool
+
+    @staticmethod
+    def reward_vector(last_reward_map:RewardMap | None, reward_map:RewardMap):
+        retval = torch.zeros((REWARD_VECTOR_SIZE,), dtype=torch.float)
+        if last_reward_map is not None:
+            retval[0] = (reward_map.score - last_reward_map.score)
+            retval[1] = (reward_map.coins - last_reward_map.coins)
+            retval[2] = (reward_map.lives - last_reward_map.lives)
+            retval[3] = (reward_map.world - last_reward_map.world)
+            retval[4] = (reward_map.level - last_reward_map.level)
+            retval[5] = (reward_map.left_pos - last_reward_map.left_pos)
+            retval[6] = (reward_map.powerup_level - last_reward_map.powerup_level)
+            retval[7] = (reward_map.player_is_dying - last_reward_map.player_is_dying)
+
+        return retval
+
+    @staticmethod
+    def compute_step_reward(last_reward_map:RewardMap | None, reward_map:RewardMap):
+        if last_reward_map is None:
+            return 0
+        reward = 0
+        reward += 100 * (reward_map.score - last_reward_map.score)
+        reward += 100 * (reward_map.coins - last_reward_map.coins)
+        reward += 10000 * (reward_map.lives - last_reward_map.lives)
+        reward += 10000 * (reward_map.world - last_reward_map.world)
+        reward += 10000 * (reward_map.level - last_reward_map.level)
+        reward += 1 * (reward_map.left_pos - last_reward_map.left_pos)
+        reward += 10000 * (reward_map.powerup_level - last_reward_map.powerup_level)
+        reward += -10000 * (reward_map.player_is_dying - last_reward_map.player_is_dying)
+
+        return reward
 
 
 def _linear_block(in_features, out_features):
@@ -31,8 +77,7 @@ def _linear_block(in_features, out_features):
         torch.nn.BatchNorm1d(out_features),
     ]
 
-
-class LitClassification(pl.LightningModule):
+class Actor(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.trunk = timm.create_model(
@@ -43,7 +88,6 @@ class LitClassification(pl.LightningModule):
             *_linear_block(1024, 1024),
             torch.nn.Linear(1024, 5),
         )
-        self.loss_fn = torch.nn.CrossEntropyLoss()
 
     def forward(self, images, past_inputs):
         assert images.shape[1:] == (4, 3, 224, 224), f"{images.shape}"
@@ -53,58 +97,127 @@ class LitClassification(pl.LightningModule):
         )
         trunk_output = torch.cat((trunk_output, past_inputs.reshape(-1, 3*8)), dim=1)
         outputs = self.head(trunk_output)
-        # print("***")
-        # print(targets)
-        # print(outputs)
-        # print(targets.shape)
-        # print(outputs.shape)
         return outputs
 
-    def training_step(self, batch):
-        images, past_inputs, targets = batch
+class Critic(torch.nn.Module):
+    def __init__(self, trunk):
+        super().__init__()
+        self.trunk = trunk
+        self.head = torch.nn.Sequential(
+            *_linear_block((self.trunk.num_features * 4) + ((8+REWARD_VECTOR_SIZE)*3), 1024),
+            *_linear_block(1024, 1024),
+            torch.nn.Linear(1024, REWARD_VECTOR_SIZE),
+        )
 
-        outputs = self.forward(images, past_inputs)
-        loss = self.loss_fn(outputs, targets)
-        self.log("train_loss", loss, prog_bar=True)
-        return loss
+    def forward(self, images, past_inputs, past_rewards):
+        assert images.shape[1:] == (4, 3, 224, 224), f"{images.shape}"
+        assert past_inputs.shape[1:] == (3, 8), f"{past_inputs.shape}"
+        assert past_rewards.shape[1:] == (3, REWARD_VECTOR_SIZE), f"{past_rewards.shape}"
+        trunk_output = torch.cat(
+            [self.trunk(images[:, x, :, :, :]) for x in range(4)], dim=1
+        )
+        trunk_output = torch.cat((trunk_output, past_inputs.reshape(-1, 3*8), past_rewards.reshape(-1, 3*REWARD_VECTOR_SIZE)), dim=1)
+        outputs = self.head(trunk_output)
+        return outputs
+
+class LitClassification(pl.LightningModule):
+    def __init__(self):
+        super().__init__()
+        self.actor = Actor()
+        self.critic = Critic(self.actor.trunk)
+        self.actor_loss_fn = torch.nn.CrossEntropyLoss()
+        self.reward_loss_fn = torch.nn.SmoothL1Loss()
+        self.automatic_optimization = False
+
+    def forward(self, images, past_inputs, past_rewards):
+        return self.actor.forward(images, past_inputs), self.critic.forward(images, past_inputs, past_rewards)
+
+    def training_step(self, batch):
+        actor_opt, critic_opt = self.optimizers()
+
+        images, reward_vectors, past_inputs, past_rewards, targets = batch
+
+        actor_outputs = self.actor.forward(images, past_inputs)
+        actor_loss = self.actor_loss_fn(actor_outputs, targets)
+        self.log("actor_train_loss", actor_loss, prog_bar=True)
+
+        actor_opt.zero_grad()
+        self.manual_backward(actor_loss)
+        actor_opt.step()
+
+        reward_map_outputs = self.critic.forward(images, past_inputs, past_rewards)
+
+        assert reward_map_outputs.shape == reward_vectors.shape, f"{reward_map_outputs.shape} != {reward_vectors.shape}"
+        reward_loss = 0.1 * self.reward_loss_fn(reward_map_outputs, reward_vectors)
+        self.log("reward_train_loss", reward_loss, prog_bar=True)
+
+        critic_opt.zero_grad()
+        self.manual_backward(reward_loss)
+        critic_opt.step()
+
+        self.log("train_loss", actor_loss + reward_loss, prog_bar=False)
+        
 
     def validation_step(self, batch, batch_idx):
 
         # print(batch)
-        images, past_inputs, targets = batch
+        images, reward_vectors, past_inputs, past_rewards, targets = batch
 
-        outputs = self.forward(images, past_inputs)
+        actor_outputs = self.actor.forward(images, past_inputs)
 
-        loss = self.loss_fn(outputs, targets)
-        self.log("val_loss", loss, prog_bar=True)
+        actor_loss = self.actor_loss_fn(actor_outputs, targets)
+        self.log("actor_val_loss", actor_loss, prog_bar=True)
 
         metric = MulticlassAccuracy()
-        metric.update(outputs, targets)
+        metric.update(actor_outputs, targets)
         accuracy = metric.compute()
         self.log("val_acc", accuracy, prog_bar=True)
 
-        return loss
+        reward_map_outputs = self.critic.forward(images, past_inputs, past_rewards)
+
+        assert reward_map_outputs.shape == reward_vectors.shape, f"{reward_map_outputs.shape} != {reward_vectors.shape}"
+        reward_loss = 0.1 * self.reward_loss_fn(reward_map_outputs, reward_vectors)
+        self.log("reward_val_loss", reward_loss, prog_bar=True)
+
+        self.log("val_loss", actor_loss + reward_loss, prog_bar=False)
+
+        return actor_loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=0.00001 * BATCH_SIZE)
-        return {
+        optimizer = torch.optim.AdamW(self.actor.parameters(), lr=0.00001 * BATCH_SIZE)
+        actor_opt = {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer, mode="min", factor=math.sqrt(0.1), patience=2
                 ),
-                "monitor": "train_loss",
+                "monitor": "actor_train_loss",
                 "frequency": 1,
                 # If "monitor" references validation metrics, then "frequency" should be set to a
                 # multiple of "trainer.check_val_every_n_epoch".
             },
         }
+        optimizer = torch.optim.AdamW(self.critic.parameters(), lr=0.00001 * BATCH_SIZE)
+        critic_opt = {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer, mode="min", factor=math.sqrt(0.1), patience=2
+                ),
+                "monitor": "critic_train_loss",
+                "frequency": 1,
+                # If "monitor" references validation metrics, then "frequency" should be set to a
+                # multiple of "trainer.check_val_every_n_epoch".
+            },
+        }
+        return actor_opt, critic_opt
 
 
+DATA_PATH = Path("data/one_one_works")
 class ClassificationData(pl.LightningDataModule):
 
     def train_dataloader(self):
-        train_dataset = NESDataset(train=True)
+        train_dataset = NESDataset(DATA_PATH, train=True)
         return torch.utils.data.DataLoader(
             train_dataset, batch_size=BATCH_SIZE, num_workers=10,# shuffle=True,
             sampler=torch.utils.data.WeightedRandomSampler(
@@ -113,7 +226,7 @@ class ClassificationData(pl.LightningDataModule):
         )
 
     def val_dataloader(self):
-        val_dataset = NESDataset(train=False)
+        val_dataset = NESDataset(DATA_PATH, train=False)
         return torch.utils.data.DataLoader(
             val_dataset,
             batch_size=BATCH_SIZE,
@@ -148,7 +261,7 @@ def score(images, controller_buffer, ground_truth_controller, data_frame):
     global inference_dataset
     print("Scoring",data_frame)
     if inference_model is None:
-        inference_model = LitClassification.load_from_checkpoint('timm_il_models/best_model-v10.ckpt').cpu()
+        inference_model = LitClassification.load_from_checkpoint('timm_il_models/best_model-v17.ckpt').cpu()
         inference_model.eval()
         inference_dataset = NESDataset(train=False)
         lim = inference_dataset.label_int_map
@@ -157,14 +270,16 @@ def score(images, controller_buffer, ground_truth_controller, data_frame):
             int_label_map[v] = json.loads(k)
         inference_model.int_label_map = int_label_map
     with torch.no_grad():
-        label_logits = inference_model(images.unsqueeze(0), controller_buffer.unsqueeze(0)).squeeze(0)
+        label_logits, value = inference_model(images.unsqueeze(0), controller_buffer.unsqueeze(0)).squeeze(0)
         #print(label_logits)
-        label_probs = torch.nn.functional.softmax(label_logits)
+        probs = Categorical(logits=label_logits)
+        #label_probs = torch.nn.functional.softmax(label_logits)
+        drawn_action_index = probs.sample()
         #print(label_probs)
-        highest_prob = torch.argmax(label_probs).item()
-        #print(highest_prob)
+        #drawn_action_index = torch.argmax(label_probs).item()
+        #print(drawn_action_index)
         #print(inference_model.int_label_map)
-        label = inference_model.int_label_map[highest_prob]
+        drawn_action = inference_model.int_label_map[drawn_action_index.item()]
 
         if False: # Check against ground truth
             image_stack, past_inputs, label_int = inference_dataset[int(data_frame) - 3]
@@ -176,11 +291,45 @@ def score(images, controller_buffer, ground_truth_controller, data_frame):
                 assert torch.equal(image_stack[2], images[0]), f"{image_stack[2]} != {images[2]}"
                 assert torch.equal(image_stack[3], images[0]), f"{image_stack[3]} != {images[3]}"
 
-        if not torch.equal(torch.Tensor(label), torch.Tensor(ground_truth_controller)):
-            print("WRONG", label, ground_truth_controller)
-            #return list(ground_truth_controller)
-        #print(label)
-        return label
+        return drawn_action, probs.log_prob(drawn_action_index), probs.entropy(), value
+
+def bcdToInt(bcd_bytes):
+    value = 0
+    for x in range(0, len(bcd_bytes)):
+        value *= 10
+        value += bcd_bytes[x]
+    return value
+
+def compute_reward_map(last_reward_map:RewardMap | None, ram):
+    high_score_bytes = ram[0x07DD:0x07E3]
+    score = bcdToInt(high_score_bytes) * 10
+
+    time_left_bytes = ram[0x07F8:0x07FB]
+    time_left = bcdToInt(time_left_bytes)
+
+    coins = ram[0x75E]
+    world = ram[0x75F]
+    level = ram[0x760]
+    powerup_level = ram[0x756]
+    left_pos = (ram[0x006D] * 256) + ram[0x0086]
+    player_is_dying = (ram[0xE] & 0x6) > 0
+    lives = ram[0x75A] - player_is_dying.int()
+
+    reward_map = RewardMap(
+        score=score,
+        time_left=time_left,
+        coins=coins,
+        lives=lives,
+        world=world,
+        level=level,
+        left_pos=left_pos,
+        powerup_level=powerup_level,
+        player_is_dying=player_is_dying
+    )
+
+    return reward_map, RewardMap.reward_vector(last_reward_map, reward_map)
+
+
 
 if __name__ == "__main__":
     data = ClassificationData()

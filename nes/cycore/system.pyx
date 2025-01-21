@@ -349,20 +349,22 @@ cdef class NES:
         t_start = time.time()
 
         last_ram = np.copy(self.memory.ram).astype(np.int32)
+        
         import shelve
         print("OPENING SHELVES")
         try:
             import contextlib
 
-            with contextlib.suppress(FileNotFoundError):
-                import os
-                os.remove("expert_controller.shelve")
-                os.remove("expert_input.shelve")
             expert_controller = shelve.open("expert_controller.shelve")
             expert_input = shelve.open("expert_input.shelve")
+            reward_map_history = shelve.open("reward_map.shelve")
+            reward_vector_history = shelve.open("reward_vector.shelve")
+            agent_params = shelve.open("agent_params.shelve")
             data_frame = 0
             controller_buffer = torch.zeros((3,8), dtype=torch.float)
             screen_buffer = torch.zeros((4, 3, 224, 224), dtype=torch.float)
+            last_reward_map = None
+            reward_map = None
             while True:
                 vblank_started=False
                 while not vblank_started:
@@ -399,10 +401,25 @@ cdef class NES:
                 #diff = self.memory.ram.astype(np.int32) - last_ram
                 #print("RAM diff1:", np.where(diff != 0))
                 #print("RAM diff2:", diff[np.where(diff != 0)])
-                #last_ram[:] = self.memory.ram[:]
+                last_ram[:] = self.memory.ram[:]
+                from nes.ai.timm_imitation_learning import compute_reward_map
+                last_reward_map = reward_map
+                reward_map, reward_vector = compute_reward_map(last_reward_map, torch.from_numpy(self.memory.ram).int())
+                print("REWARD", reward_map, reward_vector)
 
                 #print("CONTROLLER", self.controller1.is_pressed)
 
+                if False and frame == 0:
+                    print("RESETTING")
+                    import shutil
+                    shutil.rmtree("expert_images", ignore_errors=True)
+                    import os
+                    os.mkdir("expert_images")
+                    expert_controller.clear()
+                    expert_input.clear()
+                    reward_map_history.clear()
+                    reward_vector_history.clear()
+                    agent_params.clear()
 
                 if frame > 10 and frame % 1 == 0:
                     h = 240 if self.v_overscan else 224
@@ -413,8 +430,6 @@ cdef class NES:
                     image = Image.fromarray(sb)
                     assert image.size == (w,h)
                     image = image.resize((224, 224))
-                    from nes.ai.timm_imitation_learning import find_image_input
-                    find_image_input(image, str(data_frame))
                     from torchvision import transforms
                     DEFAULT_TRANSFORM = transforms.Compose(
                         [
@@ -431,15 +446,9 @@ cdef class NES:
 
                     if False:
                         # Data Collect
-                        if frame == 1:
-                            print("RESETTING")
-                            import shutil
-                            shutil.rmtree("expert_images", ignore_errors=True)
-                            import os
-                            os.mkdir("expert_images")
-                            expert_controller.clear()
-                            expert_input.clear()
                         expert_controller[str(data_frame)] = np.array(self.controller1.is_pressed)
+                        reward_map_history[str(data_frame)] = reward_map
+                        reward_vector_history[str(data_frame)] = reward_vector
                         h = 240 if self.v_overscan else 224
                         w = 256 if self.h_overscan else 240
                         sb = np.zeros((w, h), dtype=np.uint32)
@@ -454,11 +463,16 @@ cdef class NES:
                             print("SAVING")
                             expert_controller.sync()
                             expert_input.sync()
+                            reward_map_history.sync()
+                            reward_vector_history.sync()
+                            agent_params.sync()
 
                     if False:
                         # Replay
                         controller = expert_controller[str(data_frame)]
                         self.controller1.set_state(controller)
+                        reward_map_history[str(data_frame)] = reward_map
+                        reward_vector_history[str(data_frame)] = reward_vector
 
                     if False:
                         # Score model
@@ -482,11 +496,17 @@ cdef class NES:
                             from nes.ai.timm_imitation_learning import score
                             print(screen_buffer.shape, image.shape)
                             ground_truth_controller = expert_controller[str(data_frame)]
-                            new_state = score(screen_buffer, controller_buffer, ground_truth_controller, str(data_frame))
+                            action, log_prob, entropy, value = score(screen_buffer, controller_buffer, ground_truth_controller, str(data_frame))
+                            agent_params[str(data_frame)] = {
+                                "action":action,
+                                "log_prob":log_prob,
+                                "entropy":entropy,
+                                "value":value,
+                            }
                             self.controller1.update()
                             if not self.controller1.is_any_pressed():
-                                print(new_state)
-                                self.controller1.set_state(new_state)
+                                print(action)
+                                self.controller1.set_state(action)
                         else:
                             # Use expert for intro
                             controller = expert_controller[str(data_frame)]
@@ -641,6 +661,9 @@ cdef class NES:
         finally:
             expert_controller.close()
             expert_input.close()
+            reward_map_history.close()
+            reward_vector_history.close()
+            agent_params.close()
 
     cpdef object run_frame_headless(self, int run_frames=1, object controller1_state=[False] * 8, object controller2_state=[False] * 8):
         """

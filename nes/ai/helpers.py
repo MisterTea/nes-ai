@@ -10,16 +10,16 @@ import os
 
 import shelve
 
-def upscale_and_get_labels():
-    expert_controller = shelve.open("expert_controller.shelve")
+def upscale_and_get_labels(data_path):
+    expert_controller = shelve.open(str(data_path / "expert_controller.shelve"))
 
     def get_label(x):
-        data_frame_str = str(x).split("/")[-1].split(".")[-2]
+        data_frame_str = x.name.split(".")[-2]
         controller_array = expert_controller[data_frame_str]
         controller_array[3] = False # Do not press start with AI
         return json.dumps(controller_array.tolist())
 
-    path = "./expert_images"
+    path = data_path / "expert_images"
     image_files = []
     i = 0
     while True:
