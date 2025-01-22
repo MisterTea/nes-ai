@@ -29,10 +29,10 @@ class AiHandler:
 
     def update(self, frame, controller1, ram, screen_buffer_image):
         self.last_reward_map = self.reward_map
-        reward_map, reward_vector = compute_reward_map(
+        self.reward_map, reward_vector = compute_reward_map(
             self.last_reward_map, torch.from_numpy(ram).int()
         )
-        print("REWARD", reward_map, reward_vector)
+        print("REWARD", self.reward_map, reward_vector)
 
         # print("CONTROLLER", controller1.is_pressed)
 
@@ -84,11 +84,12 @@ class AiHandler:
                     self.reward_vector_history.sync()
                     self.agent_params.sync()
 
-            if True:
+            if False:
                 # Replay
                 controller = self.expert_controller[str(frame)]
                 controller1.set_state(controller)
-                self.reward_map_history[str(frame)] = reward_map
+                assert self.reward_map_history[str(frame)] == self.reward_map, f"{self.reward_map_history[str(frame)]} != {self.reward_map}"
+                print("REWARD VECTOR", reward_vector)
                 self.reward_vector_history[str(frame)] = reward_vector
 
             if False:
@@ -114,7 +115,10 @@ class AiHandler:
                 if not controller1.is_any_pressed():
                     controller1.set_state(new_state)
 
-            if False:
+            if True:
+                if frame == 0:
+                    self.agent_params.clear()
+
                 if frame > 200:
                     # Score model timm
                     from nes_ai.ai.timm_imitation_learning import (
@@ -148,6 +152,12 @@ class AiHandler:
                     if not controller1.is_any_pressed():
                         print(action)
                         controller1.set_state(action)
+
+                    # Overwrite with expert
+                    expert_controller_for_frame = self.expert_controller[str(frame)]
+                    assert torch.equal(torch.from_numpy(expert_controller_for_frame),action)
+                    #controller1.set_state(controller)
+
                 else:
                     # Use expert for intro
                     controller = self.expert_controller[str(frame)]

@@ -558,6 +558,10 @@ cdef class NES:
 
         frame = 0
         while True:
+            vblank_started=False
+            while not vblank_started:
+                vblank_started = self.step(log_cpu=False)
+
             h = 224
             w = 240
             sb = np.zeros((w, h), dtype=np.uint32)
@@ -575,9 +579,6 @@ cdef class NES:
 
             self.ai_handler.update(frame, self.controller1, self.memory.ram, image)
 
-            vblank_started=False
-            while not vblank_started:
-                vblank_started = self.step(log_cpu=False)
             frame += 1
 
             self.ppu.copy_screen_buffer_to(buffer_mv, v_overscan=self.v_overscan, h_overscan=self.h_overscan)

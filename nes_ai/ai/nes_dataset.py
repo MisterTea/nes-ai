@@ -15,6 +15,8 @@ DEFAULT_TRANSFORM = transforms.Compose(
     ]
 )
 
+GAMMA = 0.995
+GAE_LAMBDA = 0.95
 
 class NESDataset(torch.utils.data.Dataset):
     def __init__(self, data_path, train: bool):
@@ -39,29 +41,78 @@ class NESDataset(torch.utils.data.Dataset):
         print(self.example_weights.sum())
         self.train = train
         self.max_frame = max(self.file_to_frame.values())
-        self.reward_vector_history = None
+
+        self.bootstrapped = False
 
     def __len__(self):
         return len(self.image_files)
 
     def get_image_and_input_at_frame(self, frame):
-        image_filename = self.image_files[frame]
+        image_filename = self.image_files[frame - 200]
         # print("frame to file", frame, image_filename)
         image = Image.open(image_filename)
         image = DEFAULT_TRANSFORM(image)
         # print("Replay buffer image",frame, image.mean())
-        return image, self.file_label_map[self.image_files[frame].name]
+        #print("Getting image and input at frame", frame, image_filename, self.file_label_map[image_filename.name])
+        return image, self.file_label_map[image_filename.name]
+
+    def bootstrap(self):
+        reward_vector_history = shelve.open("reward_vector.shelve", flag="r")
+        agent_params = shelve.open("agent_params.shelve")
+
+        reward_vector_size = reward_vector_history[str(0)].shape[0]
+
+        self.values = torch.zeros((self.max_frame + 1, reward_vector_size), dtype=torch.float)
+        self.rewards = torch.zeros((self.max_frame + 1, reward_vector_size), dtype=torch.float)
+        self.advantages = torch.zeros((self.max_frame + 1, reward_vector_size), dtype=torch.float)
+        self.returns = torch.zeros((self.max_frame + 1, reward_vector_size), dtype=torch.float)
+
+        if True or len(agent_params) == 0:
+            # Imitation learning
+            for frame in range(self.max_frame, 0, -1):
+                if frame == self.max_frame:
+                    self.values[frame] = reward_vector_history[str(frame)]
+                else:
+                    self.values[frame] = (
+                        reward_vector_history[str(frame)]
+                        + (GAMMA * self.values[frame+1])
+                    )
+                self.rewards[frame] = reward_vector_history[str(frame)]
+        else:
+
+            lastgaelam = torch.zeros(reward_vector_size, dtype=torch.float)
+            for frame in range(self.max_frame, 0, -1):
+                self.rewards[frame] = reward_vector_history[str(frame)]
+                self.values[frame] = values = agent_params[str(frame)]['value']
+                next_values = agent_params[str(frame+1)]['value']
+
+                if frame == self.max_frame:
+                    delta = 0.0
+                    nextnonterminal = 0.0
+                else:
+                    nextnonterminal = 1.0
+                    delta = (
+                        (reward_vector_history[str(frame)]
+                        + (GAMMA * next_values))
+                        - values
+                    )
+                self.advantages[frame] = lastgaelam = delta + (GAMMA * GAE_LAMBDA * nextnonterminal * lastgaelam)
+                self.returns[frame] = self.advantages[frame] + values
 
     def __getitem__(self, idx):
-        if self.reward_vector_history is None:
-            self.reward_vector_history = shelve.open("reward_vector.shelve", flag="r")
-
         frame = self.file_to_frame[self.image_files[idx]]
-        while frame + 4 > self.max_frame:
+        while frame > self.max_frame:
             frame -= 1
-        current_frame = frame + 4
+        return self.get_frame(frame)
+    
+    def get_frame(self, frame):
+        if not self.bootstrapped:
+            self.bootstrap()
+            self.bootstrapped = True
+
+        history_start_frame = frame - 3
         image_list, input_list = zip(
-            *[self.get_image_and_input_at_frame(frame + i) for i in range(4)]
+            *[self.get_image_and_input_at_frame(history_start_frame + i) for i in range(4)]
         )
         assert len(image_list) == 4
         assert len(input_list) == 4
@@ -70,27 +121,14 @@ class NESDataset(torch.utils.data.Dataset):
         for i in range(3):
             past_inputs[i, :] = torch.FloatTensor(input_list[i])
 
-        # The reward R(s,a) at time t is R(s'): reward_vector_history at t+1
-        if current_frame == self.max_frame:
-            value = torch.zeros_like(
-                self.reward_vector_history[str(current_frame)], dtype=torch.float
-            )
-        else:
-            value = torch.clone(self.reward_vector_history[str(current_frame + 1)])
-        gamma = 1.0
-        for future_step in range(1, 600):
-            gamma *= 0.995
-            if current_frame + future_step + 1 > self.max_frame:
-                break
-            value += (
-                gamma * self.reward_vector_history[str(current_frame + future_step + 1)]
-            )
+        value = self.values[frame]
 
         past_rewards = torch.zeros(
-            (3, len(self.reward_vector_history[str(frame)])), dtype=torch.float
+            (3, len(self.rewards[frame])), dtype=torch.float
         )
+        #print(past_rewards.shape, self.rewards.shape, frame)
         for i in range(3):
-            past_rewards[i, :] = self.reward_vector_history[str(frame + i + 1)]
+            past_rewards[i] = self.rewards[history_start_frame + i]
 
         return (
             image_stack,

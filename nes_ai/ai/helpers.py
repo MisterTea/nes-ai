@@ -24,7 +24,8 @@ def upscale_and_get_labels(data_path):
         i = 0
         while True:
             if os.path.exists(f"{path}/{i}.png"):
-                image_files.append(Path(f"{path}/{i}.png"))
+                if i >= 200: # The first 200 frames are weird because the game hasn't started yet
+                    image_files.append(Path(f"{path}/{i}.png"))
                 i += 1
             else:
                 break

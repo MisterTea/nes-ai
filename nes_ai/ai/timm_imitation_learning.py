@@ -236,7 +236,7 @@ class LitClassification(pl.LightningModule):
         assert (
             reward_map_outputs.shape == reward_vectors.shape
         ), f"{reward_map_outputs.shape} != {reward_vectors.shape}"
-        reward_loss = 0.1 * self.reward_loss_fn(reward_map_outputs, reward_vectors)
+        reward_loss = 0.0001 * self.reward_loss_fn(reward_map_outputs, reward_vectors)
         self.log("reward_train_loss", reward_loss, prog_bar=True)
 
         critic_opt.zero_grad()
@@ -271,7 +271,7 @@ class LitClassification(pl.LightningModule):
         assert (
             reward_map_outputs.shape == reward_vectors.shape
         ), f"{reward_map_outputs.shape} != {reward_vectors.shape}"
-        reward_loss = 0.1 * self.reward_loss_fn(reward_map_outputs, reward_vectors)
+        reward_loss = 0.0001 * self.reward_loss_fn(reward_map_outputs, reward_vectors)
         self.log("reward_val_loss", reward_loss, prog_bar=True)
 
         self.log("val_loss", actor_loss + reward_loss, prog_bar=False)
@@ -372,7 +372,7 @@ def score(
     print("Scoring", data_frame)
     if inference_model is None:
         inference_model = LitClassification.load_from_checkpoint(
-            "timm_il_models/best_model-v6.ckpt"
+            "timm_il_models/best_model-v5.ckpt"
         ).cpu()
         inference_model.eval()
         inference_dataset = NESDataset(DATA_PATH, train=False)
@@ -397,8 +397,8 @@ def score(
             drawn_action_index.item()
         )
 
-        if False:  # Check against ground truth
-            image_stack, past_inputs, label_int = inference_dataset[int(data_frame) - 3]
+        if True and int(data_frame) >= 205:  # Check against ground truth
+            image_stack, value, past_inputs, past_rewards, label_int = inference_dataset.get_frame(int(data_frame))
             assert torch.equal(
                 past_inputs, controller_buffer
             ), f"{past_inputs} != {controller_buffer}"
@@ -408,13 +408,13 @@ def score(
                     image_stack[0], images[0]
                 ), f"{image_stack[0]} != {images[0]}"
                 assert torch.equal(
-                    image_stack[1], images[0]
+                    image_stack[1], images[1]
                 ), f"{image_stack[1]} != {images[1]}"
                 assert torch.equal(
-                    image_stack[2], images[0]
+                    image_stack[2], images[2]
                 ), f"{image_stack[2]} != {images[2]}"
                 assert torch.equal(
-                    image_stack[3], images[0]
+                    image_stack[3], images[3]
                 ), f"{image_stack[3]} != {images[3]}"
 
         return drawn_action, probs.log_prob(drawn_action_index), probs.entropy(), value
