@@ -1,27 +1,31 @@
 import multiprocessing
 import time
+from multiprocessing import Process
+
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-import pytorch_lightning as pl
-from torch.utils.data import IterableDataset
-from multiprocessing import Process
-from torcheval.metrics import MulticlassAccuracy
 import torch_optimizer as optim
 from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from torch.utils.data import IterableDataset
+from torcheval.metrics import MulticlassAccuracy
 
-from nes.ai.game_sim_dataset import GameSimulationDataset
+from nes_ai.ai.game_sim_dataset import GameSimulationDataset
+
 
 def _linear_block(in_features, out_features):
     return [
         nn.Linear(in_features, out_features),
         nn.LeakyReLU(),
-        nn.BatchNorm1d(out_features)
+        nn.BatchNorm1d(out_features),
     ]
+
 
 NUM_CLASSES = 2
 NUM_OBJECTS = 512
+
 
 class ForwardModel(nn.Module):
     def __init__(self):
@@ -43,6 +47,7 @@ class ForwardModel(nn.Module):
         logits = self.model(x.float())
         logits = logits.reshape(-1, NUM_OBJECTS, NUM_CLASSES)
         return logits
+
 
 class ForwardLightningModel(pl.LightningModule):
     def __init__(self):
@@ -76,8 +81,8 @@ class ForwardLightningModel(pl.LightningModule):
         metric = MulticlassAccuracy()
         metric.update(predicted_class, y)
 
-        self.log('train_loss', loss, prog_bar=True)
-        self.log('train_acc', metric.compute().item(), prog_bar=True)
+        self.log("train_loss", loss, prog_bar=True)
+        self.log("train_acc", metric.compute().item(), prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -98,19 +103,19 @@ class ForwardLightningModel(pl.LightningModule):
         metric = MulticlassAccuracy()
         metric.update(predicted_class, y)
 
-        self.log('val_acc', metric.compute().item(), prog_bar=True)
+        self.log("val_acc", metric.compute().item(), prog_bar=True)
         return metric.compute().item()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=0.001)
         return {
-            "optimizer":optimizer,
+            "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer, mode="max", factor=0.5, patience=2, verbose=True
                 ),
                 "monitor": "val_acc",
-                "frequency": 1
+                "frequency": 1,
                 # If "monitor" references validation metrics, then "frequency" should be set to a
                 # multiple of "trainer.check_val_every_n_epoch".
             },
@@ -140,6 +145,7 @@ class ForwardLightningModel(pl.LightningModule):
         #     ),
         # )
 
+
 def main(queue: multiprocessing.Queue):
     model = ForwardLightningModel()
 
@@ -156,40 +162,45 @@ def main(queue: multiprocessing.Queue):
         queue,
     )
 
-    trainer = pl.Trainer(max_epochs=1000, callbacks=[
-        LearningRateMonitor(logging_interval="step"),
-                EarlyStopping(
-                    monitor="val_acc",
-                    min_delta=0.0001,
-                    mode="max",
-                    patience=20,
-                    verbose=True,
-                ),
-    ])
+    trainer = pl.Trainer(
+        max_epochs=1000,
+        callbacks=[
+            LearningRateMonitor(logging_interval="step"),
+            EarlyStopping(
+                monitor="val_acc",
+                min_delta=0.0001,
+                mode="max",
+                patience=20,
+                verbose=True,
+            ),
+        ],
+    )
     train_loader = torch.utils.data.DataLoader(
-            train_dataset,
-            pin_memory=True,
-            num_workers=0,
-            #persistent_workers=True,
-        )
+        train_dataset,
+        pin_memory=True,
+        num_workers=0,
+        # persistent_workers=True,
+    )
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         pin_memory=True,
         num_workers=0,
-        #persistent_workers=True,
+        # persistent_workers=True,
     )
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+
 
 def push_games(queue: multiprocessing.Queue):
     while True:
         x = torch.randint(0, 256, (NUM_OBJECTS,), dtype=torch.uint8)
-        y = (x>128).int() * x.int()
+        y = (x > 128).int() * x.int()
         try:
             queue.put((x, y), timeout=1.0)
         except BaseException as e:
             print(e)
             time.sleep(5.0)
             pass
+
 
 if __name__ == "__main__":
     torch.multiprocessing.set_start_method("spawn")

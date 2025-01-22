@@ -1,0 +1,13 @@
+Cython
+torch
+torchvision
+Pillow
+timm
+imagehash
+numpy
+python-dotenv
+transformers
+pygame
+pytorch-lightning
+pydantic
+torcheval

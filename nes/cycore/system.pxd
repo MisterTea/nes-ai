@@ -52,10 +52,12 @@ cdef class NES:
 
         object controller1, controller2
         object screen
+        object ai_handler
 
         int screen_scale, sync_mode
         bint v_overscan, h_overscan
 
     cdef int step(self, int log_cpu)
     cpdef void run(self)
+    cpdef void run_headless(self)
     cpdef object run_frame_headless(self, int run_frames=?, object controller1_state=?, object controller2_state=?)

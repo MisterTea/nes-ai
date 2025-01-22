@@ -1,54 +1,98 @@
+import Cython.Compiler.Options
+from Cython.Build import cythonize
+from setuptools import Extension, find_packages, setup
+
+from nes.ai_handler import AiHandler
+
+Cython.Compiler.Options.annotate = True
+import numpy
+
+extensions = [
+    Extension("cycore.*", ["nes/cycore/*.pyx"], include_dirs=[numpy.get_include()])
+]
+extensions = cythonize(
+    extensions,
+    compiler_directives={
+        "language_level": 3,
+        "profile": False,
+        "boundscheck": False,
+        "nonecheck": False,
+        "cdivision": True,
+    },
+    annotate=True,
+)
+
+
+import numpy
+
+print(numpy.get_include())
+
+import pyximport
+
+pyximport.install(setup_args={"include_dirs": numpy.get_include()}, reload_support=True)
+
 import logging
+
 from nes import NES, SYNC_AUDIO, SYNC_NONE, SYNC_PYGAME, SYNC_VSYNC
 from nes.pycore.system import NES as pyNES
 from tests.blargg_tests import run_tests
 
-#run_tests()
+# run_tests()
 
 nes = None
 
+ai_handler = AiHandler()
+
 # Mapper 0
-nes = NES("./roms/Dragon Warrior (USA) (Rev A).nes", sync_mode=SYNC_AUDIO, opengl=True)
-#nes = NES("./roms/Super Mario Bros. (Japan, USA).nes", sync_mode=SYNC_AUDIO, opengl=True)
-#nes = NES("./roms/Balloon_fight.nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/donkey kong.nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Ice Climber.nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Dragon Warrior (USA) (Rev A).nes", sync_mode=SYNC_AUDIO, opengl=True)
+nes = NES(
+    "./roms/Super_mario_brothers.nes",
+    ai_handler,
+    sync_mode=SYNC_PYGAME,
+    opengl=True,
+    headless=True,
+)
+
+# nes = NES("./roms/Super Mario Bros. (Japan, USA).nes", sync_mode=SYNC_AUDIO, opengl=True)
+# nes = NES("./roms/Balloon_fight.nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/donkey kong.nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Ice Climber.nes", log_file="./logs/nes.log", log_level=logging.INFO)
 
 # Mapper 2
-#nes = NES("./roms/Mega Man (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO, sync_mode=SYNC_VSYNC, opengl=True)
-#nes = NES("./roms/DuckTales (USA).nes")#, log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Mega Man (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO, sync_mode=SYNC_VSYNC, opengl=True)
+# nes = NES("./roms/DuckTales (USA).nes")#, log_file="./logs/nes.log", log_level=logging.INFO)
 
 # Mapper 1
-#nes = NES("./roms/Silk Worm (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Metroid (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Legend of Zelda, The (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Dragon Warrior 3 (U).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Castlevania II - Simon's Quest (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Ikari III - The Rescue (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Genghis Khan (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Silk Worm (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Metroid (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Legend of Zelda, The (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Dragon Warrior 3 (U).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Castlevania II - Simon's Quest (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Ikari III - The Rescue (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Genghis Khan (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
 
 # Mapper 4 (MMC3)
-#nes = NES("./roms/Super Mario Bros. 3 (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO, show_nametables=False, palette_file="./palettes/Wavebeam.pal")
-#nes = NES("./roms/Double Dragon III - The Sacred Stones (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Bubble Bobble Part 2 (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Gauntlet (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Mega Man 3 (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Jurassic Park (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Super Mario Bros. 3 (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO, show_nametables=False, palette_file="./palettes/Wavebeam.pal")
+# nes = NES("./roms/Double Dragon III - The Sacred Stones (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Bubble Bobble Part 2 (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Gauntlet (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Mega Man 3 (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Jurassic Park (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
 
-#nes = NES("./roms/Gun Nac (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO, show_nametables=True)
-#nes = NES("./roms/Gun Nac (U).nes", log_file="./logs/nes.log", log_level=logging.INFO, show_nametables=True)
-#nes = NES("./roms/Bucky O'Hare (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Teenage Mutant Ninja Turtles III - The Manhattan Project (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Tiny Toon Adventures (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./roms/Battletoads (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Gun Nac (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO, show_nametables=True)
+# nes = NES("./roms/Gun Nac (U).nes", log_file="./logs/nes.log", log_level=logging.INFO, show_nametables=True)
+# nes = NES("./roms/Bucky O'Hare (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Teenage Mutant Ninja Turtles III - The Manhattan Project (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Tiny Toon Adventures (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./roms/Battletoads (USA).nes", log_file="./logs/nes.log", log_level=logging.INFO)
 
 
 # Test ROMS
 
-#nes = NES("./testroms/nes-test-roms-master/mmc3_test/1-clocking.nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./testroms/nes-test-roms-master/mmc3_test/2-details.nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./testroms/nes-test-roms-master/mmc3_test/3-A12_clocking.nes", log_file="./logs/nes.log", log_level=logging.INFO)
-#nes = NES("./testroms/nes-test-roms-master/mmc3_test/4-scanline_timing.nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./testroms/nes-test-roms-master/mmc3_test/1-clocking.nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./testroms/nes-test-roms-master/mmc3_test/2-details.nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./testroms/nes-test-roms-master/mmc3_test/3-A12_clocking.nes", log_file="./logs/nes.log", log_level=logging.INFO)
+# nes = NES("./testroms/nes-test-roms-master/mmc3_test/4-scanline_timing.nes", log_file="./logs/nes.log", log_level=logging.INFO)
 
 
 ###### NESTEST
@@ -116,16 +160,13 @@ nes = NES("./roms/Dragon Warrior (USA) (Rev A).nes", sync_mode=SYNC_AUDIO, openg
 # nes = NES("./testroms/test_apu_timers/triangle_pitch.nes", log_file="./logs/nes.log", log_level=logging.INFO)
 
 
-#nes.run_frame_headless(run_frames=1)
-#nes.run_frame_headless(run_frames=1)
-#buffer = nes.run_frame_headless(run_frames=1)
+# nes.run_frame_headless(run_frames=1)
+# nes.run_frame_headless(run_frames=1)
+# buffer = nes.run_frame_headless(run_frames=1)
 
-#python version:
-#nes = pyNES("./roms/Super Mario Bros. (Japan, USA).nes")
-
-
+# python version:
+# nes = pyNES("./roms/Super Mario Bros. (Japan, USA).nes")
 
 
 if nes is not None:
-    nes.run()
-
+    nes.run_headless()

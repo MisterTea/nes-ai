@@ -1,29 +1,33 @@
 import math
 import time
-import torch
-from torch import multiprocessing
-import torch.nn as nn
-import pytorch_lightning as pl
-from torch.utils.data import IterableDataset
 from multiprocessing import Process
-from torcheval.metrics import MulticlassAccuracy
+
+import pytorch_lightning as pl
+import torch
+import torch.nn as nn
 import torch_optimizer as optim
 from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
+from torch import multiprocessing
+from torch.utils.data import IterableDataset
+from torcheval.metrics import MulticlassAccuracy
 
-from nes.ai.game_sim_dataset import GameSimulationDataset
+from nes_ai.ai.game_sim_dataset import GameSimulationDataset
+
 
 def _linear_block(in_features, out_features):
     return [
         nn.Linear(in_features, out_features),
         nn.LeakyReLU(),
-        nn.BatchNorm1d(out_features)
+        nn.BatchNorm1d(out_features),
     ]
+
 
 NUM_OBJECTS = 256
 HIDDEN_SIZE = 1024
+
 
 class ForwardModel(nn.Module):
     def __init__(self):
@@ -31,9 +35,9 @@ class ForwardModel(nn.Module):
         self.model = nn.Sequential(
             *_linear_block(NUM_OBJECTS, HIDDEN_SIZE),
             *_linear_block(HIDDEN_SIZE, HIDDEN_SIZE),
-            #*_linear_block(HIDDEN_SIZE, HIDDEN_SIZE),
-            #*_linear_block(HIDDEN_SIZE, HIDDEN_SIZE),
-            #*_linear_block(HIDDEN_SIZE, HIDDEN_SIZE),
+            # *_linear_block(HIDDEN_SIZE, HIDDEN_SIZE),
+            # *_linear_block(HIDDEN_SIZE, HIDDEN_SIZE),
+            # *_linear_block(HIDDEN_SIZE, HIDDEN_SIZE),
             *_linear_block(HIDDEN_SIZE, HIDDEN_SIZE),
             *_linear_block(HIDDEN_SIZE, HIDDEN_SIZE),
             nn.Linear(HIDDEN_SIZE, NUM_OBJECTS),
@@ -48,12 +52,13 @@ class ForwardModel(nn.Module):
     def l2_regularization(self):
         l2_reg = 0
         for param in self.parameters():
-            l2_reg += torch.sum(param ** 2)
+            l2_reg += torch.sum(param**2)
         return l2_reg / len(list(self.parameters()))
 
     def forward(self, x):
         scores = self.model(x.float())
         return scores
+
 
 class ForwardLightningModel(pl.LightningModule):
 
@@ -84,29 +89,30 @@ class ForwardLightningModel(pl.LightningModule):
         # )
         # gt_loss = -torch.mean(log_probs2)
 
-
         l1_loss = 0.00001 * self.model.l1_regularization()
         l2_loss = 0.00001 * self.model.l2_regularization()
 
         loss = gt_loss + l1_loss + l2_loss
 
         with torch.no_grad():
-            self.log('lr', self.lr_schedulers().get_last_lr()[0], prog_bar=True)
-            #self.log('x_mean', scores.mean(), prog_bar=True)
-            #self.log('y_mean', y.float().mean(), prog_bar=True)
-            self.log('train_loss', loss, prog_bar=True)
-            self.log('gt_loss', gt_loss, prog_bar=True)
-            self.log('l1_loss', l1_loss, prog_bar=True)
-            self.log('l2_loss', l2_loss, prog_bar=True)
+            self.log("lr", self.lr_schedulers().get_last_lr()[0], prog_bar=True)
+            # self.log('x_mean', scores.mean(), prog_bar=True)
+            # self.log('y_mean', y.float().mean(), prog_bar=True)
+            self.log("train_loss", loss, prog_bar=True)
+            self.log("gt_loss", gt_loss, prog_bar=True)
+            self.log("l1_loss", l1_loss, prog_bar=True)
+            self.log("l2_loss", l2_loss, prog_bar=True)
 
         if False:
             with torch.no_grad():
-                quantized_scores = torch.round(torch.clamp(scores, min=0.0, max=255.0)).to(dtype=torch.int)
+                quantized_scores = torch.round(
+                    torch.clamp(scores, min=0.0, max=255.0)
+                ).to(dtype=torch.int)
 
                 metric = MulticlassAccuracy()
                 metric.update(quantized_scores.flatten(), y.flatten())
 
-                self.log('train_acc', metric.compute().item(), prog_bar=True)
+                self.log("train_acc", metric.compute().item(), prog_bar=True)
 
         return loss
 
@@ -117,33 +123,34 @@ class ForwardLightningModel(pl.LightningModule):
 
         scores = self(x.float() / 255.0)
 
-        quantized_scores = torch.round(torch.clamp(scores, min=0.0, max=255.0)).to(dtype=torch.int)
+        quantized_scores = torch.round(torch.clamp(scores, min=0.0, max=255.0)).to(
+            dtype=torch.int
+        )
 
-        #print("SCORES")
-        #print(quantized_scores)
-        #print(y)
+        # print("SCORES")
+        # print(quantized_scores)
+        # print(y)
 
         val_diff = torch.mean(torch.abs(quantized_scores - y).float())
 
         metric = MulticlassAccuracy(num_classes=256)
         metric.update(quantized_scores.flatten(), y.flatten())
 
-        self.log('val_acc', metric.compute().item(), prog_bar=True)
+        self.log("val_acc", metric.compute().item(), prog_bar=True)
 
-
-        self.log('val_diff', val_diff, prog_bar=True)
+        self.log("val_diff", val_diff, prog_bar=True)
         return val_diff
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=0.1)
         return {
-            "optimizer":optimizer,
+            "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer, mode="min", factor=math.sqrt(0.1), patience=2
                 ),
                 "monitor": "val_diff",
-                "frequency": 1
+                "frequency": 1,
                 # If "monitor" references validation metrics, then "frequency" should be set to a
                 # multiple of "trainer.check_val_every_n_epoch".
             },
@@ -173,6 +180,7 @@ class ForwardLightningModel(pl.LightningModule):
         #     ),
         # )
 
+
 def main(queue: multiprocessing.Queue):
     model = ForwardLightningModel()
 
@@ -191,34 +199,40 @@ def main(queue: multiprocessing.Queue):
         queue,
     )
 
-    trainer = pl.Trainer(max_epochs=1000, accelerator="mps", logger=TensorBoardLogger("logs/", name="fwr_logs"), callbacks=[
-        LearningRateMonitor(logging_interval="step"),
-                EarlyStopping(
-                    monitor="val_diff",
-                    min_delta=0.0001,
-                    mode="min",
-                    patience=100,
-                    verbose=True,
-                ),
-    ])
+    trainer = pl.Trainer(
+        max_epochs=1000,
+        accelerator="mps",
+        logger=TensorBoardLogger("logs/", name="fwr_logs"),
+        callbacks=[
+            LearningRateMonitor(logging_interval="step"),
+            EarlyStopping(
+                monitor="val_diff",
+                min_delta=0.0001,
+                mode="min",
+                patience=100,
+                verbose=True,
+            ),
+        ],
+    )
     train_loader = torch.utils.data.DataLoader(
-            train_dataset,
-            pin_memory=True,
-            num_workers=0,
-            #persistent_workers=True,
-        )
+        train_dataset,
+        pin_memory=True,
+        num_workers=0,
+        # persistent_workers=True,
+    )
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         pin_memory=True,
         num_workers=0,
-        #persistent_workers=True,
+        # persistent_workers=True,
     )
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+
 
 def push_games(queue: multiprocessing.Queue):
     while True:
         x = torch.randint(0, 256, (NUM_OBJECTS,), dtype=torch.int)
-        y = (x>128).int() # * x.int()
+        y = (x > 128).int()  # * x.int()
         try:
             queue.put((x.numpy(), y.numpy()), timeout=1.0)
         except BaseException as e:
@@ -226,9 +240,10 @@ def push_games(queue: multiprocessing.Queue):
             time.sleep(1.0)
             pass
 
+
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
-    #multiprocessing.set_sharing_strategy('file_system')
+    # multiprocessing.set_sharing_strategy('file_system')
 
     queue = multiprocessing.Queue()
 
