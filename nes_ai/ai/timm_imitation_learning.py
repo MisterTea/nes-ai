@@ -78,6 +78,14 @@ class LitClassification(pl.LightningModule):
 
         self.log("train_loss", actor_loss + reward_loss, prog_bar=False)
 
+        actor_sch, critic_sch = self.lr_schedulers()
+
+        actor_sch.step(self.trainer.callback_metrics["actor_train_loss"])
+        critic_sch.step(self.trainer.callback_metrics["reward_train_loss"])
+
+        self.log("actor_lr", actor_sch.get_last_lr()[0], prog_bar=True)
+        self.log("critic_lr", critic_sch.get_last_lr()[0], prog_bar=True)
+
     def validation_step(self, batch, batch_idx):
 
         # print(batch)
@@ -111,19 +119,13 @@ class LitClassification(pl.LightningModule):
 
         return actor_loss
 
-    def on_train_epoch_end(self):
-        actor_sch, critic_sch = self.lr_schedulers()
-
-        actor_sch.step(self.trainer.callback_metrics["actor_train_loss"])
-        critic_sch.step(self.trainer.callback_metrics["critic_train_loss"])
-
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.actor.parameters(), lr=0.00001 * BATCH_SIZE)
         actor_opt = {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer, mode="min", factor=math.sqrt(0.1), patience=2
+                    optimizer, mode="min", factor=math.sqrt(0.1), patience=200
                 ),
                 # "monitor": "actor_train_loss",
                 # "frequency": 1,
@@ -136,7 +138,7 @@ class LitClassification(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer, mode="min", factor=math.sqrt(0.1), patience=2
+                    optimizer, mode="min", factor=math.sqrt(0.1), patience=200
                 ),
                 # "monitor": "critic_train_loss",
                 # "frequency": 1,
