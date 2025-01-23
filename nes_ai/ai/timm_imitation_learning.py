@@ -120,12 +120,12 @@ class LitClassification(pl.LightningModule):
         return actor_loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.actor.parameters(), lr=0.00001 * BATCH_SIZE)
+        optimizer = torch.optim.AdamW(self.actor.parameters(), lr=0.0001 * BATCH_SIZE)
         actor_opt = {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer, mode="min", factor=math.sqrt(0.1), patience=200
+                    optimizer, mode="min", factor=math.sqrt(0.1), patience=2000
                 ),
                 # "monitor": "actor_train_loss",
                 # "frequency": 1,
@@ -138,7 +138,7 @@ class LitClassification(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer, mode="min", factor=math.sqrt(0.1), patience=200
+                    optimizer, mode="min", factor=math.sqrt(0.1), patience=2000
                 ),
                 # "monitor": "critic_train_loss",
                 # "frequency": 1,
