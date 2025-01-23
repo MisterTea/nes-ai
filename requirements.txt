@@ -11,3 +11,4 @@ pygame
 pytorch-lightning
 pydantic
 torcheval
+tensorboard

@@ -57,6 +57,8 @@ cdef class NES:
         int screen_scale, sync_mode
         bint v_overscan, h_overscan
 
+        bint use_audio
+
     cdef int step(self, int log_cpu)
     cpdef void run(self)
     cpdef void run_headless(self)

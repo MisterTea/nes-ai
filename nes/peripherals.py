@@ -1,29 +1,42 @@
+import copy
 import logging
 
-# would like to make this not depend on pygame
-try:
-    import pygame
-    import pygame.freetype
-    has_pygame = True
-except ImportError:
-    has_pygame = False
+from nes_ai import game_mode
 
-try:
-    from OpenGL.GL import *
-    has_opengl = True
-except ImportError:
+# would like to make this not depend on pygame
+if game_mode.HEADLESS:
+    has_pygame = False
     has_opengl = False
+else:
+    try:
+        import pygame
+        import pygame.freetype
+
+        has_pygame = True
+    except ImportError:
+        has_pygame = False
+
+    try:
+        from OpenGL.GL import *
+
+        has_opengl = True
+    except ImportError:
+        has_opengl = False
+
 
 class ScreenBase:
     """
     Base class for screens.  Not library specific.
     """
+
     WIDTH_PX = 256
     HEIGHT_PX = 240
     VISIBLE_HEIGHT_PX = 224
     VISIBLE_WIDTH_PX = 240
 
-    def __init__(self, ppu, scale=3, vertical_overscan=False, horizontal_overscan=False):
+    def __init__(
+        self, ppu, scale=3, vertical_overscan=False, horizontal_overscan=False
+    ):
         self.ppu = ppu
         self.width = self.WIDTH_PX if horizontal_overscan else self.VISIBLE_WIDTH_PX
         self.height = self.HEIGHT_PX if vertical_overscan else self.VISIBLE_HEIGHT_PX
@@ -43,7 +56,11 @@ class ScreenBase:
         self._text_buffer.append((text, position, color, ttl))
 
     def update_text(self):
-        self._text_buffer = [(txt, pos, col, ttl - 1) for (txt, pos, col, ttl) in self._text_buffer if ttl > 1]
+        self._text_buffer = [
+            (txt, pos, col, ttl - 1)
+            for (txt, pos, col, ttl) in self._text_buffer
+            if ttl > 1
+        ]
 
 
 class Screen(ScreenBase):
@@ -51,7 +68,17 @@ class Screen(ScreenBase):
     PyGame based screen.
     Keep PyGame-specific stuff in here (don't want PyGame specific stuff all over the rest of the code)
     """
-    def __init__(self, ppu, scale=3, vsync=False, vertical_overscan=False, horizontal_overscan=False, nametable_panel=False, py_compatibility_mode=False):
+
+    def __init__(
+        self,
+        ppu,
+        scale=3,
+        vsync=False,
+        vertical_overscan=False,
+        horizontal_overscan=False,
+        nametable_panel=False,
+        py_compatibility_mode=False,
+    ):
         super().__init__(ppu, scale, vertical_overscan, horizontal_overscan)
 
         self.nametable_panel = nametable_panel
@@ -79,7 +106,9 @@ class Screen(ScreenBase):
 
         # font for writing to HUD
         pygame.freetype.init()
-        self.font = pygame.freetype.SysFont(pygame.font.get_default_font(), 12 * self.scale)
+        self.font = pygame.freetype.SysFont(
+            pygame.font.get_default_font(), 12 * self.scale
+        )
 
     def write_at(self, x, y, color):
         # only used in py_compatibility_mode
@@ -89,20 +118,32 @@ class Screen(ScreenBase):
         self._text_buffer.append((text, (position[0], position[1]), color, ttl))
 
     def _render_text(self, surf):
-        for (text, position, color, _) in self._text_buffer:
-            self.font.render_to(surf, (position[0] * self.scale, position[1] * self.scale), text, color)
+        for text, position, color, _ in self._text_buffer:
+            self.font.render_to(
+                surf, (position[0] * self.scale, position[1] * self.scale), text, color
+            )
 
     def show(self):
         if not self.py_compatibility_mode:
             # the old version of the ppu wrote directly to the screen via write_at
-            self.ppu.copy_screen_buffer_to(self.buffer_sa, self.vertical_overscan, self.horizontal_overscan)
+            self.ppu.copy_screen_buffer_to(
+                self.buffer_sa, self.vertical_overscan, self.horizontal_overscan
+            )
         if self.nametable_panel:
-            self.ppu.debug_render_nametables(pygame.surfarray.pixels2d(self.nt_buffer_surf))
-            scaled = pygame.transform.scale(self.buffer_surf, (self.width * self.scale, self.height * self.scale))
-            self.screen.blit(scaled, (0,0))
+            self.ppu.debug_render_nametables(
+                pygame.surfarray.pixels2d(self.nt_buffer_surf)
+            )
+            scaled = pygame.transform.scale(
+                self.buffer_surf, (self.width * self.scale, self.height * self.scale)
+            )
+            self.screen.blit(scaled, (0, 0))
             self.screen.blit(self.nt_buffer_surf, (self.width * self.scale, 0))
         else:
-            pygame.transform.scale(self.buffer_surf, (self.width * self.scale, self.height * self.scale), self.screen)
+            pygame.transform.scale(
+                self.buffer_surf,
+                (self.width * self.scale, self.height * self.scale),
+                self.screen,
+            )
         self._render_text(self.screen)
         pygame.display.flip()
         self.update_text()
@@ -118,19 +159,27 @@ class ScreenGL(ScreenBase):
     Keep PyGame-specific stuff in here (don't want PyGame specific stuff all over the rest of the code)
     """
 
-    def __init__(self, ppu, scale=3, vsync=False, vertical_overscan=False, horizontal_overscan=False):
+    def __init__(
+        self,
+        ppu,
+        scale=3,
+        vsync=False,
+        vertical_overscan=False,
+        horizontal_overscan=False,
+    ):
         super().__init__(ppu, scale, vertical_overscan, horizontal_overscan)
 
         # screens and buffers
         self.buffer_surf = pygame.Surface((self.width, self.height))
         self.buffer_sa = pygame.surfarray.pixels2d(self.buffer_surf)
-        self.screen = pygame.display.set_mode((self.width * scale, self.height * scale),
-                                              flags = pygame.DOUBLEBUF | pygame.OPENGL,
-                                              vsync=vsync
-                                              )
+        self.screen = pygame.display.set_mode(
+            (self.width * scale, self.height * scale),
+            flags=pygame.DOUBLEBUF | pygame.OPENGL,
+            vsync=vsync,
+        )
 
         self.arr = bytearray([0] * (self.width * self.height * 3))
-        self.gltex = None   # the texture that we will use for the screen
+        self.gltex = None  # the texture that we will use for the screen
         self.opengl_init()
 
         # font for writing to HUD
@@ -172,10 +221,14 @@ class ScreenGL(ScreenBase):
         self.surface_to_texture(self.buffer_surf)
         glBindTexture(GL_TEXTURE_2D, self.gltex)
         glBegin(GL_QUADS)
-        glTexCoord2f(0, 0); glVertex2f(-1, 1)
-        glTexCoord2f(0, 1); glVertex2f(-1, -1)
-        glTexCoord2f(1, 1); glVertex2f(1, -1)
-        glTexCoord2f(1, 0); glVertex2f(1, 1)
+        glTexCoord2f(0, 0)
+        glVertex2f(-1, 1)
+        glTexCoord2f(0, 1)
+        glVertex2f(-1, -1)
+        glTexCoord2f(1, 1)
+        glVertex2f(1, -1)
+        glTexCoord2f(1, 0)
+        glVertex2f(1, 1)
         glEnd()
 
     def surface_to_texture(self, pygame_surface):
@@ -183,20 +236,29 @@ class ScreenGL(ScreenBase):
         Copy a PyGame surface to an OpenGL texture.  This came from a StackOverflow answer that I sadly can't find now.
         There is probably a faster way to do this, but this works for now
         """
-        rgb_surface = pygame.image.tostring(pygame_surface, 'RGB')
+        rgb_surface = pygame.image.tostring(pygame_surface, "RGB")
         glBindTexture(GL_TEXTURE_2D, self.gltex)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
         surface_rect = pygame_surface.get_rect()
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, surface_rect.width, surface_rect.height, 0, GL_RGB, GL_UNSIGNED_BYTE,
-                     rgb_surface)
+        glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            GL_RGB,
+            surface_rect.width,
+            surface_rect.height,
+            0,
+            GL_RGB,
+            GL_UNSIGNED_BYTE,
+            rgb_surface,
+        )
         glGenerateMipmap(GL_TEXTURE_2D)
         glBindTexture(GL_TEXTURE_2D, 0)
 
     def _render_text(self, surf):
-        for (text, position, color, _) in self._text_buffer:
+        for text, position, color, _ in self._text_buffer:
             self.font.render_to(surf, position, text, color)
 
     def show(self):
@@ -217,6 +279,7 @@ class ControllerBase:
     References:
         [1] https://wiki.nesdev.com/w/index.php/Standard_controller
     """
+
     # code for each button
     # this is not just an enum, this is the bit position that they are fed out of the controller
     A = 0
@@ -229,10 +292,10 @@ class ControllerBase:
     RIGHT = 7
 
     NUM_BUTTONS = 8
-    NAMES = ['A', 'B', 'select', 'start', 'up', 'down', 'left', 'right']
+    NAMES = ["A", "B", "select", "start", "up", "down", "left", "right"]
 
     def __init__(self, active=True):
-        self.is_pressed = [0] * 8   # array to store key status
+        self.is_pressed = [0] * 8  # array to store key status
         self._current_bit = 0
         self.strobe = False
         self.active = active  # allows the gamepad to be turned off (acting as if it were disconnected)
@@ -245,6 +308,12 @@ class ControllerBase:
 
     def update(self):
         pass
+
+    def get_ai_state(self):
+        import numpy as np
+
+        controller_pressed = copy.deepcopy(self.is_pressed)
+        return controller_pressed
 
     def set_state(self, state):
         """
@@ -285,12 +354,18 @@ class ControllerBase:
             return 0
 
         # todo: it seems like the following behviour should be correct, but it doesn't work, whereas removing this does
-        #if self.strobe:
+        # if self.strobe:
         #    self._current_bit = 0
 
-        v = self.is_pressed[self._current_bit] if self._current_bit < self.NUM_BUTTONS else 1
-        #logging.log(logging.DEBUG, "Controller bit {} is {}".format(self._current_bit, v), extra={"source": "cntrlr"})
-        self._current_bit = min((self._current_bit + 1), self.NUM_BUTTONS) # don't want this to overflow (very unlikely)
+        v = (
+            self.is_pressed[self._current_bit]
+            if self._current_bit < self.NUM_BUTTONS
+            else 1
+        )
+        # logging.log(logging.DEBUG, "Controller bit {} is {}".format(self._current_bit, v), extra={"source": "cntrlr"})
+        self._current_bit = min(
+            (self._current_bit + 1), self.NUM_BUTTONS
+        )  # don't want this to overflow (very unlikely)
         return v
 
 
@@ -299,6 +374,7 @@ class KeyboardController(ControllerBase):
     PyGame keyboard-based controller
     Keep PyGame specific stuff in here
     """
+
     def __init__(self, active=True, key_map=None):
         super().__init__(active=active)
         self.key_map = key_map if key_map is not None else self._default_key_map()

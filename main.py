@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import Cython.Compiler.Options
 from Cython.Build import cythonize
 from setuptools import Extension, find_packages, setup
@@ -34,19 +36,24 @@ pyximport.install(setup_args={"include_dirs": numpy.get_include()}, reload_suppo
 import logging
 
 from nes import NES, SYNC_AUDIO, SYNC_NONE, SYNC_PYGAME, SYNC_VSYNC
-from nes.pycore.system import NES as pyNES
+
+# from nes.pycore.system import NES as pyNES
 from tests.blargg_tests import run_tests
 
 # run_tests()
 
 nes = None
 
-ai_handler = AiHandler()
+ai_handler = AiHandler(Path("data/1_1_expert_shelve"))
 
 # Mapper 0
 # nes = NES("./roms/Dragon Warrior (USA) (Rev A).nes", sync_mode=SYNC_AUDIO, opengl=True)
 nes = NES(
-    "./roms/Super_mario_brothers.nes", ai_handler, sync_mode=SYNC_PYGAME, opengl=True
+    "./roms/Super_mario_brothers.nes",
+    ai_handler,
+    sync_mode=SYNC_PYGAME,
+    opengl=True,
+    audio=False,
 )
 
 # nes = NES("./roms/Super Mario Bros. (Japan, USA).nes", sync_mode=SYNC_AUDIO, opengl=True)

@@ -1,3 +1,10 @@
+from pathlib import Path
+
+from nes_ai import game_mode
+
+game_mode.HEADLESS = True
+
+
 import Cython.Compiler.Options
 from Cython.Build import cythonize
 from setuptools import Extension, find_packages, setup
@@ -34,14 +41,15 @@ pyximport.install(setup_args={"include_dirs": numpy.get_include()}, reload_suppo
 import logging
 
 from nes import NES, SYNC_AUDIO, SYNC_NONE, SYNC_PYGAME, SYNC_VSYNC
-from nes.pycore.system import NES as pyNES
+
+# from nes.pycore.system import NES as pyNES
 from tests.blargg_tests import run_tests
 
 # run_tests()
 
 nes = None
 
-ai_handler = AiHandler()
+ai_handler = AiHandler(Path("./data/1_1_expert"))
 
 # Mapper 0
 # nes = NES("./roms/Dragon Warrior (USA) (Rev A).nes", sync_mode=SYNC_AUDIO, opengl=True)

@@ -1,31 +1,49 @@
 import shelve
+from enum import Enum
+from pathlib import Path
 
 import numpy as np
 import torch
 from PIL import Image
 
-from nes_ai.ai.timm_imitation_learning import compute_reward_map
+from nes_ai.ai.base import SELECT, START
+from nes_ai.ai.nes_dataset import NESDataset
+from nes_ai.ai.rollout_data import RolloutData
+from nes_ai.ai.timm_imitation_learning import (
+    REWARD_VECTOR_SIZE,
+    compute_reward_map,
+    score,
+)
+
+
+class LearnMode(Enum):
+    DATA_COLLECT = 1
+    IMITATION_LEARNING = 2
+    REPLAY_IMITATION = 3
+    IMITATION_VALIDATION = 4
+    RL = 5
+
+
+current_learn_mode = LearnMode.IMITATION_LEARNING
 
 
 class AiHandler:
-    def __init__(self):
-        self.expert_controller = shelve.open("expert_controller.shelve")
-        self.expert_input = shelve.open("expert_input.shelve")
-        self.reward_map_history = shelve.open("reward_map.shelve")
-        self.reward_vector_history = shelve.open("reward_vector.shelve")
-        self.agent_params = shelve.open("agent_params.shelve")
+    def __init__(self, data_path: Path):
+        self.rollout_data = RolloutData(data_path)
 
         self.controller_buffer = torch.zeros((3, 8), dtype=torch.float)
         self.screen_buffer = torch.zeros((4, 3, 224, 224), dtype=torch.float)
         self.last_reward_map = None
         self.reward_map = None
 
+        self.expert_dataset = None
+        if current_learn_mode == LearnMode.IMITATION_VALIDATION:
+            self.expert_dataset = NESDataset(
+                data_path, train=False, imitation_learning=True
+            )
+
     def shutdown(self):
-        self.expert_controller.close()
-        self.expert_input.close()
-        self.reward_map_history.close()
-        self.reward_vector_history.close()
-        self.agent_params.close()
+        self.rollout_data.close()
 
     def update(self, frame, controller1, ram, screen_buffer_image):
         self.last_reward_map = self.reward_map
@@ -56,97 +74,85 @@ class AiHandler:
                 ]
             self.screen_buffer[3, :, :, :] = image[:, :, :]
 
-            if False:
+            if current_learn_mode == LearnMode.DATA_COLLECT:
                 if frame == 0:
                     print("RESETTING")
-                    import shutil
-
-                    shutil.rmtree("expert_images", ignore_errors=True)
-                    import os
-
-                    os.mkdir("expert_images")
-                    self.expert_controller.clear()
-                    self.expert_input.clear()
-                    self.reward_map_history.clear()
-                    self.reward_vector_history.clear()
-                    self.agent_params.clear()
+                    self.rollout_data.input_images.clear()
+                    self.rollout_data.expert_controller.clear()
+                    self.rollout_data.expert_input.clear()
+                    self.rollout_data.reward_map_history.clear()
+                    self.rollout_data.reward_vector_history.clear()
+                    self.rollout_data.agent_params.clear()
 
                 # Data Collect
-                self.expert_controller[str(frame)] = np.array(controller1.is_pressed)
-                self.reward_map_history[str(frame)] = reward_map
-                self.reward_vector_history[str(frame)] = reward_vector
-                screen_buffer_image.save("expert_images/" + str(frame) + ".png")
+                controller_pressed = controller1.get_ai_state()
+                self.rollout_data.expert_controller[str(frame)] = controller_pressed
+                self.rollout_data.reward_map_history[str(frame)] = self.reward_map
+                self.rollout_data.reward_vector_history[str(frame)] = reward_vector
+                self.rollout_data.put_image(screen_buffer_image, frame)
                 if frame % 60 == 0:
                     print("SAVING")
-                    self.expert_controller.sync()
-                    self.expert_input.sync()
-                    self.reward_map_history.sync()
-                    self.reward_vector_history.sync()
-                    self.agent_params.sync()
+                    self.rollout_data.sync()
 
-            if False:
+            if current_learn_mode == LearnMode.REPLAY_IMITATION:
                 # Replay
-                controller = self.expert_controller[str(frame)]
+                controller = self.rollout_data.expert_controller[str(frame)]
                 controller1.set_state(controller)
-                assert self.reward_map_history[str(frame)] == self.reward_map, f"{self.reward_map_history[str(frame)]} != {self.reward_map}"
+                assert (
+                    self.rollout_data.reward_map_history[str(frame)] == self.reward_map
+                ), f"{self.rollout_data.reward_map_history[str(frame)]} != {self.reward_map}"
+                print("REWARD VECTOR", reward_vector)
+                self.rollout_data.reward_vector_history[str(frame)] = reward_vector
+
+            if current_learn_mode == LearnMode.IMITATION_VALIDATION:
+                # Replay
+                controller = self.rollout_data.expert_controller[str(frame)]
+                controller1.set_state(controller)
+                assert (
+                    self.rollout_data.reward_map_history[str(frame)] == self.reward_map
+                ), f"{self.rollout_data.reward_map_history[str(frame)]} != {self.reward_map}"
                 print("REWARD VECTOR", reward_vector)
                 self.reward_vector_history[str(frame)] = reward_vector
 
-            if False:
-                # Score model
-                from nes_ai.ai.imitation_learning_score import score_image
-
-                h = 240 if self.v_overscan else 224
-                w = 256 if self.h_overscan else 240
-                sb = np.zeros((w, h), dtype=np.uint32)
-                self.ppu.copy_screen_buffer_to(
-                    sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan
-                )
-                sb = (
-                    sb.view(dtype=np.uint8)
-                    .reshape((w, h, 4))[:, :, np.array([2, 1, 0])]
-                    .swapaxes(0, 1)
-                )
-                image = Image.fromarray(sb)
-                assert image.size == (w, h)
-                image = image.resize((224, 224))
-                new_state = score_image(image)
-                controller1.update()
-                if not controller1.is_any_pressed():
-                    controller1.set_state(new_state)
-
-            if True:
-                if frame == 0:
-                    self.agent_params.clear()
-
                 if frame > 200:
                     # Score model timm
-                    from nes_ai.ai.timm_imitation_learning import (
-                        REWARD_VECTOR_SIZE,
-                        score,
-                    )
 
                     print(self.screen_buffer.shape, image.shape)
-                    ground_truth_controller = self.expert_controller[str(frame)]
-                    reward_history = torch.zeros(
-                        (3, REWARD_VECTOR_SIZE), dtype=torch.float
-                    )
-                    for x in range(3):
-                        reward_history[x, :] = torch.FloatTensor(
-                            self.reward_vector_history[str((frame - 3) + x)]
+                    reward_history = self._get_reward_history(frame)
+
+                    if frame >= 205:  # Check against ground truth
+                        image_stack, value, past_inputs, past_rewards, label_int = (
+                            self.expert_dataset.get_frame(frame)
                         )
+                        assert torch.equal(
+                            past_inputs, self.controller_buffer
+                        ), f"{past_inputs} != {self.controller_buffer}"
+                        if not torch.equal(image_stack, self.screen_buffer):
+                            print(image_stack[3].mean(), self.screen_buffer[3].mean())
+                            assert torch.equal(
+                                image_stack[0], self.screen_buffer[0]
+                            ), f"{image_stack[0]} != {self.screen_buffer[0]}"
+                            assert torch.equal(
+                                image_stack[1], self.screen_buffer[1]
+                            ), f"{image_stack[1]} != {self.screen_buffer[1]}"
+                            assert torch.equal(
+                                image_stack[2], self.screen_buffer[2]
+                            ), f"{image_stack[2]} != {self.screen_buffer[2]}"
+                            assert torch.equal(
+                                image_stack[3], self.screen_buffer[3]
+                            ), f"{image_stack[3]} != {self.screen_buffer[3]}"
+
                     action, log_prob, entropy, value = score(
                         self.screen_buffer,
                         self.controller_buffer,
-                        ground_truth_controller,
                         reward_history,
                         str(frame),
                     )
-                    self.agent_params[str(frame)] = {
-                        "action": action,
-                        "log_prob": log_prob,
-                        "entropy": entropy,
-                        "value": value,
+                    self.rollout_data.agent_params[str(frame)] = {
+                        "action": action.numpy(),
+                        "log_prob": float(log_prob.item()),
+                        "entropy": float(entropy.item()),
+                        "value": value.numpy(),
                     }
                     controller1.update()
                     if not controller1.is_any_pressed():
@@ -154,17 +160,62 @@ class AiHandler:
                         controller1.set_state(action)
 
                     # Overwrite with expert
-                    expert_controller_for_frame = self.expert_controller[str(frame)]
-                    assert torch.equal(torch.from_numpy(expert_controller_for_frame),action)
-                    #controller1.set_state(controller)
+                    expert_controller_for_frame = (
+                        self.rollout_data.expert_controller_no_start_select[str(frame)]
+                    )
+                    if not torch.equal(
+                        torch.from_numpy(expert_controller_for_frame), action
+                    ):
+                        print("WRONG ANSWER")
+                        controller1.set_state(expert_controller_for_frame)
 
                 else:
                     # Use expert for intro
-                    controller = self.expert_controller[str(frame)]
+                    controller = self.rollout_data.expert_controller[str(frame)]
+                    controller1.set_state(controller)
+
+            if current_learn_mode == LearnMode.RL:
+                if frame == 0:
+                    self.rollout_data.agent_params.clear()
+
+                if frame > 200:
+                    # Score model timm
+                    print(self.screen_buffer.shape, image.shape)
+                    reward_history = self._get_reward_history(frame)
+
+                    action, log_prob, entropy, value = score(
+                        self.screen_buffer,
+                        self.controller_buffer,
+                        reward_history,
+                        str(frame),
+                    )
+                    self.rollout_data.agent_params[str(frame)] = {
+                        "action": action.numpy(),
+                        "log_prob": float(log_prob.item()),
+                        "entropy": float(entropy.item()),
+                        "value": value.numpy(),
+                    }
+                    controller1.update()
+                    if not controller1.is_any_pressed():
+                        # Allow human to take over
+                        print(action)
+                        controller1.set_state(action)
+
+                else:
+                    # Use expert for intro
+                    controller = self.rollout_data.expert_controller[str(frame)]
                     controller1.set_state(controller)
 
             for buffer_i in range(2):
                 self.controller_buffer[buffer_i, :] = self.controller_buffer[
                     buffer_i + 1, :
                 ]
-            self.controller_buffer[2, :] = torch.FloatTensor(controller1.is_pressed)
+            self.controller_buffer[2, :] = torch.FloatTensor(controller1.get_ai_state())
+
+    def _get_reward_history(self, frame):
+        reward_history = torch.zeros((3, REWARD_VECTOR_SIZE), dtype=torch.float)
+        for x in range(3):
+            reward_history[x, :] = torch.FloatTensor(
+                self.rollout_data.reward_vector_history[str((frame - 3) + x)]
+            )
+        return reward_history

@@ -19,27 +19,34 @@ import numpy as np
 from PIL import Image
 import torch
 
-# unfortunately, pygame's audio handling does not do what we need with gapless playback of short samples
-# we therefore use pyaudio, but it would be nice to make it optional
-try:
-    import pyaudio
-    has_audio = True
-except ImportError:
+from nes_ai import game_mode
+
+if game_mode.HEADLESS:
     has_audio = False
-
-# would like to make this not depend on pygame
-try:
-    import pygame
-    has_pygame = True
-except ImportError:
     has_pygame = False
-
-# would like to know if PyOpenGL is available to avoid using OpenGL screen if not
-try:
-    import OpenGL.GL
-    has_opengl = True
-except ImportError:
     has_opengl = False
+else:
+    # unfortunately, pygame's audio handling does not do what we need with gapless playback of short samples
+    # we therefore use pyaudio, but it would be nice to make it optional
+    try:
+        import pyaudio
+        has_audio = True
+    except ImportError:
+        has_audio = False
+
+    # would like to make this not depend on pygame
+    try:
+        import pygame
+        has_pygame = True
+    except ImportError:
+        has_pygame = False
+
+    # would like to know if PyOpenGL is available to avoid using OpenGL screen if not
+    try:
+        import OpenGL.GL
+        has_opengl = True
+    except ImportError:
+        has_opengl = False
 
 # only use numpy for return of frame during headless operation, so don't depend on this in general
 try:
@@ -128,6 +135,7 @@ cdef class NES:
                  horizontal_overscan=False, # show the left and right 8 pixels (often not visible on CRT TVs)
                  palette_file=None,         # supply a palette file to use; None gives default
                  headless=False,            # runs the nes in headless mode without the pygame screen being started
+                 audio=True,
                  ):
         """
         Build a NES and cartridge from the bits and pieces we have lying around plus some rom data!  Also do some things
@@ -225,6 +233,8 @@ cdef class NES:
         self.cpu.reset()
 
         self.ai_handler = ai_handler
+
+        self.use_audio = audio
 
     def init_logging(self, log_file, log_level):
         """
@@ -325,7 +335,7 @@ cdef class NES:
         cdef double fps, t_start=0., dt=-0.
         cdef bint show_hud=True, log_cpu=False, mute=False, audio_drop=False
         cdef int frame=0, frame_start=0, cpu_cycles=0, adaptive_rate=0, buffer_surplus=0
-        cdef bint audio=has_audio
+        cdef bint audio=has_audio and self.use_audio
 
         if not has_pygame:
             raise RuntimeError("Cannot run() without pygame; only headless operation is supported.")
