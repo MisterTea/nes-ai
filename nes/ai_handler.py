@@ -15,13 +15,13 @@ from nes_ai.ai.timm_imitation_learning import REWARD_VECTOR_SIZE
 
 class LearnMode(Enum):
     DATA_COLLECT = 1
-    IMITATION_LEARNING = 2
-    REPLAY_IMITATION = 3
+    REPLAY_IMITATION = 2
+    IMITATION_LEARNING = 3
     IMITATION_VALIDATION = 4
     RL = 5
 
 
-current_learn_mode = LearnMode.IMITATION_VALIDATION
+current_learn_mode = LearnMode.REPLAY_IMITATION
 
 
 class AiHandler:
@@ -76,7 +76,6 @@ class AiHandler:
                     print("RESETTING")
                     self.rollout_data.input_images.clear()
                     self.rollout_data.expert_controller.clear()
-                    self.rollout_data.expert_input.clear()
                     self.rollout_data.reward_map_history.clear()
                     self.rollout_data.reward_vector_history.clear()
                     self.rollout_data.agent_params.clear()
