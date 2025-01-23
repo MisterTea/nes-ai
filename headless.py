@@ -49,7 +49,7 @@ from tests.blargg_tests import run_tests
 
 nes = None
 
-ai_handler = AiHandler(Path("./data/1_1_expert"))
+ai_handler = AiHandler(Path("data/1_1_expert_shelve"))
 
 # Mapper 0
 # nes = NES("./roms/Dragon Warrior (USA) (Rev A).nes", sync_mode=SYNC_AUDIO, opengl=True)

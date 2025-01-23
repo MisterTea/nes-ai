@@ -6,14 +6,11 @@ import numpy as np
 import torch
 from PIL import Image
 
-from nes_ai.ai.base import SELECT, START
+from nes_ai.ai.base import SELECT, START, compute_reward_map
 from nes_ai.ai.nes_dataset import NESDataset
 from nes_ai.ai.rollout_data import RolloutData
-from nes_ai.ai.timm_imitation_learning import (
-    REWARD_VECTOR_SIZE,
-    compute_reward_map,
-    score,
-)
+from nes_ai.ai.score_model import score
+from nes_ai.ai.timm_imitation_learning import REWARD_VECTOR_SIZE
 
 
 class LearnMode(Enum):
@@ -24,7 +21,7 @@ class LearnMode(Enum):
     RL = 5
 
 
-current_learn_mode = LearnMode.IMITATION_LEARNING
+current_learn_mode = LearnMode.IMITATION_VALIDATION
 
 
 class AiHandler:
@@ -112,7 +109,7 @@ class AiHandler:
                     self.rollout_data.reward_map_history[str(frame)] == self.reward_map
                 ), f"{self.rollout_data.reward_map_history[str(frame)]} != {self.reward_map}"
                 print("REWARD VECTOR", reward_vector)
-                self.reward_vector_history[str(frame)] = reward_vector
+                self.rollout_data.reward_vector_history[str(frame)] = reward_vector
 
                 if frame > 200:
                     # Score model timm
@@ -161,10 +158,10 @@ class AiHandler:
 
                     # Overwrite with expert
                     expert_controller_for_frame = (
-                        self.rollout_data.expert_controller_no_start_select[str(frame)]
+                        self.rollout_data.expert_controller_no_start_select(str(frame))
                     )
                     if not torch.equal(
-                        torch.from_numpy(expert_controller_for_frame), action
+                        torch.IntTensor(expert_controller_for_frame), action
                     ):
                         print("WRONG ANSWER")
                         controller1.set_state(expert_controller_for_frame)

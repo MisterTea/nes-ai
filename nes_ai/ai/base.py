@@ -198,3 +198,41 @@ class Critic(torch.nn.Module):
         )
         outputs = self.head(trunk_output)
         return outputs
+
+
+def bcdToInt(bcd_bytes):
+    value = 0
+    for x in range(0, len(bcd_bytes)):
+        value *= 10
+        value += bcd_bytes[x]
+    return value
+
+
+def compute_reward_map(last_reward_map: RewardMap | None, ram):
+    high_score_bytes = ram[0x07DD:0x07E3]
+    score = bcdToInt(high_score_bytes) * 10
+
+    time_left_bytes = ram[0x07F8:0x07FB]
+    time_left = bcdToInt(time_left_bytes)
+
+    coins = ram[0x75E]
+    world = ram[0x75F]
+    level = ram[0x760]
+    powerup_level = ram[0x756]
+    left_pos = (ram[0x006D] * 256) + ram[0x0086]
+    player_is_dying = (ram[0xE] & 0x6) > 0
+    lives = ram[0x75A] - player_is_dying.int()
+
+    reward_map = RewardMap(
+        score=score,
+        time_left=time_left,
+        coins=coins,
+        lives=lives,
+        world=world,
+        level=level,
+        left_pos=left_pos,
+        powerup_level=powerup_level,
+        player_is_dying=player_is_dying,
+    )
+
+    return reward_map, RewardMap.reward_vector(last_reward_map, reward_map)

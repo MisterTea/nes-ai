@@ -114,13 +114,13 @@ class NESDataset(torch.utils.data.Dataset):
             for frame in range(self.end_frame - 1, 0, -1):
                 self.rewards[frame] = reward_vector_history[str(frame)]
                 self.values[frame] = values = agent_params[str(frame)]["value"]
-                next_values = agent_params[str(frame + 1)]["value"]
 
-                if frame == self.max_frame:
+                if frame == self.end_frame - 1:
                     delta = 0.0
                     nextnonterminal = 0.0
                 else:
                     nextnonterminal = 1.0
+                    next_values = agent_params[str(frame + 1)]["value"]
                     delta = (
                         reward_vector_history[str(frame)] + (GAMMA * next_values)
                     ) - values

@@ -145,17 +145,24 @@ DATA_PATH = Path("./data/1_1_expert_shelve")
 
 
 class ClassificationData(pl.LightningDataModule):
+    def __init__(self, imitation_learning=True):
+        super().__init__()
+        self.imitation_learning = imitation_learning
 
     def train_dataloader(self):
         # Spin up dummy set to compute example weights
-        dummy_train_dataset = NESDataset(DATA_PATH, train=True, imitation_learning=True)
+        dummy_train_dataset = NESDataset(
+            DATA_PATH, train=True, imitation_learning=self.imitation_learning
+        )
         dummy_train_dataset.bootstrap()
         example_weights = dummy_train_dataset.example_weights
         assert len(example_weights) == len(
             dummy_train_dataset
         ), f"{len(example_weights)} != {len(dummy_train_dataset)}"
 
-        train_dataset = NESDataset(DATA_PATH, train=True, imitation_learning=True)
+        train_dataset = NESDataset(
+            DATA_PATH, train=True, imitation_learning=self.imitation_learning
+        )
         return torch.utils.data.DataLoader(
             train_dataset,
             batch_size=BATCH_SIZE,
@@ -175,79 +182,6 @@ class ClassificationData(pl.LightningDataModule):
             num_workers=10,
             # sampler=torch.utils.data.RandomSampler(val_dataset, num_samples=100),
         )
-
-
-inference_model = None
-
-
-def score(images, controller_buffer, reward_history, data_frame):
-    global inference_model
-    print("Scoring", data_frame)
-    if inference_model is None:
-        inference_model = LitClassification.load_from_checkpoint(
-            "timm_il_models/best_model-v1.ckpt"
-        ).cpu()
-        inference_model.eval()
-    with torch.no_grad():
-        label_logits, value = inference_model(
-            images.unsqueeze(0),
-            controller_buffer.unsqueeze(0),
-            reward_history.unsqueeze(0),
-        )
-        label_logits = label_logits.squeeze(0)
-        value = value.squeeze(0)
-        print("label_logits", label_logits)
-        probs = Categorical(logits=label_logits)
-        # label_probs = torch.nn.functional.softmax(label_logits)
-        drawn_action_index = probs.sample()
-        # print(label_probs)
-        # drawn_action_index = torch.argmax(label_probs).item()
-        # print(drawn_action_index)
-        # print(inference_model.int_label_map)
-        # drawn_action = inference_model.int_label_map[drawn_action_index.item()]
-        drawn_action = inference_model.actor.convert_index_to_input_array(
-            drawn_action_index.item()
-        )
-
-        return drawn_action, probs.log_prob(drawn_action_index), probs.entropy(), value
-
-
-def bcdToInt(bcd_bytes):
-    value = 0
-    for x in range(0, len(bcd_bytes)):
-        value *= 10
-        value += bcd_bytes[x]
-    return value
-
-
-def compute_reward_map(last_reward_map: RewardMap | None, ram):
-    high_score_bytes = ram[0x07DD:0x07E3]
-    score = bcdToInt(high_score_bytes) * 10
-
-    time_left_bytes = ram[0x07F8:0x07FB]
-    time_left = bcdToInt(time_left_bytes)
-
-    coins = ram[0x75E]
-    world = ram[0x75F]
-    level = ram[0x760]
-    powerup_level = ram[0x756]
-    left_pos = (ram[0x006D] * 256) + ram[0x0086]
-    player_is_dying = (ram[0xE] & 0x6) > 0
-    lives = ram[0x75A] - player_is_dying.int()
-
-    reward_map = RewardMap(
-        score=score,
-        time_left=time_left,
-        coins=coins,
-        lives=lives,
-        world=world,
-        level=level,
-        left_pos=left_pos,
-        powerup_level=powerup_level,
-        player_is_dying=player_is_dying,
-    )
-
-    return reward_map, RewardMap.reward_vector(last_reward_map, reward_map)
 
 
 if __name__ == "__main__":
