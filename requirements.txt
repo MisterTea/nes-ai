@@ -12,3 +12,6 @@ pytorch-lightning
 pydantic
 torcheval
 tensorboard
+pyaudio
+sqlitedict
+PyOpenGL

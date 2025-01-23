@@ -1,6 +1,5 @@
 import io
 import json
-import shelve
 
 import torch
 from PIL import Image

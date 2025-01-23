@@ -1,9 +1,9 @@
 import copy
 import io
-import shelve
 from pathlib import Path
 
 from PIL import Image
+from sqlitedict import SqliteDict
 
 SELECT = 2
 START = 3
@@ -13,11 +13,25 @@ class RolloutData:
     def __init__(self, data_path: Path):
         self.data_path = data_path
         data_path.mkdir(exist_ok=True, parents=True)
-        self.input_images = shelve.open(str(data_path / "input_images.shelve"))
-        self.expert_controller = shelve.open(str(data_path / "expert_controller.shelve"))
-        self.reward_map_history = shelve.open(str(data_path / "reward_map.shelve"))
-        self.reward_vector_history = shelve.open(str(data_path / "reward_vector.shelve"))
-        self.agent_params = shelve.open(str(data_path / "agent_params.shelve"))
+        self.input_images = SqliteDict(
+            str(data_path / "rollout.sqlite"), tablename="input_images", autocommit=True
+        )
+        self.expert_controller = SqliteDict(
+            str(data_path / "rollout.sqlite"),
+            tablename="expert_controller",
+            autocommit=True,
+        )
+        self.reward_map_history = SqliteDict(
+            str(data_path / "rollout.sqlite"), tablename="reward_map", autocommit=True
+        )
+        self.reward_vector_history = SqliteDict(
+            str(data_path / "rollout.sqlite"),
+            tablename="reward_vector",
+            autocommit=True,
+        )
+        self.agent_params = SqliteDict(
+            str(data_path / "rollout.sqlite"), tablename="agent_params", autocommit=True
+        )
 
     def expert_controller_no_start_select(self, frame):
         controller_array = copy.deepcopy(self.expert_controller[frame])

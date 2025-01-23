@@ -111,6 +111,12 @@ class LitClassification(pl.LightningModule):
 
         return actor_loss
 
+    def on_train_epoch_end(self):
+        actor_sch, critic_sch = self.lr_schedulers()
+
+        actor_sch.step(self.trainer.callback_metrics["actor_train_loss"])
+        critic_sch.step(self.trainer.callback_metrics["critic_train_loss"])
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.actor.parameters(), lr=0.00001 * BATCH_SIZE)
         actor_opt = {
@@ -119,8 +125,8 @@ class LitClassification(pl.LightningModule):
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer, mode="min", factor=math.sqrt(0.1), patience=2
                 ),
-                "monitor": "actor_train_loss",
-                "frequency": 1,
+                # "monitor": "actor_train_loss",
+                # "frequency": 1,
                 # If "monitor" references validation metrics, then "frequency" should be set to a
                 # multiple of "trainer.check_val_every_n_epoch".
             },
@@ -132,8 +138,8 @@ class LitClassification(pl.LightningModule):
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer, mode="min", factor=math.sqrt(0.1), patience=2
                 ),
-                "monitor": "critic_train_loss",
-                "frequency": 1,
+                # "monitor": "critic_train_loss",
+                # "frequency": 1,
                 # If "monitor" references validation metrics, then "frequency" should be set to a
                 # multiple of "trainer.check_val_every_n_epoch".
             },

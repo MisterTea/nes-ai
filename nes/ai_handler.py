@@ -1,4 +1,3 @@
-import shelve
 from enum import Enum
 from pathlib import Path
 
@@ -47,7 +46,7 @@ class AiHandler:
         self.reward_map, reward_vector = compute_reward_map(
             self.last_reward_map, torch.from_numpy(ram).int()
         )
-        print("REWARD", self.reward_map, reward_vector)
+        # print("REWARD", self.reward_map, reward_vector)
 
         # print("CONTROLLER", controller1.is_pressed)
 
@@ -64,7 +63,7 @@ class AiHandler:
                 ]
             )
             image = DEFAULT_TRANSFORM(screen_buffer_image)
-            print("Environment Image ", frame, image.mean())
+            # print("Environment Image ", frame, image.mean())
             for buffer_i in range(3):
                 self.screen_buffer[buffer_i, :, :, :] = self.screen_buffer[
                     buffer_i + 1, :, :, :

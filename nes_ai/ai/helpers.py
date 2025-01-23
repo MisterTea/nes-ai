@@ -1,7 +1,6 @@
 import copy
 import json
 import os
-import shelve
 import shutil
 from collections import Counter
 from pathlib import Path
