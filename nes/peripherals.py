@@ -320,14 +320,14 @@ class ControllerBase:
         Sets the controller state from a length-8 array of boolean values.  Set this way to support any type of array as
         input state.
         """
-        self.is_pressed[self.A] = state[self.A]
-        self.is_pressed[self.B] = state[self.B]
-        self.is_pressed[self.SELECT] = state[self.SELECT]
-        self.is_pressed[self.START] = state[self.START]
-        self.is_pressed[self.UP] = state[self.UP]
-        self.is_pressed[self.DOWN] = state[self.DOWN]
-        self.is_pressed[self.LEFT] = state[self.LEFT]
-        self.is_pressed[self.RIGHT] = state[self.RIGHT]
+        self.is_pressed[self.A] = int(state[self.A])
+        self.is_pressed[self.B] = int(state[self.B])
+        self.is_pressed[self.SELECT] = int(state[self.SELECT])
+        self.is_pressed[self.START] = int(state[self.START])
+        self.is_pressed[self.UP] = int(state[self.UP])
+        self.is_pressed[self.DOWN] = int(state[self.DOWN])
+        self.is_pressed[self.LEFT] = int(state[self.LEFT])
+        self.is_pressed[self.RIGHT] = int(state[self.RIGHT])
 
     def is_any_pressed(self):
         return any(self.is_pressed)

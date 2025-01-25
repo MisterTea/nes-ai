@@ -336,6 +336,7 @@ cdef class NES:
         cdef bint show_hud=True, log_cpu=False, mute=False, audio_drop=False
         cdef int frame=0, frame_start=0, cpu_cycles=0, adaptive_rate=0, buffer_surplus=0
         cdef bint audio=has_audio and self.use_audio
+        cdef bint keep_going
 
         if not has_pygame:
             raise RuntimeError("Cannot run() without pygame; only headless operation is supported.")
@@ -411,7 +412,10 @@ cdef class NES:
                 assert image.size == (w, h)
                 image = image.resize((224, 224))
 
-                self.ai_handler.update(frame, self.controller1, self.memory.ram, image)
+                keep_going = self.ai_handler.update(frame, self.controller1, self.memory.ram, image)
+
+                if not keep_going:
+                    return
 
                 # Check for an exit
                 for event in pygame.event.get():

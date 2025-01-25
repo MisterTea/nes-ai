@@ -1,30 +1,47 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 from torch.distributions.categorical import Categorical
 
 from nes_ai.ai.timm_imitation_learning import LitClassification
+from nes_ai.ai.timm_rl import LitPPO
 
 inference_model = None
 
 
-def score(images, controller_buffer, reward_history, data_frame):
+def get_i():
+    return inference_model
+
+
+def score(model_path: Path, images, controller_buffer, reward_history, data_frame):
     global inference_model
-    print("Scoring", data_frame)
     if inference_model is None:
-        inference_model = LitClassification.load_from_checkpoint(
-            "timm_il_models/best_model-v3.ckpt"
-        ).cpu()
-        inference_model.eval()
+        if True or "rl_model" in str(model_path):
+            inference_model = LitPPO.load_from_checkpoint(model_path).cpu()
+        else:
+            inference_model = LitClassification.load_from_checkpoint(model_path).cpu()
+        inference_model.train()  # We score the model in train() mode because the score is used for further training
     with torch.no_grad():
+        value = inference_model.critic(
+            images.unsqueeze(0),
+            controller_buffer.unsqueeze(0),
+            reward_history.unsqueeze(0),
+        )
+        action, action_log_prob, entropy = inference_model.actor.get_action(
+            images.unsqueeze(0), controller_buffer.unsqueeze(0), None
+        )
+        return action, action_log_prob, entropy, value
+
         label_logits, value = inference_model(
             images.unsqueeze(0),
             controller_buffer.unsqueeze(0),
             reward_history.unsqueeze(0),
         )
+        print("LOGITS", label_logits, label_logits.min(), label_logits.max())
         label_logits = label_logits.squeeze(0)
         value = value.squeeze(0)
-        print("label_logits", label_logits)
         probs = Categorical(logits=label_logits)
         # label_probs = torch.nn.functional.softmax(label_logits)
         drawn_action_index = probs.sample()
@@ -34,7 +51,7 @@ def score(images, controller_buffer, reward_history, data_frame):
         # print(inference_model.int_label_map)
         # drawn_action = inference_model.int_label_map[drawn_action_index.item()]
         drawn_action = inference_model.actor.convert_index_to_input_array(
-            drawn_action_index.item()
+            drawn_action_index
         )
 
         return drawn_action, probs.log_prob(drawn_action_index), probs.entropy(), value

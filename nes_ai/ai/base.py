@@ -5,6 +5,7 @@ import math
 import shutil
 import time
 from collections import Counter
+from enum import IntEnum
 from pathlib import Path
 
 import numpy as np
@@ -26,55 +27,70 @@ BATCH_SIZE = 32
 REWARD_VECTOR_SIZE = 8
 
 
+class RewardIndex(IntEnum):
+    SCORE = 0
+    TIME_LEFT = 1
+    COINS = 2
+    LIVES = 3
+    WORLD = 4
+    LEVEL = 5
+    LEFT_POS = 6
+    POWERUP_LEVEL = 7
+
+
 class RewardMap(BaseModel):
     score: int
+    time_left: int
     coins: int
     lives: int
     world: int
     level: int
     left_pos: int
     powerup_level: int
-    player_is_dying: bool
+
+    @staticmethod
+    def combine_reward_vector(reward_vector):
+        assert reward_vector.shape[1] == REWARD_VECTOR_SIZE
+        retval = (
+            (100 * reward_vector[:, RewardIndex.SCORE])
+            + (1 * reward_vector[:, RewardIndex.TIME_LEFT])
+            + (100 * reward_vector[:, RewardIndex.COINS])
+            + (-0 * reward_vector[:, RewardIndex.LIVES])
+            + (10000 * reward_vector[:, RewardIndex.WORLD])
+            + (10000 * reward_vector[:, RewardIndex.LEVEL])
+            + (1 * reward_vector[:, RewardIndex.LEFT_POS])
+            + (10000 * reward_vector[:, RewardIndex.POWERUP_LEVEL])
+        )
+        assert retval.shape == (reward_vector.shape[0],)
+        return retval
 
     @staticmethod
     def reward_vector(last_reward_map: RewardMap | None, reward_map: RewardMap):
         retval = torch.zeros((REWARD_VECTOR_SIZE,), dtype=torch.float)
         if last_reward_map is not None:
-            retval[0] = reward_map.score - last_reward_map.score
-            retval[1] = reward_map.coins - last_reward_map.coins
-            retval[2] = reward_map.lives - last_reward_map.lives
-            retval[3] = reward_map.world - last_reward_map.world
-            retval[4] = reward_map.level - last_reward_map.level
-            retval[5] = reward_map.left_pos - last_reward_map.left_pos
-            retval[6] = reward_map.powerup_level - last_reward_map.powerup_level
-            retval[7] = reward_map.player_is_dying - last_reward_map.player_is_dying
+            retval[RewardIndex.SCORE] = reward_map.score - last_reward_map.score
+            retval[RewardIndex.TIME_LEFT] = (
+                reward_map.time_left - last_reward_map.time_left
+            )
+            retval[RewardIndex.COINS] = reward_map.coins - last_reward_map.coins
+            retval[RewardIndex.LIVES] = reward_map.lives - last_reward_map.lives
+            retval[RewardIndex.WORLD] = reward_map.world - last_reward_map.world
+            retval[RewardIndex.LEVEL] = reward_map.level - last_reward_map.level
+            retval[RewardIndex.LEFT_POS] = (
+                reward_map.left_pos - last_reward_map.left_pos
+            )
+            retval[RewardIndex.POWERUP_LEVEL] = (
+                reward_map.powerup_level - last_reward_map.powerup_level
+            )
 
         return retval
-
-    @staticmethod
-    def compute_step_reward(last_reward_map: RewardMap | None, reward_map: RewardMap):
-        if last_reward_map is None:
-            return 0
-        reward = 0
-        reward += 100 * (reward_map.score - last_reward_map.score)
-        reward += 100 * (reward_map.coins - last_reward_map.coins)
-        reward += 10000 * (reward_map.lives - last_reward_map.lives)
-        reward += 10000 * (reward_map.world - last_reward_map.world)
-        reward += 10000 * (reward_map.level - last_reward_map.level)
-        reward += 1 * (reward_map.left_pos - last_reward_map.left_pos)
-        reward += 10000 * (reward_map.powerup_level - last_reward_map.powerup_level)
-        reward += -10000 * (
-            reward_map.player_is_dying - last_reward_map.player_is_dying
-        )
-
-        return reward
 
 
 def _linear_block(in_features, out_features):
     return [
         torch.nn.Linear(in_features, out_features),
         torch.nn.LeakyReLU(),
-        torch.nn.BatchNorm1d(out_features),
+        # torch.nn.BatchNorm1d(out_features),
     ]
 
 
@@ -106,53 +122,59 @@ class Actor(torch.nn.Module):
 
     @staticmethod
     def input_array_to_index(input_array):
-        input_index = 0
+        assert input_array.dim() == 2, f"{input_array.shape}"
 
-        if input_array[LEFT]:
-            input_index += 1
-        elif input_array[RIGHT]:
-            input_index += 2
+        input_index = torch.zeros(
+            (input_array.shape[0],), dtype=torch.int, device=input_array.device
+        )
+
+        input_index += input_array[:, LEFT] * 1
+        input_index += input_array[:, RIGHT] * 2
 
         input_index *= 3
-        if input_array[UP]:
-            input_index += 1
-        elif input_array[DOWN]:
-            input_index += 2
+
+        input_index += input_array[:, UP] * 1
+        input_index += input_array[:, DOWN] * 2
 
         input_index <<= 1
-        input_index += input_array[A]
+        input_index += input_array[:, A]
 
         input_index <<= 1
-        input_index += input_array[B]
+        input_index += input_array[:, B]
 
+        # print("input_index", input_index)
         return input_index
 
     def convert_input_array_to_index(self, input_array):
         input_index = Actor.input_array_to_index(input_array)
 
-        assert (
+        assert torch.all(
             input_index < self.num_actions
         ), f"{input_index} >= {self.num_actions} from {input_array}"
         return input_index
 
     def convert_index_to_input_array(self, input_index):
-        original_input_index = input_index
-        assert input_index < self.num_actions
-        input_array = torch.zeros((8,), dtype=torch.int)
-        input_array[B] = input_index & 1
+        assert input_index.dim() == 1, f"{input_index.shape}"
+
+        assert torch.all(input_index < self.num_actions)
+
+        input_array = torch.zeros(
+            (input_index.shape[0], 8), dtype=torch.int, device=input_index.device
+        )
+        input_array[:, B] = input_index & 1
         input_index >>= 1
 
-        input_array[A] = input_index & 1
+        input_array[:, A] = input_index & 1
         input_index >>= 1
 
-        input_array[DOWN] = input_index % 3 == 2
-        input_array[UP] = input_index % 3 == 1
+        input_array[:, DOWN] = input_index % 3 == 2
+        input_array[:, UP] = input_index % 3 == 1
         input_index //= 3
 
-        input_array[RIGHT] = input_index % 3 == 2
-        input_array[LEFT] = input_index % 3 == 1
+        input_array[:, RIGHT] = input_index % 3 == 2
+        input_array[:, LEFT] = input_index % 3 == 1
 
-        assert input_index < 3, f"{original_input_index} -> {input_array}"
+        assert torch.all(input_index < 3), f"{input_index}"
         return input_array
 
     def forward(self, images, past_inputs):
@@ -164,6 +186,23 @@ class Actor(torch.nn.Module):
         trunk_output = torch.cat((trunk_output, past_inputs.reshape(-1, 3 * 8)), dim=1)
         outputs = self.head(trunk_output)
         return outputs
+
+    def get_action(self, images, past_inputs, action_taken=None):
+        logits = self.forward(images, past_inputs)
+        action_probs = Categorical(logits=logits)
+        # print("ACTION PROBS", action_probs.logits)
+        if action_taken is None:
+            action = action_probs.sample()
+            action_array = self.convert_index_to_input_array(action)
+        else:
+            action = self.convert_input_array_to_index(action_taken)
+            action_array = action_taken
+            action_array2 = self.convert_index_to_input_array(action)
+            assert torch.equal(
+                action_array, action_array2
+            ), f"{action_array} != {action_array2}"
+        # print("ACTION INFO", action_array, action)
+        return action_array, action_probs.log_prob(action), action_probs.entropy()
 
 
 class Critic(torch.nn.Module):
@@ -185,12 +224,12 @@ class Critic(torch.nn.Module):
             3,
             REWARD_VECTOR_SIZE,
         ), f"{past_rewards.shape}"
-        trunk_output = torch.cat(
-            [self.trunk(images[:, x, :, :, :]) for x in range(4)], dim=1
-        )
+        # trunk_output = torch.cat(
+        #     , dim=1
+        # )
         trunk_output = torch.cat(
             (
-                trunk_output,
+                *[self.trunk(images[:, x, :, :, :]) for x in range(4)],
                 past_inputs.reshape(-1, 3 * 8),
                 past_rewards.reshape(-1, 3 * REWARD_VECTOR_SIZE),
             ),
@@ -215,13 +254,15 @@ def compute_reward_map(last_reward_map: RewardMap | None, ram):
     time_left_bytes = ram[0x07F8:0x07FB]
     time_left = bcdToInt(time_left_bytes)
 
+    # For now, consider us at the next level if we are sliding down the flagpole
+    sliding_down_flagpole = ram[0x001D] == 0x03
+
     coins = ram[0x75E]
     world = ram[0x75F]
-    level = ram[0x760]
+    level = ram[0x760] + sliding_down_flagpole
     powerup_level = ram[0x756]
     left_pos = (ram[0x006D] * 256) + ram[0x0086]
-    player_is_dying = (ram[0xE] & 0x6) > 0
-    lives = ram[0x75A] - player_is_dying.int()
+    lives = ram[0x75A]
 
     reward_map = RewardMap(
         score=score,
@@ -232,7 +273,6 @@ def compute_reward_map(last_reward_map: RewardMap | None, ram):
         level=level,
         left_pos=left_pos,
         powerup_level=powerup_level,
-        player_is_dying=player_is_dying,
     )
 
     return reward_map, RewardMap.reward_vector(last_reward_map, reward_map)

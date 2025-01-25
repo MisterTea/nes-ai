@@ -47,22 +47,15 @@ class LitClassification(pl.LightningModule):
     def training_step(self, batch):
         actor_opt, critic_opt = self.optimizers()
 
-        images, reward_vectors, past_inputs, past_rewards, targets = batch
-
-        actor_outputs = self.actor.forward(images, past_inputs)
-
-        target_indices = torch.zeros(
-            (images.shape[0],), dtype=torch.long, device=images.device
-        )
-        for i in range(images.shape[0]):
-            target_indices[i] = self.actor.convert_input_array_to_index(targets[i])
-
-        actor_loss = self.actor_loss_fn(actor_outputs, target_indices)
-        self.log("actor_train_loss", actor_loss, prog_bar=True)
-
-        actor_opt.zero_grad()
-        self.manual_backward(actor_loss)
-        actor_opt.step()
+        (
+            images,
+            reward_vectors,
+            past_inputs,
+            past_rewards,
+            targets,
+            log_prob,
+            advantages,
+        ) = batch
 
         reward_map_outputs = self.critic.forward(images, past_inputs, past_rewards)
 
@@ -75,6 +68,17 @@ class LitClassification(pl.LightningModule):
         critic_opt.zero_grad()
         self.manual_backward(reward_loss)
         critic_opt.step()
+
+        actor_outputs = self.actor.forward(images, past_inputs)
+
+        target_indices = self.actor.convert_input_array_to_index(targets)
+
+        actor_loss = self.actor_loss_fn(actor_outputs, target_indices)
+        self.log("actor_train_loss", actor_loss, prog_bar=True)
+
+        actor_opt.zero_grad()
+        self.manual_backward(actor_loss)
+        actor_opt.step()
 
         self.log("train_loss", actor_loss + reward_loss, prog_bar=False)
 
@@ -89,15 +93,19 @@ class LitClassification(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
 
         # print(batch)
-        images, reward_vectors, past_inputs, past_rewards, targets = batch
+        (
+            images,
+            reward_vectors,
+            past_inputs,
+            past_rewards,
+            targets,
+            log_prob,
+            advantages,
+        ) = batch
 
         actor_outputs = self.actor.forward(images, past_inputs)
 
-        target_indices = torch.zeros(
-            (images.shape[0],), dtype=torch.long, device=images.device
-        )
-        for i in range(images.shape[0]):
-            target_indices[i] = self.actor.convert_input_array_to_index(targets[i])
+        target_indices = self.actor.convert_input_array_to_index(targets)
 
         actor_loss = self.actor_loss_fn(actor_outputs, target_indices)
         self.log("actor_val_loss", actor_loss, prog_bar=True)
@@ -149,7 +157,7 @@ class LitClassification(pl.LightningModule):
         return actor_opt, critic_opt
 
 
-DATA_PATH = Path("./data/1_1_expert_shelve")
+DATA_PATH = Path("./data/1_1_expert")
 
 
 class ClassificationData(pl.LightningDataModule):

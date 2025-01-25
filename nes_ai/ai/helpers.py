@@ -12,8 +12,6 @@ from nes_ai.ai.base import SELECT, START
 
 
 def upscale_and_get_labels(data_path, rollout_data, end_frame):
-    print(data_path)
-
     labels = [
         tuple(rollout_data.expert_controller_no_start_select(str(frame)))
         for frame in range(200, end_frame)
@@ -27,14 +25,14 @@ def upscale_and_get_labels(data_path, rollout_data, end_frame):
         label_freq.append(value)
 
     lcm = np.lcm.reduce(label_freq).item()
-    print("LCM", lcm)
+    # print("LCM", lcm)
     upsample_factors = []
     for freq in label_freq:
         upsample_factors.append(lcm // freq)
-    print("UPSAMPLE FACTORS", upsample_factors)
+    # print("UPSAMPLE FACTORS", upsample_factors)
     while min(upsample_factors) > 8:
         upsample_factors = [factor // 2 for factor in upsample_factors]
-        print("UPSAMPLE FACTORS", upsample_factors)
+        # print("UPSAMPLE FACTORS", upsample_factors)
     print("UPSAMPLE FACTORS (done)", upsample_factors)
     label_upsample_map = {}
     for i in range(len(label_names)):

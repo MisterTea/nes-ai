@@ -31,16 +31,16 @@ class NESDataset(torch.utils.data.Dataset):
         self.data_path = data_path
 
     def __len__(self):
-        rollout_data = RolloutData(self.data_path)
+        rollout_data = RolloutData(self.data_path, readonly=True)
         end_frame = NESDataset._compute_end_frame(rollout_data)
         rollout_data.close()
         return end_frame - FRAMES_TO_SKIP
 
     def get_image_and_input_at_frame(self, frame):
-        # print("frame to file", frame, image_filename)
-        image_bytes = self.rollout_data.input_images[str(frame)]
-        img_byte_arr = io.BytesIO(image_bytes)
-        image = Image.open(img_byte_arr)
+        # print(
+        #     "image frames", self.data_path, list(self.rollout_data.input_images.keys())
+        # )
+        image = self.rollout_data.get_image(str(frame))
         image = DEFAULT_TRANSFORM(image)
         # print("Replay buffer image",frame, image.mean())
         # print("Getting image and input at frame", frame, image_filename, self.file_label_map[image_filename.name])
@@ -73,7 +73,7 @@ class NESDataset(torch.utils.data.Dataset):
                         )
                     ]
                     for frame in range(FRAMES_TO_SKIP, self.end_frame)
-                ]
+                ],
             ),
             p=1,
             dim=0,
@@ -110,9 +110,11 @@ class NESDataset(torch.utils.data.Dataset):
         else:
 
             lastgaelam = torch.zeros(reward_vector_size, dtype=torch.float)
-            for frame in range(self.end_frame - 1, 0, -1):
+            for frame in range(self.end_frame - 1, FRAMES_TO_SKIP, -1):
                 self.rewards[frame] = reward_vector_history[str(frame)]
-                self.values[frame] = values = agent_params[str(frame)]["value"]
+                self.values[frame] = values = torch.from_numpy(
+                    agent_params[str(frame)]["value"]
+                )
 
                 if frame == self.end_frame - 1:
                     delta = 0.0
@@ -126,7 +128,7 @@ class NESDataset(torch.utils.data.Dataset):
                 self.advantages[frame] = lastgaelam = delta + (
                     GAMMA * GAE_LAMBDA * nextnonterminal * lastgaelam
                 )
-                self.returns[frame] = self.advantages[frame] + values
+                # self.returns[frame] = self.advantages[frame] + values
 
     def __getitem__(self, idx):
         if not self.bootstrapped:
@@ -153,9 +155,27 @@ class NESDataset(torch.utils.data.Dataset):
         assert len(image_list) == 4
         assert len(input_list) == 4
         image_stack = torch.stack(image_list)
+
+        if self.imitation_learning == False:
+            # print("CHECKING IMAGE STACK")
+            assert torch.equal(
+                image_stack,
+                torch.from_numpy(
+                    self.rollout_data.agent_params[str(frame)]["screen_buffer"]
+                ),
+            ), f"{image_stack} != {self.rollout_data.agent_params[str(frame)]['screen_buffer']}"
+
         past_inputs = torch.zeros((3, 8), dtype=torch.float)
         for i in range(3):
             past_inputs[i, :] = torch.FloatTensor(input_list[i])
+
+        if self.imitation_learning == False:
+            assert torch.equal(
+                past_inputs,
+                torch.from_numpy(
+                    self.rollout_data.agent_params[str(frame)]["controller_buffer"]
+                ),
+            ), f"{past_inputs} != {self.rollout_data.agent_params[str(frame)]['controller_buffer']}"
 
         value = self.values[frame]
 
@@ -164,10 +184,17 @@ class NESDataset(torch.utils.data.Dataset):
         for i in range(3):
             past_rewards[i] = self.rewards[history_start_frame + i]
 
+        if self.imitation_learning:
+            log_prob = 0.0
+        else:
+            log_prob = self.rollout_data.agent_params[str(frame)]["log_prob"]
+
         return (
             image_stack,
-            value,
+            value.to(dtype=torch.float32),
             past_inputs,
             past_rewards,
             torch.IntTensor(input_list[-1]),
+            torch.tensor(log_prob, dtype=torch.float32),
+            self.advantages[frame],
         )
