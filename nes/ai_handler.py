@@ -51,6 +51,7 @@ class AiHandler:
         self.frames_until_exit = -1
 
     def shutdown(self):
+        print("Shutting down ai handler")
         self.rollout_data.close()
 
     def update(self, frame, controller1, ram, screen_buffer_image):
@@ -84,7 +85,7 @@ class AiHandler:
 
         # print("CONTROLLER", controller1.is_pressed)
 
-        if True:
+        with torch.no_grad():
             from torchvision import transforms
 
             DEFAULT_TRANSFORM = transforms.Compose(
@@ -187,10 +188,10 @@ class AiHandler:
                         ), f"{entropy} != {logged_entropy}"
 
                     self.rollout_data.agent_params[str(frame)] = {
-                        "action": action.numpy(),
+                        "action": action.tolist(),
                         "log_prob": float(log_prob.item()),
                         "entropy": float(entropy.item()),
-                        "value": value.numpy(),
+                        "value": value.tolist(),
                     }
                     controller1.update()
                     if not controller1.is_any_pressed():
@@ -204,7 +205,10 @@ class AiHandler:
                         )
                     )
                     if not torch.equal(
-                        torch.IntTensor(expert_controller_for_frame), action
+                        torch.IntTensor(expert_controller_for_frame).to(
+                            device=action.device
+                        ),
+                        action,
                     ):
                         print("WRONG ANSWER")
                         controller1.set_state(expert_controller_for_frame)

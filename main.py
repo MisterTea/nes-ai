@@ -41,41 +41,50 @@ from nes import NES, SYNC_AUDIO, SYNC_NONE, SYNC_PYGAME, SYNC_VSYNC
 
 
 @click.command()
+@click.option(
+    "--learn-mode",
+    required=True,
+    type=click.Choice(["RL", "DATA_COLLECT", "IMITATION_VALIDATION"]),
+)
 @click.option("--score-model", required=False)
-def main(score_model: Path | None = None):
-    # nes = NES(
-    #     "./roms/Super_mario_brothers.nes",
-    #     AiHandler(
-    #         Path("data/1_1_rl_2"),
-    #         LearnMode.RL,
-    #         score_model=score_model,
-    #         bootstrap_expert_path=Path("data/1_1_expert"),
-    #     ),
-    #     sync_mode=SYNC_PYGAME,
-    #     opengl=True,
-    #     audio=False,
-    # )
+def main(learn_mode: LearnMode, score_model: Path | None = None):
 
-    nes = NES(
-        "./roms/Super_mario_brothers.nes",
-        AiHandler(
-            Path("data/1_1_rl"),
-            LearnMode.IMITATION_VALIDATION,
-            bootstrap_expert_path=Path("data/1_1_expert"),
-            score_model=score_model,
-        ),
-        sync_mode=SYNC_PYGAME,
-        opengl=True,
-        audio=False,
-    )
+    if learn_mode == "RL":
+        nes = NES(
+            "./roms/Super_mario_brothers.nes",
+            AiHandler(
+                Path("data/1_1_rl_2"),
+                LearnMode.RL,
+                score_model=score_model,
+                bootstrap_expert_path=Path("data/1_1_expert"),
+            ),
+            sync_mode=SYNC_PYGAME,
+            opengl=True,
+            audio=False,
+        )
 
-    # nes = NES(
-    #     "./roms/Super_mario_brothers.nes",
-    #     AiHandler(Path("data/1_1_expert"), LearnMode.DATA_COLLECT),
-    #     sync_mode=SYNC_PYGAME,
-    #     opengl=True,
-    #     audio=False,
-    # )
+    if learn_mode == "IMITATION_VALIDATION":
+        nes = NES(
+            "./roms/Super_mario_brothers.nes",
+            AiHandler(
+                Path("data/1_1_rl"),
+                LearnMode.IMITATION_VALIDATION,
+                bootstrap_expert_path=Path("data/1_1_expert"),
+                score_model=score_model,
+            ),
+            sync_mode=SYNC_PYGAME,
+            opengl=True,
+            audio=False,
+        )
+
+    if learn_mode == "DATA_COLLECT":
+        nes = NES(
+            "./roms/Super_mario_brothers.nes",
+            AiHandler(Path("data/1_1_expert"), LearnMode.DATA_COLLECT),
+            sync_mode=SYNC_PYGAME,
+            opengl=True,
+            audio=False,
+        )
 
     nes.run()
 

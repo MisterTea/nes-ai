@@ -73,7 +73,7 @@ class LitClassification(pl.LightningModule):
 
         target_indices = self.actor.convert_input_array_to_index(targets)
 
-        actor_loss = self.actor_loss_fn(actor_outputs, target_indices)
+        actor_loss = self.actor_loss_fn(actor_outputs, target_indices.long())
         self.log("actor_train_loss", actor_loss, prog_bar=True)
 
         actor_opt.zero_grad()
@@ -107,7 +107,11 @@ class LitClassification(pl.LightningModule):
 
         target_indices = self.actor.convert_input_array_to_index(targets)
 
-        actor_loss = self.actor_loss_fn(actor_outputs, target_indices)
+        # print(target_indices.shape)
+        # print(target_indices)
+        # print(actor_outputs)
+        # print(actor_outputs.shape)
+        actor_loss = self.actor_loss_fn(actor_outputs, target_indices.long())
         self.log("actor_val_loss", actor_loss, prog_bar=True)
 
         metric = MulticlassAccuracy()

@@ -19,20 +19,28 @@ def score(model_path: Path, images, controller_buffer, reward_history, data_fram
     global inference_model
     if inference_model is None:
         if True or "rl_model" in str(model_path):
-            inference_model = LitPPO.load_from_checkpoint(model_path).cpu()
+            inference_model = LitPPO.load_from_checkpoint(model_path)
         else:
-            inference_model = LitClassification.load_from_checkpoint(model_path).cpu()
+            inference_model = LitClassification.load_from_checkpoint(model_path)
         inference_model.train()  # We score the model in train() mode because the score is used for further training
     with torch.no_grad():
+        moved_images = images.unsqueeze(0).to(device=inference_model.device)
         value = inference_model.critic(
-            images.unsqueeze(0),
-            controller_buffer.unsqueeze(0),
-            reward_history.unsqueeze(0),
+            moved_images,
+            controller_buffer.unsqueeze(0).to(device=inference_model.device),
+            reward_history.unsqueeze(0).to(device=inference_model.device),
         )
         action, action_log_prob, entropy = inference_model.actor.get_action(
-            images.unsqueeze(0), controller_buffer.unsqueeze(0), None
+            moved_images,
+            controller_buffer.unsqueeze(0).to(device=inference_model.device),
+            None,
         )
-        return action, action_log_prob, entropy, value
+        return (
+            action.squeeze(0),
+            action_log_prob.squeeze(0),
+            entropy.squeeze(0),
+            value.squeeze(0),
+        )
 
         label_logits, value = inference_model(
             images.unsqueeze(0),
