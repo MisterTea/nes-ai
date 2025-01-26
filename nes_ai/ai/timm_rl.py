@@ -26,6 +26,7 @@ from nes_ai.ai.nes_dataset import NESDataset
 # avail_pretrained_models = timm.list_models(pretrained=True)
 # print(len(avail_pretrained_models), avail_pretrained_models)
 
+BATCH_STEP_SIZE = 32
 BATCH_SIZE = 32
 REWARD_VECTOR_SIZE = 8
 CLIP_COEFFICIENT = 0.1
@@ -46,7 +47,7 @@ class LitPPO(pl.LightningModule):
             images, past_inputs, past_rewards
         )
 
-    def training_step(self, batch):
+    def training_step(self, batch, batch_idx):
         (
             images,
             recorded_ground_truth_values,
@@ -218,18 +219,16 @@ class LitPPO(pl.LightningModule):
         return actor_opt, critic_opt
 
 
-DATA_PATH = Path("./data/1_1_rl_2")
-
-
 class ClassificationData(pl.LightningDataModule):
-    def __init__(self, imitation_learning=True):
+    def __init__(self, data_path: Path, imitation_learning=True):
         super().__init__()
         self.imitation_learning = imitation_learning
+        self.data_path = data_path
 
     def train_dataloader(self):
         # Spin up dummy set to compute example weights
         dummy_train_dataset = NESDataset(
-            DATA_PATH, train=True, imitation_learning=self.imitation_learning
+            self.data_path, train=True, imitation_learning=self.imitation_learning
         )
         dummy_train_dataset.bootstrap()
         example_weights = dummy_train_dataset.example_weights
@@ -238,17 +237,17 @@ class ClassificationData(pl.LightningDataModule):
         ), f"{len(example_weights)} != {len(dummy_train_dataset)}"
 
         train_dataset = NESDataset(
-            DATA_PATH, train=True, imitation_learning=self.imitation_learning
+            self.data_path, train=True, imitation_learning=self.imitation_learning
         )
-        # return torch.utils.data.DataLoader(
-        #     train_dataset,
-        #     batch_size=BATCH_SIZE,
-        #     # persistent_workers=True,
-        #     num_workers=0,  # shuffle=True,
-        #     sampler=torch.utils.data.WeightedRandomSampler(
-        #         example_weights, BATCH_SIZE * 100, replacement=True
-        #     ),
-        # )
+        return torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=BATCH_SIZE,
+            # persistent_workers=True,
+            num_workers=0,  # shuffle=True,
+            sampler=torch.utils.data.WeightedRandomSampler(
+                example_weights, BATCH_STEP_SIZE * 100, replacement=True
+            ),
+        )
         return torch.utils.data.DataLoader(
             train_dataset,
             batch_size=BATCH_SIZE,
@@ -259,7 +258,7 @@ class ClassificationData(pl.LightningDataModule):
 
     def val_dataloader(self):
         val_dataset = NESDataset(
-            DATA_PATH, train=False, imitation_learning=self.imitation_learning
+            self.data_path, train=False, imitation_learning=self.imitation_learning
         )
         return torch.utils.data.DataLoader(
             val_dataset,
@@ -273,26 +272,24 @@ class ClassificationData(pl.LightningDataModule):
 import click
 
 
-@click.command()
-@click.option("--checkpoint-path")
-def main(checkpoint_path: Path | None = None):
-    data = ClassificationData(imitation_learning=False)
+def train_rl(data_path: Path, checkpoint_path: Path | None = None):
+    data = ClassificationData(data_path, imitation_learning=False)
     if checkpoint_path is None:
         model = LitPPO()
     else:
         print("Loading from checkpoint", checkpoint_path)
         model = LitPPO.load_from_checkpoint(checkpoint_path)
     trainer = pl.Trainer(
-        max_epochs=2000,
+        max_epochs=1,
         accelerator="auto",
         logger=TensorBoardLogger("logs/", name="timm_rl_logs"),
         callbacks=[
             LearningRateMonitor(logging_interval="step"),
-            EarlyStopping(
-                monitor="approx_kl_epoch",
-                divergence_threshold=0.05,
-                verbose=True,
-            ),
+            # EarlyStopping(
+            #     monitor="approx_kl_epoch",
+            #     divergence_threshold=0.05,
+            #     verbose=True,
+            # ),
             ModelCheckpoint(
                 dirpath="timm_rl_models",
                 # monitor="val_loss",
@@ -303,6 +300,13 @@ def main(checkpoint_path: Path | None = None):
         ],
     )
     trainer.fit(model, data)
+
+
+@click.command()
+@click.option("--checkpoint-path")
+def main(checkpoint_path: Path | None = None):
+    DATA_PATH = Path("./data/1_1_rl")
+    return train_rl(data_path=DATA_PATH, checkpoint_path=checkpoint_path)
 
 
 if __name__ == "__main__":

@@ -238,13 +238,13 @@ class AiHandler:
                     )
                     print("LOGPROB", log_prob)
                     self.rollout_data.agent_params[str(frame)] = {
-                        "action": action.numpy(),
+                        "action": action.cpu().tolist(),
                         "log_prob": float(log_prob.item()),
                         "entropy": float(entropy.item()),
-                        "value": value.numpy(),
-                        "screen_buffer": self.screen_buffer.numpy(),
-                        "controller_buffer": self.controller_buffer.numpy(),
-                        "reward_history": reward_history.numpy(),
+                        "value": value.cpu().tolist(),
+                        "screen_buffer": self.screen_buffer.cpu().tolist(),
+                        "controller_buffer": self.controller_buffer.cpu().tolist(),
+                        "reward_history": reward_history.cpu().tolist(),
                     }
                     controller1.update()
                     if not controller1.is_any_pressed():
