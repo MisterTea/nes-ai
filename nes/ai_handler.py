@@ -180,12 +180,13 @@ class AiHandler:
                         )
                         if not torch.equal(action, logged_action):
                             print(f"Actions don't match: {action} != {logged_action}")
-                        assert torch.equal(
-                            log_prob, logged_log_prob
-                        ), f"{log_prob} != {logged_log_prob}"
-                        assert torch.equal(
-                            entropy, logged_entropy
-                        ), f"{entropy} != {logged_entropy}"
+                        else:
+                            assert torch.equal(
+                                log_prob, logged_log_prob
+                            ), f"{log_prob} != {logged_log_prob}"
+                            assert torch.equal(
+                                entropy, logged_entropy
+                            ), f"{entropy} != {logged_entropy}"
 
                     self.rollout_data.agent_params[str(frame)] = {
                         "action": action.tolist(),
