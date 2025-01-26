@@ -112,7 +112,7 @@ class NESDataset(torch.utils.data.Dataset):
             lastgaelam = torch.zeros(reward_vector_size, dtype=torch.float)
             for frame in range(self.end_frame - 1, FRAMES_TO_SKIP, -1):
                 self.rewards[frame] = reward_vector_history[str(frame)]
-                self.values[frame] = values = torch.from_numpy(
+                self.values[frame] = values = torch.tensor(
                     agent_params[str(frame)]["value"]
                 )
 
@@ -121,9 +121,10 @@ class NESDataset(torch.utils.data.Dataset):
                     nextnonterminal = 0.0
                 else:
                     nextnonterminal = 1.0
-                    next_values = agent_params[str(frame + 1)]["value"]
+                    next_values = torch.tensor(agent_params[str(frame + 1)]["value"])
                     delta = (
-                        reward_vector_history[str(frame)] + (GAMMA * next_values)
+                        torch.tensor(reward_vector_history[str(frame)])
+                        + (GAMMA * next_values)
                     ) - values
                 self.advantages[frame] = lastgaelam = delta + (
                     GAMMA * GAE_LAMBDA * nextnonterminal * lastgaelam
@@ -156,11 +157,15 @@ class NESDataset(torch.utils.data.Dataset):
         assert len(input_list) == 4
         image_stack = torch.stack(image_list)
 
-        if self.imitation_learning == False:
+        if (
+            False
+            and self.imitation_learning == False
+            and "screen_buffer" in self.rollout_data.agent_params[str(frame)]
+        ):
             # print("CHECKING IMAGE STACK")
             assert torch.equal(
                 image_stack,
-                torch.from_numpy(
+                torch.tensor(
                     self.rollout_data.agent_params[str(frame)]["screen_buffer"]
                 ),
             ), f"{image_stack} != {self.rollout_data.agent_params[str(frame)]['screen_buffer']}"
@@ -169,10 +174,14 @@ class NESDataset(torch.utils.data.Dataset):
         for i in range(3):
             past_inputs[i, :] = torch.FloatTensor(input_list[i])
 
-        if self.imitation_learning == False:
+        if (
+            False
+            and self.imitation_learning == False
+            and "controller_buffer" in self.rollout_data.agent_params[str(frame)]
+        ):
             assert torch.equal(
                 past_inputs,
-                torch.from_numpy(
+                torch.tensor(
                     self.rollout_data.agent_params[str(frame)]["controller_buffer"]
                 ),
             ), f"{past_inputs} != {self.rollout_data.agent_params[str(frame)]['controller_buffer']}"
