@@ -22,6 +22,7 @@ from torchvision import datasets, transforms
 from nes_ai.ai.base import Actor, Critic, RewardMap
 from nes_ai.ai.helpers import upscale_and_get_labels
 from nes_ai.ai.nes_dataset import NESDataset
+from nes_ai.ai.rollout_data import RolloutData
 
 # avail_pretrained_models = timm.list_models(pretrained=True)
 # print(len(avail_pretrained_models), avail_pretrained_models)
@@ -29,45 +30,75 @@ from nes_ai.ai.nes_dataset import NESDataset
 BATCH_SIZE = 32
 REWARD_VECTOR_SIZE = 8
 
+DEFAULT_TRANSFORM = transforms.Compose(
+    [
+        transforms.ToTensor(),
+        transforms.Resize((224, 224)),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ]
+)
+
+
+def l1_regularization(model):
+    l1_reg = 0
+    for param in model.parameters():
+        l1_reg += torch.sum(torch.abs(param))
+    return l1_reg / len(list(model.parameters()))
+
 
 class LitClassification(pl.LightningModule):
     def __init__(self):
         super().__init__()
         self.actor = Actor()
-        self.critic = Critic(self.actor.trunk)
+        self.critic = Critic(self.actor.trunk, self.actor.trunk_transforms)
         self.actor_loss_fn = torch.nn.CrossEntropyLoss()
-        self.reward_loss_fn = torch.nn.SmoothL1Loss()
+        self.value_loss_fn = torch.nn.SmoothL1Loss()
         self.automatic_optimization = False
+        self.rollout_data = RolloutData(DATA_PATH, readonly=True)
 
-    def forward(self, images, past_inputs, past_rewards):
+    def forward(self, images, past_inputs, past_values):
         return self.actor.forward(images, past_inputs), self.critic.forward(
-            images, past_inputs, past_rewards
+            images, past_inputs, past_values
         )
+
+    def _image_frames_to_image(self, image_frames, device):
+        images = torch.stack(
+            [
+                torch.stack(
+                    [
+                        DEFAULT_TRANSFORM(
+                            self.rollout_data.get_image(image_frames[i][b])
+                        )
+                        for i in range(4)
+                    ],
+                )
+                for b in range(len(image_frames[0]))
+            ]
+        ).to(device=device)
+        return images
 
     def training_step(self, batch):
         actor_opt, critic_opt = self.optimizers()
 
         (
             images,
-            reward_vectors,
+            value_vectors,
             past_inputs,
-            past_rewards,
+            past_values,
             targets,
             log_prob,
             advantages,
         ) = batch
 
-        reward_map_outputs = self.critic.forward(images, past_inputs, past_rewards)
+        # images = self._image_frames_to_image(image_frames, past_inputs.device)
+
+        value_map_outputs = self.critic.forward(images, past_inputs, past_values)
 
         assert (
-            reward_map_outputs.shape == reward_vectors.shape
-        ), f"{reward_map_outputs.shape} != {reward_vectors.shape}"
-        reward_loss = 0.01 * self.reward_loss_fn(reward_map_outputs, reward_vectors)
-        self.log("reward_train_loss", reward_loss, prog_bar=True)
-
-        critic_opt.zero_grad()
-        self.manual_backward(reward_loss)
-        critic_opt.step()
+            value_map_outputs.shape == value_vectors.shape
+        ), f"{value_map_outputs.shape} != {value_vectors.shape}"
+        value_loss = 0.01 * self.value_loss_fn(value_map_outputs, value_vectors)
+        self.log("value_train_loss", value_loss, prog_bar=True)
 
         actor_outputs = self.actor.forward(images, past_inputs)
 
@@ -76,18 +107,25 @@ class LitClassification(pl.LightningModule):
         actor_loss = self.actor_loss_fn(actor_outputs, target_indices.long())
         self.log("actor_train_loss", actor_loss, prog_bar=True)
 
+        loss = actor_loss + 0.01 * l1_regularization(self.actor)
+
         actor_opt.zero_grad()
-        self.manual_backward(actor_loss)
+        self.manual_backward(loss)
         actor_opt.step()
 
-        self.log("train_loss", actor_loss + reward_loss, prog_bar=False)
+        loss = value_loss + 0.01 * l1_regularization(self.critic)
+
+        actor_opt.zero_grad()
+        self.manual_backward(loss)
+        actor_opt.step()
+
+        self.log("train_loss", actor_loss + value_loss, prog_bar=False)
 
         actor_sch, critic_sch = self.lr_schedulers()
 
         actor_sch.step(self.trainer.callback_metrics["actor_train_loss"])
-        critic_sch.step(self.trainer.callback_metrics["reward_train_loss"])
-
         self.log("actor_lr", actor_sch.get_last_lr()[0], prog_bar=True)
+        actor_sch.step(self.trainer.callback_metrics["value_train_loss"])
         self.log("critic_lr", critic_sch.get_last_lr()[0], prog_bar=True)
 
     def validation_step(self, batch, batch_idx):
@@ -95,13 +133,15 @@ class LitClassification(pl.LightningModule):
         # print(batch)
         (
             images,
-            reward_vectors,
+            value_vectors,
             past_inputs,
-            past_rewards,
+            past_values,
             targets,
             log_prob,
             advantages,
         ) = batch
+
+        # images = self._image_frames_to_image(image_frames, past_inputs.device)
 
         actor_outputs = self.actor.forward(images, past_inputs)
 
@@ -119,25 +159,25 @@ class LitClassification(pl.LightningModule):
         accuracy = metric.compute()
         self.log("val_acc", accuracy, prog_bar=True)
 
-        reward_map_outputs = self.critic.forward(images, past_inputs, past_rewards)
+        value_map_outputs = self.critic.forward(images, past_inputs, past_values)
 
         assert (
-            reward_map_outputs.shape == reward_vectors.shape
-        ), f"{reward_map_outputs.shape} != {reward_vectors.shape}"
-        reward_loss = 0.01 * self.reward_loss_fn(reward_map_outputs, reward_vectors)
-        self.log("reward_val_loss", reward_loss, prog_bar=True)
+            value_map_outputs.shape == value_vectors.shape
+        ), f"{value_map_outputs.shape} != {value_vectors.shape}"
+        value_loss = 0.01 * self.value_loss_fn(value_map_outputs, value_vectors)
+        self.log("value_val_loss", value_loss, prog_bar=True)
 
-        self.log("val_loss", actor_loss + reward_loss, prog_bar=False)
+        self.log("val_loss", actor_loss + value_loss, prog_bar=False)
 
         return actor_loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.actor.parameters(), lr=0.0001 * BATCH_SIZE)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=0.0001 * BATCH_SIZE)
         actor_opt = {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer, mode="min", factor=math.sqrt(0.1), patience=2000
+                    optimizer, mode="min", factor=math.sqrt(0.1), patience=3000
                 ),
                 # "monitor": "actor_train_loss",
                 # "frequency": 1,
@@ -214,7 +254,7 @@ if __name__ == "__main__":
         callbacks=[
             LearningRateMonitor(logging_interval="step"),
             EarlyStopping(
-                monitor="val_loss",
+                monitor="actor_val_loss",
                 min_delta=0.0001,
                 mode="min",
                 patience=100,

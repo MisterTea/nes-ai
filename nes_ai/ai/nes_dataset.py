@@ -42,6 +42,9 @@ class NESDataset(torch.utils.data.Dataset):
         # )
         image = self.rollout_data.get_image(str(frame))
         image = DEFAULT_TRANSFORM(image)
+
+        # image_frame = str(frame)
+
         # print("Replay buffer image",frame, image.mean())
         # print("Getting image and input at frame", frame, image_filename, self.file_label_map[image_filename.name])
         return image, self.rollout_data.expert_controller_no_start_select(str(frame))

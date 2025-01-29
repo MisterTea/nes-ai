@@ -242,7 +242,7 @@ class AiHandler:
                         "log_prob": float(log_prob.item()),
                         "entropy": float(entropy.item()),
                         "value": value.cpu().tolist(),
-                        "screen_buffer": self.screen_buffer.cpu().tolist(),
+                        # "screen_buffer": self.screen_buffer.cpu().tolist(),
                         "controller_buffer": self.controller_buffer.cpu().tolist(),
                         "reward_history": reward_history.cpu().tolist(),
                     }

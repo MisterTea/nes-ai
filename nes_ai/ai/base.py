@@ -20,6 +20,8 @@ from torch.distributions.categorical import Categorical
 from torcheval.metrics import MulticlassAccuracy
 from torchvision import datasets, transforms
 
+from nes_ai.ai.rollout_data import RolloutData
+
 # avail_pretrained_models = timm.list_models(pretrained=True)
 # print(len(avail_pretrained_models), avail_pretrained_models)
 
@@ -103,12 +105,33 @@ DOWN = 5
 LEFT = 6
 RIGHT = 7
 
+# laksjdlaskjdsalkj
+
+# IMAGE_MODEL_NAME = "levit_128s.fb_dist_in1k"
+# IMAGE_MODEL_NAME = "levit_256.fb_dist_in1k"
+# IMAGE_MODEL_NAME = "vit_tiny_patch16_224"
+# IMAGE_MODEL_NAME = "vit_tiny_patch16_224.augreg_in21k_ft_in1k"
+IMAGE_MODEL_NAME = "vit_small_patch32_224.augreg_in21k_ft_in1k"
+# IMAGE_MODEL_NAME = "efficientvit_m5.r224_in1k"
+
+DEFAULT_TRANSFORM = transforms.Compose(
+    [
+        transforms.ToTensor(),
+        transforms.Resize((224, 224)),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ]
+)
+
 
 class Actor(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.trunk = timm.create_model(
-            "vit_tiny_patch16_224", pretrained=True, num_classes=0
+        print(timm.list_models(pretrained=True))
+        self.trunk = timm.create_model(IMAGE_MODEL_NAME, pretrained=True, num_classes=0)
+        data_config = timm.data.resolve_data_config(model=self.trunk, verbose=True)
+        self.trunk_transforms = timm.data.create_transform(
+            **data_config,
+            is_training=True,
         )
         self.head = torch.nn.Sequential(
             *_linear_block((self.trunk.num_features * 4) + (8 * 3), 1024),
@@ -178,12 +201,22 @@ class Actor(torch.nn.Module):
         return input_array
 
     def forward(self, images, past_inputs):
+        batch_size = images.shape[0]
         assert images.shape[1:] == (4, 3, 224, 224), f"{images.shape}"
-        assert past_inputs.shape[1:] == (3, 8), f"{past_inputs.shape}"
+
         trunk_output = torch.cat(
-            [self.trunk(images[:, x, :, :, :]) for x in range(4)], dim=1
+            (
+                *[
+                    self.trunk(self.trunk_transforms(images[:, x, :, :, :]))
+                    for x in range(4)
+                ],
+                past_inputs.reshape(-1, 3 * 8),
+            ),
+            dim=1,
         )
-        trunk_output = torch.cat((trunk_output, past_inputs.reshape(-1, 3 * 8)), dim=1)
+
+        images = images.reshape(-1, 3, 224, 224)
+        assert past_inputs.shape[1:] == (3, 8), f"{past_inputs.shape}"
         outputs = self.head(trunk_output)
         return outputs
 
@@ -206,9 +239,16 @@ class Actor(torch.nn.Module):
 
 
 class Critic(torch.nn.Module):
-    def __init__(self, trunk):
+    def __init__(self, trunk, trunk_transforms):
         super().__init__()
-        self.trunk = trunk
+        # self.trunk = trunk
+        # self.trunk_transforms = trunk_transforms
+        self.trunk = timm.create_model(IMAGE_MODEL_NAME, pretrained=True, num_classes=0)
+        data_config = timm.data.resolve_data_config(model=self.trunk, verbose=True)
+        self.trunk_transforms = timm.data.create_transform(
+            **data_config,
+            is_training=True,
+        )
         self.head = torch.nn.Sequential(
             *_linear_block(
                 (self.trunk.num_features * 4) + ((8 + REWARD_VECTOR_SIZE) * 3), 1024
@@ -229,7 +269,10 @@ class Critic(torch.nn.Module):
         # )
         trunk_output = torch.cat(
             (
-                *[self.trunk(images[:, x, :, :, :]) for x in range(4)],
+                *[
+                    self.trunk(self.trunk_transforms(images[:, x, :, :, :]))
+                    for x in range(4)
+                ],
                 past_inputs.reshape(-1, 3 * 8),
                 past_rewards.reshape(-1, 3 * REWARD_VECTOR_SIZE),
             ),
