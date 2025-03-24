@@ -6,7 +6,7 @@ import torch
 from PIL import Image
 
 from nes_ai.ai.base import SELECT, START, compute_reward_map
-from nes_ai.ai.nes_dataset import NESDataset
+from nes_ai.ai.nes_dataset import DEFAULT_TRANSFORM, NESDataset
 from nes_ai.ai.rollout_data import RolloutData
 from nes_ai.ai.score_model import score
 from nes_ai.ai.timm_imitation_learning import REWARD_VECTOR_SIZE
@@ -88,15 +88,6 @@ class AiHandler:
         with torch.no_grad():
             from torchvision import transforms
 
-            DEFAULT_TRANSFORM = transforms.Compose(
-                [
-                    transforms.ToTensor(),
-                    transforms.Resize((224, 224)),
-                    transforms.Normalize(
-                        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                    ),
-                ]
-            )
             image = DEFAULT_TRANSFORM(screen_buffer_image)
             # print("Environment Image ", frame, image.mean())
             for buffer_i in range(3):

@@ -37,7 +37,7 @@ class LitPPO(pl.LightningModule):
     def __init__(self):
         super().__init__()
         self.actor = Actor()
-        self.critic = Critic(self.actor.trunk)
+        self.critic = Critic()
         self.actor_loss_fn = torch.nn.CrossEntropyLoss()
         self.reward_loss_fn = torch.nn.SmoothL1Loss()
         self.automatic_optimization = False
@@ -239,20 +239,20 @@ class ClassificationData(pl.LightningDataModule):
         train_dataset = NESDataset(
             self.data_path, train=True, imitation_learning=self.imitation_learning
         )
+        # return torch.utils.data.DataLoader(
+        #     train_dataset,
+        #     batch_size=BATCH_SIZE,
+        #     # persistent_workers=True,
+        #     num_workers=0,  # shuffle=True,
+        #     sampler=torch.utils.data.WeightedRandomSampler(
+        #         example_weights, BATCH_STEP_SIZE * 100, replacement=True
+        #     ),
+        # )
         return torch.utils.data.DataLoader(
             train_dataset,
             batch_size=BATCH_SIZE,
             # persistent_workers=True,
-            num_workers=0,  # shuffle=True,
-            sampler=torch.utils.data.WeightedRandomSampler(
-                example_weights, BATCH_STEP_SIZE * 100, replacement=True
-            ),
-        )
-        return torch.utils.data.DataLoader(
-            train_dataset,
-            batch_size=BATCH_SIZE,
-            # persistent_workers=True,
-            num_workers=0,
+            num_workers=10,
             shuffle=True,
         )
 

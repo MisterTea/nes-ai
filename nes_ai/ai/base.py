@@ -81,6 +81,8 @@ class RewardMap(BaseModel):
             retval[RewardIndex.LEFT_POS] = (
                 reward_map.left_pos - last_reward_map.left_pos
             )
+            if retval[RewardIndex.LEFT_POS] < -10:
+                retval[RewardIndex.LEFT_POS] = 0  # teleported
             retval[RewardIndex.POWERUP_LEVEL] = (
                 reward_map.powerup_level - last_reward_map.powerup_level
             )
@@ -114,25 +116,22 @@ RIGHT = 7
 IMAGE_MODEL_NAME = "vit_small_patch32_224.augreg_in21k_ft_in1k"
 # IMAGE_MODEL_NAME = "efficientvit_m5.r224_in1k"
 
-DEFAULT_TRANSFORM = transforms.Compose(
-    [
-        transforms.ToTensor(),
-        transforms.Resize((224, 224)),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]
-)
-
 
 class Actor(torch.nn.Module):
     def __init__(self):
         super().__init__()
         print(timm.list_models(pretrained=True))
         self.trunk = timm.create_model(IMAGE_MODEL_NAME, pretrained=True, num_classes=0)
-        data_config = timm.data.resolve_data_config(model=self.trunk, verbose=True)
-        self.trunk_transforms = timm.data.create_transform(
-            **data_config,
-            is_training=True,
-        )
+        # data_config = timm.data.resolve_data_config(model=self.trunk, verbose=True)
+        # self.trunk_transforms = timm.data.create_transform(
+        #     **data_config,
+        #     is_training=True,
+        # )
+        # print(self.trunk_transforms)
+        # for x in self.trunk_transforms.transforms:
+        #     print(x)
+        # for x in self.trunk_transforms:
+        #     print(x)
         self.head = torch.nn.Sequential(
             *_linear_block((self.trunk.num_features * 4) + (8 * 3), 1024),
             *_linear_block(1024, 1024),
@@ -204,12 +203,19 @@ class Actor(torch.nn.Module):
         batch_size = images.shape[0]
         assert images.shape[1:] == (4, 3, 224, 224), f"{images.shape}"
 
+        # trunk_output = torch.cat(
+        #     (
+        #         *[
+        #             self.trunk(self.trunk_transforms(images[:, x, :, :, :]))
+        #             for x in range(4)
+        #         ],
+        #         past_inputs.reshape(-1, 3 * 8),
+        #     ),
+        #     dim=1,
+        # )
         trunk_output = torch.cat(
             (
-                *[
-                    self.trunk(self.trunk_transforms(images[:, x, :, :, :]))
-                    for x in range(4)
-                ],
+                *[self.trunk(images[:, x, :, :, :]) for x in range(4)],
                 past_inputs.reshape(-1, 3 * 8),
             ),
             dim=1,
@@ -239,7 +245,7 @@ class Actor(torch.nn.Module):
 
 
 class Critic(torch.nn.Module):
-    def __init__(self, trunk, trunk_transforms):
+    def __init__(self):
         super().__init__()
         # self.trunk = trunk
         # self.trunk_transforms = trunk_transforms
@@ -264,20 +270,25 @@ class Critic(torch.nn.Module):
             3,
             REWARD_VECTOR_SIZE,
         ), f"{past_rewards.shape}"
-        # trunk_output = torch.cat(
-        #     , dim=1
-        # )
         trunk_output = torch.cat(
             (
-                *[
-                    self.trunk(self.trunk_transforms(images[:, x, :, :, :]))
-                    for x in range(4)
-                ],
+                *[self.trunk(images[:, x, :, :, :]) for x in range(4)],
                 past_inputs.reshape(-1, 3 * 8),
                 past_rewards.reshape(-1, 3 * REWARD_VECTOR_SIZE),
             ),
             dim=1,
         )
+        # trunk_output = torch.cat(
+        #     (
+        #         *[
+        #             self.trunk(self.trunk_transforms(images[:, x, :, :, :]))
+        #             for x in range(4)
+        #         ],
+        #         past_inputs.reshape(-1, 3 * 8),
+        #         past_rewards.reshape(-1, 3 * REWARD_VECTOR_SIZE),
+        #     ),
+        #     dim=1,
+        # )
         outputs = self.head(trunk_output)
         return outputs
 

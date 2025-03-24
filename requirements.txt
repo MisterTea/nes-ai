@@ -1,3 +1,4 @@
+click
 Cython
 torch
 torchvision

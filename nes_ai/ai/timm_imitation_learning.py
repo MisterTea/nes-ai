@@ -21,7 +21,7 @@ from torchvision import datasets, transforms
 
 from nes_ai.ai.base import Actor, Critic, RewardMap
 from nes_ai.ai.helpers import upscale_and_get_labels
-from nes_ai.ai.nes_dataset import NESDataset
+from nes_ai.ai.nes_dataset import DEFAULT_TRANSFORM, NESDataset
 from nes_ai.ai.rollout_data import RolloutData
 
 # avail_pretrained_models = timm.list_models(pretrained=True)
@@ -29,14 +29,6 @@ from nes_ai.ai.rollout_data import RolloutData
 
 BATCH_SIZE = 32
 REWARD_VECTOR_SIZE = 8
-
-DEFAULT_TRANSFORM = transforms.Compose(
-    [
-        transforms.ToTensor(),
-        transforms.Resize((224, 224)),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]
-)
 
 
 def l1_regularization(model):
@@ -50,7 +42,7 @@ class LitClassification(pl.LightningModule):
     def __init__(self):
         super().__init__()
         self.actor = Actor()
-        self.critic = Critic(self.actor.trunk, self.actor.trunk_transforms)
+        self.critic = Critic()
         self.actor_loss_fn = torch.nn.CrossEntropyLoss()
         self.value_loss_fn = torch.nn.SmoothL1Loss()
         self.automatic_optimization = False

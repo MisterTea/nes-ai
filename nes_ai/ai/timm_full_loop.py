@@ -1,48 +1,14 @@
-from pathlib import Path
-
-import Cython.Compiler.Options
-import pygame
-from Cython.Build import cythonize
-from setuptools import Extension, find_packages, setup
-
-from nes_ai.ai.timm_rl import train_rl
-
-Cython.Compiler.Options.annotate = True
-import numpy
-
-from nes.ai_handler import AiHandler, LearnMode
-
-extensions = [
-    Extension("cycore.*", ["nes/cycore/*.pyx"], include_dirs=[numpy.get_include()])
-]
-extensions = cythonize(
-    extensions,
-    compiler_directives={
-        "language_level": 3,
-        "profile": False,
-        "boundscheck": False,
-        "nonecheck": False,
-        "cdivision": True,
-    },
-    annotate=True,
-)
-
-
-import numpy
-
-print(numpy.get_include())
-
-import pyximport
-
-pyximport.install(setup_args={"include_dirs": numpy.get_include()}, reload_support=True)
-
 import logging
 import os
 import time
+from pathlib import Path
 
 import click
+import numpy
 
-from nes import NES, SYNC_AUDIO, SYNC_NONE, SYNC_PYGAME, SYNC_VSYNC
+from nes_ai.ai.timm_rl import train_rl
+
+print(numpy.get_include())
 
 
 def get_most_recent_file(directory):
@@ -58,8 +24,37 @@ def get_most_recent_file(directory):
     return os.path.join(directory, newest_file)
 
 
-@click.command()
-def main():
+def run_sim():
+    import Cython.Compiler.Options
+    import pygame
+    from Cython.Build import cythonize
+    from setuptools import Extension, find_packages, setup
+
+    Cython.Compiler.Options.annotate = True
+
+    extensions = [
+        Extension("cycore.*", ["nes/cycore/*.pyx"], include_dirs=[numpy.get_include()])
+    ]
+    extensions = cythonize(
+        extensions,
+        compiler_directives={
+            "language_level": 3,
+            "profile": False,
+            "boundscheck": False,
+            "nonecheck": False,
+            "cdivision": True,
+        },
+        annotate=True,
+    )
+
+    import pyximport
+
+    pyximport.install(
+        setup_args={"include_dirs": numpy.get_include()}, reload_support=True
+    )
+
+    from nes import NES, SYNC_AUDIO, SYNC_NONE, SYNC_PYGAME, SYNC_VSYNC
+    from nes.ai_handler import AiHandler, LearnMode
 
     epoch = 0
 
@@ -85,6 +80,15 @@ def main():
     pygame.display.quit()
     pygame.quit()
 
+
+@click.command()
+def main():
+    epoch = 0
+
+    run_sim()
+
+    data_path = Path(f"data/1_1_rl_{epoch}")
+    model = get_most_recent_file("timm_rl_models/")
     train_rl(data_path, model)
 
 
