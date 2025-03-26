@@ -13,6 +13,6 @@ pytorch-lightning
 pydantic
 torcheval
 tensorboard
-pyaudio
+# pyaudio
 sqlitedict
 PyOpenGL
