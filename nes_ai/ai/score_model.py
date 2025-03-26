@@ -19,6 +19,7 @@ def score(model_path: Path, images, controller_buffer, reward_history, data_fram
     global inference_model
     if inference_model is None:
         if True or "rl_model" in str(model_path):
+            print(f"LOADING MODEL PATH: {model_path}")
             inference_model = LitPPO.load_from_checkpoint(model_path)
         else:
             inference_model = LitClassification.load_from_checkpoint(model_path)
