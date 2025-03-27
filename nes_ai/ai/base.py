@@ -219,7 +219,7 @@ class Actor(torch.nn.Module):
                 past_inputs.reshape(-1, 3 * 8),
             ),
             dim=1,
-        )
+        ).detach()
 
         images = images.reshape(-1, 3, 224, 224)
         assert past_inputs.shape[1:] == (3, 8), f"{past_inputs.shape}"
@@ -277,7 +277,7 @@ class Critic(torch.nn.Module):
                 past_rewards.reshape(-1, 3 * REWARD_VECTOR_SIZE),
             ),
             dim=1,
-        )
+        ).detach()
         # trunk_output = torch.cat(
         #     (
         #         *[
