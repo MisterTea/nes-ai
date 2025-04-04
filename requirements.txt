@@ -16,3 +16,6 @@ tensorboard
 # pyaudio
 sqlitedict
 PyOpenGL
+stable-baselines3
+gymnasium[all]
+gymnasium[atari]
