@@ -50,16 +50,42 @@ cdef class NES:
         NESMappedRAM memory
         InterruptListener interrupt_listener
 
-        object controller1, controller2
-        object screen
-        object ai_handler
+        public object controller1, controller2
+        public object screen
+        public object ai_handler
 
         int screen_scale, sync_mode
         bint v_overscan, h_overscan
 
         bint use_audio
 
-    cdef int step(self, int log_cpu)
+        cdef int vblank_started
+        cdef float volume
+        cdef double fps
+        cdef double t_start
+        cdef double dt
+        cdef bint show_hud
+        cdef bint log_cpu
+        cdef bint mute
+        cdef bint audio_drop
+        cdef int frame
+        cdef int frame_start
+        cdef int cpu_cycles
+        cdef int adaptive_rate
+        cdef int buffer_surplus
+        cdef bint audio
+        cdef bint keep_going
+
+        object player
+        object pyaudio_obj
+        object clock
+
+    cpdef int step(self, int log_cpu)
     cpdef void run(self)
+
     cpdef void run_headless(self)
     cpdef object run_frame_headless(self, int run_frames=?, object controller1_state=?, object controller2_state=?)
+
+    # Stateful runs.
+    cpdef void run_init(self)
+    cpdef bint run_frame(self)
