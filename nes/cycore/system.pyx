@@ -229,12 +229,50 @@ cdef class NES:
                            stack_underflow_causes_exception=False
                            )
 
+
         # Let's get started!  Reset the cpu so we are ready to go...
         self.cpu.reset()
 
         self.ai_handler = ai_handler
 
         self.use_audio = audio
+
+        self.pyaudio_obj = None
+
+        # initialize per-frame handling
+        # cdef int self.vblank_started=False
+        # cdef float self.volume = 0.5
+        # cdef double self.fps=0.
+        # cdef double self.t_start=0.
+        # cdef double self.dt=-0.
+        # cdef bint self.show_hud=True
+        # cdef bint self.log_cpu=False
+        # cdef bint self.mute=False
+        # cdef bint self.audio_drop=False
+        # cdef int self.frame=0
+        # cdef int self.frame_start=0
+        # cdef int self.cpu_cycles=0
+        # cdef int self.adaptive_rate=0
+        # cdef int self.buffer_surplus=0
+        # cdef bint self.audio=has_audio and self.use_audio
+        # cdef bint self.keep_going = False
+        self.vblank_started=False
+        self.volume = 0.5
+        self.fps=0.
+        self.t_start=0.
+        self.dt=-0.
+        self.show_hud=True
+        self.log_cpu=False
+        self.mute=False
+        self.audio_drop=False
+        self.frame=0
+        self.frame_start=0
+        self.cpu_cycles=0
+        self.adaptive_rate=0
+        self.buffer_surplus=0
+        self.audio=has_audio and self.use_audio
+        self.keep_going = False
+
 
     def init_logging(self, log_file, log_level):
         """
@@ -271,7 +309,10 @@ cdef class NES:
         self.interrupt_listener.load(interrupt_listener)
         return state
 
-    cdef int step(self, int log_cpu):
+    def reset(self):
+        self.cpu.reset()
+
+    cpdef int step(self, int log_cpu):
         """
         The heartbeat of the system.  Run one instruction on the CPU and the corresponding amount of cycles on the
         PPU (three per CPU cycle, at least on NTSC systems).
@@ -324,6 +365,293 @@ cdef class NES:
             # any apu dmc dma pause that occurred during an oam dma pause should average 2 rather than 4 cycles
             self.interrupt_listener.dma_pause = DMC_DMA_DURING_OAM_DMA
         return vblank_started
+
+
+    cpdef void run_init(self):
+        """
+        Initialize PyGame for running.
+        """
+
+        # cdef int vblank_started=False
+        # cdef float volume = 0.5
+        # cdef double fps, t_start=0., dt=-0.
+        # cdef bint show_hud=True, log_cpu=False, mute=False, audio_drop=False
+        # cdef int frame=0, frame_start=0, cpu_cycles=0, adaptive_rate=0, buffer_surplus=0
+        cdef bint audio=has_audio and self.use_audio
+
+        if not has_pygame:
+            raise RuntimeError("Cannot run() without pygame; only headless operation is supported.")
+
+        if audio:
+            self.pyaudio_obj = pyaudio.PyAudio()
+        else:
+            warnings.warn("Audio is unavailable, probably because pyaudio is not installed.")
+
+        pygame.init()
+        clock = pygame.time.Clock()
+
+        # this has to come after pygame init for some reason, or pygame won't start :(
+        if audio:
+            self.player = self.pyaudio_obj.open(format=pyaudio.paInt16,
+                            channels=1,
+                            rate=SAMPLE_RATE,
+                            output=True,
+                            frames_per_buffer=AUDIO_CHUNK_SAMPLES,  # 400 is a half-frame at 60Hz, 48kHz sound
+                            stream_callback=self.apu.pyaudio_callback,
+                            )
+            self.player.start_stream()
+
+        t_start = time.time()
+
+        # Initialize stateful runs.
+        self.clock = pygame.time.Clock()
+
+        self.vblank_started = False
+        self.volume = 0.5
+        self.fps = 0
+        self.t_start =0.
+        self.dt = -0.
+        self.show_hud = True
+        self.log_cpu = False
+        self.mute = False
+        self.audio_drop = False
+        self.frame = 0
+        self.frame_start = 0
+        self.cpu_cycles = 0
+        self.adaptive_rate = 0
+        self.buffer_surplus = 0
+        self.audio = False
+        self.keep_going = True
+
+    cpdef bint run_frame(self):
+        # cdef int vblank_started=False
+        # cdef float volume = 0.5
+        # cdef double fps, t_start=0., dt=-0.
+        # cdef bint show_hud=True, log_cpu=False, mute=False, audio_drop=False
+        # cdef int frame=0, frame_start=0, cpu_cycles=0, adaptive_rate=0, buffer_surplus=0
+        # cdef bint audio=has_audio and self.use_audio
+        # cdef bint keep_going
+        cdef int adaptive_rate = self.adaptive_rate
+        cdef double fps = self.fps
+        cdef int frame = self.frame
+        cdef int frame_start = self.frame_start
+        cdef double t_start = self.t_start
+        cdef bint show_hud = self.show_hud
+        cdef bint log_cpu = self.log_cpu
+        cdef bint audio = has_audio and self.use_audio
+        cdef bint mute = self.mute
+
+        vblank_started=False
+        while not vblank_started:
+            vblank_started = self.step(log_cpu)
+
+        # update the controllers once per frame
+        self.controller1.update()
+        self.controller2.update()
+
+        clock = self.clock = pygame.time.Clock()
+        frame = self.frame
+        cpu_cycles = self.cpu.cycles_since_reset
+
+        if time.time() - t_start > self.STATS_CALC_PERIOD_S:
+            # calcualte the fps and adaptive audio rate (only used when non-audio sync is in use)
+            dt = time.time() - t_start
+            fps = (frame - frame_start) * 1.0 / dt
+            buffer_surplus = self.apu.buffer_remaining() - TARGET_AUDIO_BUFFER_SAMPLES
+
+            # adjust the rate based on the buffer change
+            adaptive_rate = int(SAMPLE_RATE - 0.5 * buffer_surplus / dt)
+            adaptive_rate = max(SAMPLE_RATE - MAX_RATE_DELTA, min(adaptive_rate, SAMPLE_RATE + MAX_RATE_DELTA))
+            t_start = time.time()
+            frame_start = frame
+
+        if show_hud:
+            # display information on the HUD (turn on/off with '1' key)
+            self.screen.add_text("{:.0f} fps, {}Hz, {} samples".format(fps, self.apu.get_rate(), self.apu.buffer_remaining()),
+                                (self.OSD_FPS_X, self.OSD_Y),
+                                self.OSD_TEXT_COLOR if fps > TARGET_FPS - 3 else self.OSD_WARN_COLOR)
+            if log_cpu:
+                self.screen.add_text("logging cpu", (self.OSD_NOTE_X, self.OSD_Y), self.OSD_NOTE_COLOR)
+            if mute:
+                self.screen.add_text("MUTE", (self.OSD_MUTE_X, self.OSD_Y), self.OSD_TEXT_COLOR)
+
+
+        h = 224
+        w = 240
+        sb = np.zeros((w, h), dtype=np.uint32)
+        self.ppu.copy_screen_buffer_to(
+            sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan
+        )
+        sb = (
+            sb.view(dtype=np.uint8)
+            .reshape((w, h, 4))[:, :, np.array([2, 1, 0])]
+            .swapaxes(0, 1)
+        )
+        image = Image.fromarray(sb)
+        assert image.size == (w, h)
+        image = image.resize((224, 224))
+
+        keep_going = self.ai_handler.update(frame, self.controller1, self.memory.ram, image)
+
+        if not keep_going:
+            return False
+
+        # Check for an exit
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                if audio:
+                    self.player.stop_stream()
+                    self.player.close()
+                    self.pyaudio_obj.terminate()
+                return False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_1:
+                    show_hud = not show_hud
+                if event.key == pygame.K_0:
+                    if not mute:
+                        self.apu.set_volume(0)
+                        mute = True
+                    else:
+                        self.apu.set_volume(volume)
+                        mute = False
+                if event.key == pygame.K_3:
+                    h = 240 if self.v_overscan else 224
+                    w = 256 if self.h_overscan else 240
+                    sb = np.zeros((w, h), dtype=np.uint32)
+                    self.ppu.copy_screen_buffer_to(sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan)
+                    sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
+                    image = Image.fromarray(sb)
+                    assert image.size == (w,h)
+                    image = image.resize((w*2, h*2))
+
+                    if False:
+                        import pytesseract
+
+                        print(pytesseract.get_languages(config=''))
+                        text = pytesseract.image_to_string(image)
+                        print("OCR:", text)
+                        vlm = GptVisionLanguageModel("test")
+                        text = vlm.vlm(image, prompt="<|image_1|>What words are in this image?", system_prompt="OCR this image.  Only return the words from the image with no other text.  Do not respond like a human.")
+                        print("VLM:", text)
+                        image.save("test.png")
+
+                    if False:
+                        import easyocr
+
+                        # Create an OCR reader object
+                        reader = easyocr.Reader(['en'])
+
+                        # Read text from an image
+                        result = reader.readtext('test.png')
+
+                        # Print the extracted text
+                        for detection in result:
+                            print(detection[0], detection[1])
+
+                    if False:
+                        import keras_ocr
+                        pipeline = keras_ocr.pipeline.Pipeline()
+                        images = [keras_ocr.tools.read('test.png')]
+                        prediction_groups = pipeline.recognize(images)
+                        print("Keras OCR:", prediction_groups)
+
+                if event.key == pygame.K_MINUS:
+                    volume = max(0, volume - 0.1)
+                    self.apu.set_volume(volume)
+                    self.screen.add_text("volume: " + "|" * int(10 * volume),
+                                        (self.OSD_VOL_X, self.OSD_Y),
+                                        self.OSD_TEXT_COLOR, ttl=30)
+                    mute=False
+                if event.key == pygame.K_EQUALS:
+                    volume = min(1, volume + 0.1)
+                    self.apu.set_volume(volume)
+                    self.screen.add_text("volume: " + "|" * int(10 * volume),
+                                        (self.OSD_VOL_X, self.OSD_Y),
+                                        self.OSD_TEXT_COLOR, ttl=30)
+                    mute=False
+                if event.key == pygame.K_2:
+                    log_cpu = not log_cpu
+                if event.key == pygame.K_5:
+                    print("SAVING")
+                    import pickle
+                    with open("save.pickle", "wb") as f:
+                        pickle.dump(self.save(), f)
+                    self.screen.add_text("State save",
+                                        (self.OSD_VOL_X, self.OSD_Y),
+                                        self.OSD_TEXT_COLOR, ttl=30)
+                if event.key == pygame.K_6:
+                    import pickle
+                    with open("save.pickle", "rb") as f:
+                        pickled_state = pickle.load(f)
+                        print(pickled_state)
+                        self.load(pickled_state)
+                    self.screen.add_text("State load",
+                                        (self.OSD_VOL_X, self.OSD_Y),
+                                        self.OSD_TEXT_COLOR, ttl=30)
+                if event.key == pygame.K_7:
+                    h = 240 if self.v_overscan else 224
+                    w = 256 if self.h_overscan else 240
+                    sb = np.zeros((w, h), dtype=np.uint32)
+                    self.ppu.copy_screen_buffer_to(sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan)
+                    sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
+                    image = Image.fromarray(sb)
+                    assert image.size == (w,h)
+                    image = image.resize((224,224))
+
+        # show the display (if using SYNC_VSYNC mode, this should provide a sync, which must be at 60Hz)
+        self.screen.show()
+
+        if self.sync_mode == SYNC_AUDIO:
+            # wait for the audio buffer to empty, but only if the audio is playing
+            while self.apu.buffer_remaining() > TARGET_AUDIO_BUFFER_SAMPLES and audio and self.player.is_active():
+                clock.tick(500)  # wait for about 2ms (~= 96 samples)
+        elif self.sync_mode == SYNC_VSYNC or self.sync_mode == SYNC_PYGAME:
+            # here we rely on an external sync source, but allow the audio to adapt to it
+            if frame > 2 * TARGET_FPS:  # wait a bit before doing this since startup can be slow
+                self.apu.set_rate(adaptive_rate)
+        else:
+            # no sync at all, go as fast as we can!
+            pass
+
+        if self.sync_mode == SYNC_PYGAME:
+            # if we are using pygame sync, we have to supply our own clock tick here
+            clock.tick(TARGET_FPS)
+
+        if (audio
+            and not self.player.is_active()
+            and self.apu.buffer_remaining() > TARGET_AUDIO_BUFFER_SAMPLES
+            and (frame % 10 == 0)
+            ):
+            # sometimes the audio stream stops (e.g. if it runs out of samples) and has to be restarted or else the
+            # sound will stop.  Here try to (re)start the stream if it is not running if there is audio waiting.
+            audio_drop=True
+            self.player.stop_stream()
+            self.player.close()
+            self.player = self.pyaudio_obj.open(format=pyaudio.paInt16,
+                            channels=1,
+                            rate=SAMPLE_RATE,
+                            output=True,
+                            frames_per_buffer=AUDIO_CHUNK_SAMPLES,  # 400 is a half-frame at 60Hz, 48kHz sound
+                            stream_callback=self.apu.pyaudio_callback,
+                            )
+            self.player.start_stream()
+        else:
+            audio_drop = False
+
+        frame += 1
+
+        # Update state that may change.
+        self.adaptive_rate = adaptive_rate
+        self.fps = fps
+        self.frame = frame
+        self.frame_start = frame_start
+        self.t_start = t_start
+        self.show_hud = show_hud
+        self.log_cpu = log_cpu
+        self.mute = mute
+
+        return True
 
     cpdef void run(self):
         """
