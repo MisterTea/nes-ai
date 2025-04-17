@@ -48,6 +48,7 @@ class RewardMap(BaseModel):
     world: int
     level: int
     left_pos: int
+    top_pos: int
     powerup_level: int
 
     @staticmethod
@@ -302,6 +303,9 @@ def bcdToInt(bcd_bytes):
 
 
 def compute_reward_map(last_reward_map: RewardMap | None, ram):
+
+    # From: https://datacrystal.tcrf.net/wiki/Super_Mario_Bros./RAM_map
+
     high_score_bytes = ram[0x07DD:0x07E3]
     score = bcdToInt(high_score_bytes) * 10
 
@@ -316,6 +320,17 @@ def compute_reward_map(last_reward_map: RewardMap | None, ram):
     level = ram[0x760] + sliding_down_flagpole
     powerup_level = ram[0x756]
     left_pos = (ram[0x006D] * 256) + ram[0x0086]
+
+    #  0 = above viewport
+    #  1 = within viewport
+    #  >1 = below viewport
+    vertical_screen_pos = ram[0x00B5]
+
+    # 0=top of screen, 255=bottom of screen
+    screen_pos_y = ram[0x00CE]
+
+    top_pos = vertical_screen_pos * screen_pos_y
+
     lives = ram[0x75A]
 
     reward_map = RewardMap(
@@ -326,6 +341,7 @@ def compute_reward_map(last_reward_map: RewardMap | None, ram):
         world=world,
         level=level,
         left_pos=left_pos,
+        top_pos=top_pos,
         powerup_level=powerup_level,
     )
 
