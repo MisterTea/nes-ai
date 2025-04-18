@@ -224,6 +224,8 @@ if __name__ == "__main__":
             lrnow = frac * args.learning_rate
             optimizer.param_groups[0]["lr"] = lrnow
 
+        steps_start = time.time()
+
         for step in range(0, args.num_steps):
             # print(f"STEP: {step}")
             global_step += args.num_envs
@@ -249,6 +251,10 @@ if __name__ == "__main__":
                         print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
                         writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
+
+        steps_end = time.time()
+
+        optimize_networks_start = time.time()
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -276,10 +282,15 @@ if __name__ == "__main__":
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
 
+        executed_epochs = 0
+        epochs_start = time.time()
+
         # Optimizing the policy and value network
         b_inds = np.arange(args.batch_size)
         clipfracs = []
         for epoch in range(args.update_epochs):
+            executed_epochs += 1
+
             np.random.shuffle(b_inds)
             for start in range(0, args.batch_size, args.minibatch_size):
                 end = start + args.minibatch_size
@@ -329,6 +340,20 @@ if __name__ == "__main__":
 
             if args.target_kl is not None and approx_kl > args.target_kl:
                 break
+
+        epochs_end = time.time()
+        epoch_dt = epochs_end - epochs_start
+
+        optimize_networks_end = time.time()
+
+        num_samples = executed_epochs * args.batch_size
+        per_sample_dt = epoch_dt / num_samples
+
+        steps_dt = steps_end - steps_start
+        optimize_networks_dt = optimize_networks_end - optimize_networks_start
+
+        print(f"Time steps: (num_steps={args.num_steps}): {steps_dt:.4f}")
+        print(f"Time optimize: (epochs={args.update_epochs} batch_size={args.batch_size} minibatch_size={args.minibatch_size}) per-sample: {per_sample_dt:.4f} optimize_networks: {optimize_networks_dt:.4f}")
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
