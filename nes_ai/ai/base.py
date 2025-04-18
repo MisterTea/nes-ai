@@ -26,7 +26,7 @@ from nes_ai.ai.rollout_data import RolloutData
 # print(len(avail_pretrained_models), avail_pretrained_models)
 
 BATCH_SIZE = 32
-REWARD_VECTOR_SIZE = 8
+REWARD_VECTOR_SIZE = 9
 
 
 class RewardIndex(IntEnum):
@@ -37,7 +37,8 @@ class RewardIndex(IntEnum):
     WORLD = 4
     LEVEL = 5
     LEFT_POS = 6
-    POWERUP_LEVEL = 7
+    TOP_POS = 7
+    POWERUP_LEVEL = 8
 
 
 class RewardMap(BaseModel):
@@ -52,16 +53,35 @@ class RewardMap(BaseModel):
     powerup_level: int
 
     @staticmethod
+    def combine_reward_vector_single(reward_vector) -> float:
+        expected_shape = (REWARD_VECTOR_SIZE,)
+        assert reward_vector.shape == expected_shape, f"Unexpected reward_vector.shape: {reward_vector.shape} != {expected_shape}"
+        retval = (
+            (100 * reward_vector[RewardIndex.SCORE])
+            + (1 * reward_vector[RewardIndex.TIME_LEFT])
+            + (100 * reward_vector[RewardIndex.COINS])
+            + (0 * reward_vector[RewardIndex.LIVES])
+            + (10000 * reward_vector[RewardIndex.WORLD])
+            + (10000 * reward_vector[RewardIndex.LEVEL])
+            + (1 * reward_vector[RewardIndex.LEFT_POS])
+            + (0 * reward_vector[RewardIndex.TOP_POS])
+            + (10000 * reward_vector[RewardIndex.POWERUP_LEVEL])
+        )
+        return retval
+
+    @staticmethod
     def combine_reward_vector(reward_vector):
-        assert reward_vector.shape[1] == REWARD_VECTOR_SIZE
+        expected_shape = (REWARD_VECTOR_SIZE, 1)
+        assert reward_vector.shape == expected_shape, f"Unexpected reward_vector.shape: {reward_vector.shape} != {expected_shape}"
         retval = (
             (100 * reward_vector[:, RewardIndex.SCORE])
             + (1 * reward_vector[:, RewardIndex.TIME_LEFT])
             + (100 * reward_vector[:, RewardIndex.COINS])
-            + (-0 * reward_vector[:, RewardIndex.LIVES])
+            + (0 * reward_vector[:, RewardIndex.LIVES])
             + (10000 * reward_vector[:, RewardIndex.WORLD])
             + (10000 * reward_vector[:, RewardIndex.LEVEL])
             + (1 * reward_vector[:, RewardIndex.LEFT_POS])
+            + (0 * reward_vector[:, RewardIndex.TOP_POS])
             + (10000 * reward_vector[:, RewardIndex.POWERUP_LEVEL])
         )
         assert retval.shape == (reward_vector.shape[0],)
@@ -84,6 +104,7 @@ class RewardMap(BaseModel):
             )
             if retval[RewardIndex.LEFT_POS] < -10:
                 retval[RewardIndex.LEFT_POS] = 0  # teleported
+            retval[RewardIndex.TOP_POS] = 0
             retval[RewardIndex.POWERUP_LEVEL] = (
                 reward_map.powerup_level - last_reward_map.powerup_level
             )
