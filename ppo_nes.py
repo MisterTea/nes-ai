@@ -3,8 +3,11 @@ import os
 import random
 import time
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
+import dotenv
 import gymnasium as gym
 import numpy as np
 import torch
@@ -38,6 +41,30 @@ register(
 
 @dataclass
 class Args:
+    r"""
+    Run example:
+        > WANDB_API_KEY=<key> python3 ppo_nes.py --wandb-project-name mariorl --track --checkpoint-frequency 1
+
+        ...
+        wandb: Tracking run with wandb version 0.19.9
+        wandb: Run data is saved locally in /Users/dave/rl/nes-ai/wandb/run-20250418_130130-SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+        wandb: Run `wandb offline` to turn off syncing.
+        wandb: Syncing run SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+        wandb: ⭐️ View project at https://wandb.ai/millman-none/mariorl
+        wandb: 🚀 View run at https://wandb.ai/millman-none/mariorl/runs/SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+
+    Resume example:
+        > WANDB_API_KEY=<key> WANDB_RUN_ID=SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30 WANDB_RESUME=must python3 ppo_nes.py --wandb-project-name mariorl --track --checkpoint-frequency 1
+
+        ...
+        wandb: Tracking run with wandb version 0.19.9
+        wandb: Run data is saved locally in /Users/dave/rl/nes-ai/wandb/run-20250418_133317-SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+        wandb: Run `wandb offline` to turn off syncing.
+    --> wandb: Resuming run SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+        wandb: ⭐️ View project at https://wandb.ai/millman-none/mariorl
+        wandb: 🚀 View run at https://wandb.ai/millman-none/mariorl/runs/SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+    """
+
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
     seed: int = 1
@@ -48,10 +75,12 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
+    wandb_project_name: str = "MarioRL"
     """the wandb's project name"""
-    wandb_entity: str = None
+    wandb_entity: str | None = None
     """the entity (team) of wandb's project"""
+    wandb_run_id: str | None = None
+    """the id of a wandb run to resume"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
     checkpoint_frequency: int = 100
@@ -159,12 +188,29 @@ class Agent(nn.Module):
         return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
 
 
-if __name__ == "__main__":
+def main():
+    working_dir = str(Path(__file__).parent)
+
     args = tyro.cli(Args)
+
+    # Derived args.
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+
+    date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    # NOTE: Run name should be descriptive, but not unique.
+    # In particular, we don't include the date because the date does not affect the results.
+    # Date prefixes are handled by wandb automatically.
+
+    if not args.wandb_run_id:
+        run_prefix = f"{args.env_id}__{args.exp_name}__{args.seed}"
+        run_name = f"{run_prefix}__{date_str}"
+        args.wandb_run_id = run_name
+
+    run_name = args.wandb_run_id
+
     if args.track:
         import wandb
 
@@ -173,9 +219,10 @@ if __name__ == "__main__":
             entity=args.wandb_entity,
             sync_tensorboard=True,
             config=vars(args),
-            name=run_name,
+            #name=run_name,
             monitor_gym=True,
             save_code=True,
+            #id=run_name,
         )
 
     writer = SummaryWriter(f"runs/{run_name}")
@@ -222,16 +269,22 @@ if __name__ == "__main__":
     next_obs = torch.Tensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
 
-    if args.track and wandb.run.resumed:
-        starting_iter = run.summary.get("charts/update") + 1
+    if args.track and run.resumed:
+        # Reference example (that seems out of date) from: https://docs.cleanrl.dev/advanced/resume-training/#resume-training_1
+        # Updated with example from: https://wandb.ai/lavanyashukla/save_and_restore/reports/Saving-and-Restoring-Machine-Learning-Models-with-W-B--Vmlldzo3MDQ3Mw
+
+        starting_iter = run.starting_step
+
         global_step = starting_iter * args.batch_size
-        api = wandb.Api()
-        run = api.run(f"{run.entity}/{run.project}/{run.id}")
-        model = run.file("agent.pt")
-        model.download(f"models/{args.exp_name}/")
-        agent.load_state_dict(torch.load(
-            f"models/{args.exp_name}/agent.pt", map_location=device))
+
+        model = run.restore('files/agent.ckpt')
+
+        print(f"MODEL FILE: {model.name}")
+
+        agent.load_state_dict(torch.load(model.name, map_location=device))
+
         agent.eval()
+
         print(f"resumed at update {starting_iter}")
     else:
         starting_iter = 1
@@ -399,8 +452,23 @@ if __name__ == "__main__":
             # make sure to tune `CHECKPOINT_FREQUENCY`
             # so models are not saved too frequently
             if args.checkpoint_frequency > 0 and iteration % args.checkpoint_frequency == 0:
-                torch.save(agent.state_dict(), f"{wandb.run.dir}/agent.pt")
-                wandb.save(f"{wandb.run.dir}/agent.pt", policy="now")
+
+                # NOTE: The run.dir location includes a 'files/' suffix.
+                #
+                # E.g. 'agent.cpkt' will be saved to:
+                #   /Users/dave/rl/nes-ai/wandb/run-20250418_130130-SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30/files/agent.ckpt
+                #
+                torch.save(agent.state_dict(), f"{run.dir}/agent.ckpt")
+                #wandb.save(f"{run.dir}/agent.ckpt", policy="now", base_path=working_dir)
+                wandb.save(f"{run.dir}/agent.ckpt", policy="now")
+
+                print(f"SAVED TO: {run.dir}/agent.ckpt")
+                print(f"CURRENT STEP: {run.step}")
+            break
 
     envs.close()
     writer.close()
+
+
+if __name__ == "__main__":
+    main()
