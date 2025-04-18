@@ -69,20 +69,19 @@ class SimpleAiHandler:
         #         if self.reward_map.level > 0:
         #             print("GOT NEW LEVEL")
         #             self.frames_until_exit = 300
+        if _PRINT_FRAME_INFO := False:
+            always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
+            controller_desc = self._describe_controller_vector(controller1.is_pressed)
+            new_info = f"Left pos: {self.reward_map.left_pos:<5} Reward: {self.reward_map} {reward_vector} Controller: {controller_desc}"
+            if new_info == self.prev_info:
+                # Clear out old line and display again.
+                #print("", end='\r', flush=True)
+                print(always_changing_info + new_info, end='\r', flush=True)
+            else:
+                # New info, start a new line.
+                print('\n' + always_changing_info + new_info, end='\r', flush=True)
 
-        always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
-        controller_desc = self._describe_controller_vector(controller1.is_pressed)
-        new_info = f"Left pos: {self.reward_map.left_pos:<5} Reward: {self.reward_map} {reward_vector} Controller: {controller_desc}"
-        if new_info == self.prev_info:
-            # Clear out old line and display again.
-            #print("", end='\r', flush=True)
-            print(always_changing_info + new_info, end='\r', flush=True)
-        else:
-            # New info, start a new line.
-            print('\n' + always_changing_info + new_info, end='\r', flush=True)
-
-
-        self.prev_info = new_info
+            self.prev_info = new_info
 
         if False:
             print(f"FRAME: {frame}")
