@@ -6,16 +6,30 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-from nes import NES, SYNC_AUDIO, SYNC_NONE, SYNC_PYGAME, SYNC_VSYNC
-from nes_ai.ai.base import SELECT, START, RewardMap, compute_reward_map
+from nes import NES, SYNC_PYGAME
+from nes_ai.ai.base import RewardMap, compute_reward_map
 
 NdArrayUint8 = np.ndarray[tuple[Literal[4]], np.dtype[np.uint8]]
 
 class NesAle:
+    """
+    For compatibility with EpisodicLifeEnv.
+
+    Without, we'll see errors when adding EpisodicLifeEnv:
+
+    Traceback (most recent call last):
+        ...
+        File "/Users/dave/rl/nes-ai/venv/lib/python3.11/site-packages/stable_baselines3/common/atari_wrappers.py", line 145, in reset
+        self.lives = self.env.unwrapped.ale.lives()  # type: ignore[attr-defined]
+                    ^^^^^^^^^^^^^^^^^^^^^^
+    AttributeError: 'SuperMarioEnv' object has no attribute 'ale'
+    """
+
     def __init__(self):
         pass
 
     def lives(self):
+        # TODO(millman): Hook up to SimpleAiHandler.
         return 1
 
 
@@ -48,7 +62,6 @@ def _to_controller_presses(buttons: list[str]) -> NdArrayUint8:
 
 class SimpleAiHandler:
     def __init__(self):
-        print("INIT AI HANDLER")
         self.frame_num = -1
         self.screen_buffer_image = np.zeros((3, 224, 224))
 
@@ -62,10 +75,13 @@ class SimpleAiHandler:
         print("Shutting down ai handler")
 
     def update(self, frame: int, controller1, ram, screen_buffer_image):
+
+        # Update rewards.
         self.last_reward_map = self.reward_map
         self.reward_map, self.reward_vector = compute_reward_map(
             self.last_reward_map, torch.from_numpy(ram).int()
         )
+
         # if self.frames_until_exit > 0:
         #     self.frames_until_exit -= 1
         #     if self.frames_until_exit == 0:
@@ -79,13 +95,16 @@ class SimpleAiHandler:
         #         if self.reward_map.level > 0:
         #             print("GOT NEW LEVEL")
         #             self.frames_until_exit = 300
-        if _PRINT_FRAME_INFO := True:
+
+        _PRINT_FRAME_INFO = False
+
+        # Print frame updates.
+        if _PRINT_FRAME_INFO:
             always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
             controller_desc = _describe_controller_vector(controller1.is_pressed)
             new_info = f"Left pos: {self.reward_map.left_pos:<5} Reward: {self.reward_map} {self.reward_vector} Controller: {controller_desc}"
             if new_info == self.prev_info:
                 # Clear out old line and display again.
-                #print("", end='\r', flush=True)
                 print(always_changing_info + new_info, end='\r', flush=True)
             else:
                 # New info, start a new line.
@@ -93,6 +112,7 @@ class SimpleAiHandler:
 
             self.prev_info = new_info
 
+        # TODO(millman): Debugging for resetting episode.
         if False:
             print(f"FRAME: {frame}")
             print(
@@ -110,225 +130,13 @@ class SimpleAiHandler:
         self.frame_num = frame
         self.screen_buffer_image = screen_buffer_image
 
-        # print(f"SCREEN BUFFER SHAPE: {self.screen_buffer_image.shape}, sum={self.screen_buffer_image.sum()}")
-
-        # with torch.no_grad():
-        #     # from torchvision import transforms
-
-        #     image = DEFAULT_TRANSFORM(screen_buffer_image)
-        #     # print("Environment Image ", frame, image.mean())
-        #     for buffer_i in range(3):
-        #         self.screen_buffer[buffer_i, :, :, :] = self.screen_buffer[
-        #             buffer_i + 1, :, :, :
-        #         ]
-        #     self.screen_buffer[3, :, :, :] = image[:, :, :]
-
-        #     if self.learn_mode == LearnMode.REPLAY_IMITATION:
-        #         # Replay
-        #         controller = self.rollout_data.expert_controller[str(frame)]
-        #         controller1.set_state(controller)
-        #         assert (
-        #             self.rollout_data.reward_map_history[str(frame)] == self.reward_map
-        #         ), f"{self.rollout_data.reward_map_history[str(frame)]} != {self.reward_map}"
-        #         print("REWARD VECTOR", reward_vector)
-        #         self.rollout_data.reward_vector_history[str(frame)] = reward_vector
-
-        #     if self.learn_mode == LearnMode.IMITATION_VALIDATION:
-        #         # Replay
-        #         controller = self.bootstrap_expert_data.expert_controller[str(frame)]
-        #         assert isinstance(controller, list), f"{type(controller)}"
-        #         controller1.set_state(controller)
-        #         assert (
-        #             self.bootstrap_expert_data.reward_map_history[str(frame)]
-        #             == self.reward_map
-        #         ), f"{self.bootstrap_expert_data.reward_map_history[str(frame)]} != {self.reward_map}"
-        #         print("REWARD VECTOR", reward_vector)
-        #         self.rollout_data.reward_vector_history[str(frame)] = reward_vector
-
-        #         if frame >= 200:
-        #             # Score model timm
-
-        #             print(self.screen_buffer.shape, image.shape)
-        #             reward_history = self._get_reward_history(frame)
-
-        #             action, log_prob, entropy, value = score(
-        #                 self.score_model,
-        #                 self.screen_buffer,
-        #                 self.controller_buffer,
-        #                 reward_history,
-        #                 str(frame),
-        #             )
-
-        #             if frame >= 205:  # Check against ground truth
-        #                 (
-        #                     image_stack,
-        #                     value,
-        #                     past_inputs,
-        #                     past_rewards,
-        #                     label_int,
-        #                     recorded_action_log_prob,
-        #                     advantages,
-        #                 ) = self.expert_dataset.get_frame(frame)
-        #                 assert torch.equal(
-        #                     past_inputs, self.controller_buffer
-        #                 ), f"{past_inputs} != {self.controller_buffer}"
-        #                 if not torch.equal(image_stack, self.screen_buffer):
-        #                     print(image_stack[3].mean(), self.screen_buffer[3].mean())
-        #                     assert torch.equal(
-        #                         image_stack[0], self.screen_buffer[0]
-        #                     ), f"{image_stack[0]} != {self.screen_buffer[0]}"
-        #                     assert torch.equal(
-        #                         image_stack[1], self.screen_buffer[1]
-        #                     ), f"{image_stack[1]} != {self.screen_buffer[1]}"
-        #                     assert torch.equal(
-        #                         image_stack[2], self.screen_buffer[2]
-        #                     ), f"{image_stack[2]} != {self.screen_buffer[2]}"
-        #                     assert torch.equal(
-        #                         image_stack[3], self.screen_buffer[3]
-        #                     ), f"{image_stack[3]} != {self.screen_buffer[3]}"
-
-        #                 logged_action, logged_log_prob, logged_entropy, logged_value = (
-        #                     score(
-        #                         self.score_model,
-        #                         image_stack,
-        #                         past_inputs,
-        #                         past_rewards,
-        #                         str(frame),
-        #                     )
-        #                 )
-        #                 if not torch.equal(action, logged_action):
-        #                     print(f"Actions don't match: {action} != {logged_action}")
-        #                 else:
-        #                     assert torch.equal(
-        #                         log_prob, logged_log_prob
-        #                     ), f"{log_prob} != {logged_log_prob}"
-        #                     assert torch.equal(
-        #                         entropy, logged_entropy
-        #                     ), f"{entropy} != {logged_entropy}"
-
-        #             self.rollout_data.agent_params[str(frame)] = {
-        #                 "action": action.tolist(),
-        #                 "log_prob": float(log_prob.item()),
-        #                 "entropy": float(entropy.item()),
-        #                 "value": value.tolist(),
-        #             }
-        #             controller1.update()
-        #             if not controller1.is_any_pressed():
-        #                 print(action)
-        #                 controller1.set_state(action)
-
-        #             # Overwrite with expert
-        #             expert_controller_for_frame = (
-        #                 self.bootstrap_expert_data.expert_controller_no_start_select(
-        #                     str(frame)
-        #                 )
-        #             )
-        #             if not torch.equal(
-        #                 torch.IntTensor(expert_controller_for_frame).to(
-        #                     device=action.device
-        #                 ),
-        #                 action,
-        #             ):
-        #                 print("WRONG ANSWER")
-        #                 controller1.set_state(expert_controller_for_frame)
-
-        #         else:
-        #             # Use expert for intro
-        #             controller = self.bootstrap_expert_data.expert_controller[
-        #                 str(frame)
-        #             ]
-        #             controller1.set_state(controller)
-
-        #     if self.learn_mode == LearnMode.RL:
-        #         if frame == 0:
-        #             self.rollout_data.clear()
-
-        #         if frame >= 200:
-        #             # Score model timm
-        #             reward_history = self._get_reward_history(frame)
-
-        #             action, log_prob, entropy, value = score(
-        #                 self.score_model,
-        #                 self.screen_buffer,
-        #                 self.controller_buffer,
-        #                 reward_history,
-        #                 str(frame),
-        #             )
-        #             print("LOGPROB", log_prob)
-        #             self.rollout_data.agent_params[str(frame)] = {
-        #                 "action": action.cpu().tolist(),
-        #                 "log_prob": float(log_prob.item()),
-        #                 "entropy": float(entropy.item()),
-        #                 "value": value.cpu().tolist(),
-        #                 # "screen_buffer": self.screen_buffer.cpu().tolist(),
-        #                 "controller_buffer": self.controller_buffer.cpu().tolist(),
-        #                 "reward_history": reward_history.cpu().tolist(),
-        #             }
-        #             controller1.update()
-        #             if not controller1.is_any_pressed():
-        #                 # Human isn't taking over
-        #                 controller1.set_state(action.tolist())
-
-        #         else:
-        #             # Use expert for intro
-        #             controller = self.bootstrap_expert_data.expert_controller[
-        #                 str(frame)
-        #             ]
-        #             controller1.set_state(controller)
-
-        #     if (
-        #         self.learn_mode == LearnMode.DATA_COLLECT
-        #         or self.learn_mode == LearnMode.IMITATION_VALIDATION
-        #         or self.learn_mode == LearnMode.RL
-        #     ):
-        #         if frame == 0:
-        #             print("RESETTING")
-        #             self.rollout_data.input_images.clear()
-        #             self.rollout_data.expert_controller.clear()
-        #             self.rollout_data.reward_map_history.clear()
-        #             self.rollout_data.reward_vector_history.clear()
-        #             self.rollout_data.agent_params.clear()
-
-        #         # Data Collect
-        #         controller_pressed = controller1.get_ai_state()
-        #         self.rollout_data.expert_controller[str(frame)] = controller_pressed
-        #         self.rollout_data.reward_map_history[str(frame)] = self.reward_map
-        #         self.rollout_data.reward_vector_history[str(frame)] = reward_vector
-        #         self.rollout_data.put_image(screen_buffer_image, frame)
-        #         if frame % 60 == 0:
-        #             print("SAVING")
-        #             self.rollout_data.sync()
-
-        #     for buffer_i in range(2):
-        #         self.controller_buffer[buffer_i, :] = self.controller_buffer[
-        #             buffer_i + 1, :
-        #         ]
-        #     self.controller_buffer[2, :] = torch.FloatTensor(controller1.get_ai_state())
-
         return True
 
-    # def _get_reward_history(self, frame):
-    #     reward_history = torch.zeros((3, REWARD_VECTOR_SIZE), dtype=torch.float)
-    #     for x in range(3):
-    #         reward_history[x, :] = torch.FloatTensor(
-    #             self.rollout_data.reward_vector_history[str((frame - 3) + x)]
-    #         )
-    #     return reward_history
 
-# https://gymnasium.farama.org/introduction/create_custom_env/
+# Reference: https://gymnasium.farama.org/introduction/create_custom_env/
 class SuperMarioEnv(gym.Env):
 
     def __init__(self):
-        # From: nes/peripherals.py:323:
-        #   self.is_pressed[self.A] = int(state[self.A])
-        #   self.is_pressed[self.B] = int(state[self.B])
-        #   self.is_pressed[self.SELECT] = int(state[self.SELECT])
-        #   self.is_pressed[self.START] = int(state[self.START])
-        #   self.is_pressed[self.UP] = int(state[self.UP])
-        #   self.is_pressed[self.DOWN] = int(state[self.DOWN])
-        #   self.is_pressed[self.LEFT] = int(state[self.LEFT])
-        #   self.is_pressed[self.RIGHT] = int(state[self.RIGHT])
-
         self.action_controller_presses = [
             _to_controller_presses(['a']),
             _to_controller_presses(['b']),
@@ -359,18 +167,6 @@ class SuperMarioEnv(gym.Env):
 
         self.observation_space = gym.spaces.Box(low=0, high=255, shape=(224, 224, 3), dtype=np.uint8)
 
-        # self.size = size  # The size of the square grid
-        # self.window_size = 512  # The size of the PyGame window
-
-        # # Observations are dictionaries with the agent's and the target's location.
-        # # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
-        # self.observation_space = spaces.Dict(
-        #     {
-        #         "agent": spaces.Box(0, size - 1, shape=(2,), dtype=int),
-        #         "target": spaces.Box(0, size - 1, shape=(2,), dtype=int),
-        #     }
-        # )
-
         self.ale = NesAle()
 
         # Initialize the NES Emulator.
@@ -380,26 +176,21 @@ class SuperMarioEnv(gym.Env):
             sync_mode=SYNC_PYGAME,
             opengl=True,
             audio=False,
+            verbose=False,
         )
         self.ai_handler = self.nes.ai_handler
 
     def _get_obs(self):
         # Get screen buffer.  Shape = (3, 244, 244)
         screen_buffer = np.array(self.ai_handler.screen_buffer_image)
+        assert screen_buffer.dtype == np.uint8, f"Unexpected screen_buffer.dtype: {screen_buffer.dtype} != {np.uint8}"
 
-        if False:
-            print(f"SCREEN BUFFER DTYPE: {type(screen_buffer)} dtype={screen_buffer.dtype}")
-            print(f"SCREEN BUFFER: shape={screen_buffer.shape}")
-            print(f"SCREEN BUFFER: min={screen_buffer.min()}, max={screen_buffer.max()}")
-
-        # Convert to expected input size.  Shape = (244, 244, 3)
-        # obs = (screen_buffer.T * 255).astype(np.uint8)
         obs = screen_buffer
 
-        # return np.ones((224, 224, 3), dtype=np.uint8)
         return obs
 
     def _get_info(self):
+        # TODO(millman): Put debug info here that shouldn't be used as game rewards.
         # return {
         #     "distance": np.linalg.norm(
         #         self._agent_location - self._target_location, ord=1
@@ -434,8 +225,6 @@ class SuperMarioEnv(gym.Env):
         observation = self._get_obs()
         info = self._get_info()
 
-        print(f"OBSERVATION FROM RESET: {observation.shape}")
-
         return observation, info
 
     def step(self, action_index: int):
@@ -458,8 +247,10 @@ class SuperMarioEnv(gym.Env):
             # Convert an action_index into a specific set of controller actions.
             action = np.array(self.action_controller_presses[action_index])
 
-            # Right button.
-            # action[7] = 1
+            if False:
+                # Set fixed action, for testing.
+                # Right button.
+                action[7] = 1
 
             if PRINT_CONTROLLER:
                 controller_desc = _describe_controller_vector(action)
@@ -474,24 +265,10 @@ class SuperMarioEnv(gym.Env):
         # Take a step in the emulator.
         self.nes.run_frame()
 
-        # Read off the current reward.
-
-        # Map the action (element of {0,1,2,3}) to the direction we walk in
-        # direction = self._action_to_direction[action]
-        # # We use `np.clip` to make sure we don't leave the grid bounds
-        # self._agent_location = np.clip(
-        #     self._agent_location + direction, 0, self.size - 1
-        # )
-
-        # # An environment is completed if and only if the agent has reached the target
-        # terminated = np.array_equal(self._agent_location, self._target_location)
-        # truncated = False
-        # reward = 1 if terminated else 0  # the agent is only reached at the end of the episode
-        # reward = 0
-
+        # Read off the current reward.  Convert to a single value reward for this timestep.
         reward = RewardMap.combine_reward_vector_single(self.ai_handler.reward_vector)
-        print(f"REWARD: {reward}")
 
+        # TODO(millman): set terminated/truncated based on lives and level change.
         terminated = False
         truncated = False
         observation = self._get_obs()
@@ -506,6 +283,8 @@ class SuperMarioEnv(gym.Env):
             return None
 
     def _render_frame(self):
+        # TODO(millman): All rendering is handled by pygame right now in the NES emulator; come back to this later.
+
         # if self.window is None and self.render_mode == "human":
         #     pygame.init()
         #     pygame.display.init()
