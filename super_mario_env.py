@@ -1,4 +1,3 @@
-# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_ataripy
 from typing import Literal
 from typing import Optional
 
@@ -26,11 +25,10 @@ class NesAle:
     """
 
     def __init__(self):
-        pass
+        self.lives = 0
 
     def lives(self):
-        # TODO(millman): Hook up to SimpleAiHandler.
-        return 1
+        return self.lives
 
 
 # From: nes/peripherals.py:323:
@@ -63,6 +61,10 @@ def _to_controller_presses(buttons: list[str]) -> NdArrayUint8:
 class SimpleAiHandler:
     def __init__(self):
         self.frame_num = -1
+
+        self.reset()
+
+    def reset(self):
         self.screen_buffer_image = np.zeros((3, 224, 224))
 
         self.last_reward_map = None
@@ -199,6 +201,8 @@ class SuperMarioEnv(gym.Env):
         return {}
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+        # TODO(millman): fix seed, etc.
+
         # We need the following line to seed self.np_random
         # super().reset(seed=seed)
 
@@ -212,7 +216,9 @@ class SuperMarioEnv(gym.Env):
         #         0, self.size, size=2, dtype=int
         #     )
 
-        # print(f"WHATS ON NES: {dir(self.nes)}")
+        # Reset ai handler.
+        self.ai_handler.reset()
+        self.ale.lives = self.ai_handler.reward_map.lives
 
         # Reset CPU and controller.
         self.nes.reset()
@@ -268,8 +274,10 @@ class SuperMarioEnv(gym.Env):
         # Read off the current reward.  Convert to a single value reward for this timestep.
         reward = RewardMap.combine_reward_vector_single(self.ai_handler.reward_vector)
 
+        self.ale.lives = self.ai_handler.reward_map.lives
+
         # TODO(millman): set terminated/truncated based on lives and level change.
-        terminated = False
+        terminated = self.ai_handler.reward_map.lives <= 0
         truncated = False
         observation = self._get_obs()
         info = self._get_info()

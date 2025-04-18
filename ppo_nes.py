@@ -1,10 +1,13 @@
-# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_ataripy
+#!/usr/bin/env python3
+# Adapted heavily from:
+#   https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/ppo_atari.py
+#   Docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_ataripy
+
 import os
 import random
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
@@ -22,9 +25,6 @@ from stable_baselines3.common.atari_wrappers import (  # isort:skip
     MaxAndSkipEnv,
     NoopResetEnv,
 )
-
-from nes import NES, SYNC_AUDIO, SYNC_NONE, SYNC_PYGAME, SYNC_VSYNC
-from nes_ai.ai.base import SELECT, START, compute_reward_map
 
 from super_mario_env import SuperMarioEnv
 
