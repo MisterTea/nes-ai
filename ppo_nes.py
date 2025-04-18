@@ -5,9 +5,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-import dotenv
 import gymnasium as gym
 import numpy as np
 import torch
@@ -43,7 +41,7 @@ register(
 class Args:
     r"""
     Run example:
-        > WANDB_API_KEY=<key> python3 ppo_nes.py --wandb-project-name mariorl --track --checkpoint-frequency 1
+        > WANDB_API_KEY=<key> python3 ppo_nes.py --wandb-project-name mariorl --track
 
         ...
         wandb: Tracking run with wandb version 0.19.9
@@ -54,7 +52,7 @@ class Args:
         wandb: 🚀 View run at https://wandb.ai/millman-none/mariorl/runs/SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
 
     Resume example:
-        > WANDB_API_KEY=<key> WANDB_RUN_ID=SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30 WANDB_RESUME=must python3 ppo_nes.py --wandb-project-name mariorl --track --checkpoint-frequency 1
+        > WANDB_API_KEY=<key> WANDB_RUN_ID=SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30 WANDB_RESUME=must python3 ppo_nes.py --wandb-project-name mariorl --track
 
         ...
         wandb: Tracking run with wandb version 0.19.9
@@ -63,6 +61,9 @@ class Args:
     --> wandb: Resuming run SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
         wandb: ⭐️ View project at https://wandb.ai/millman-none/mariorl
         wandb: 🚀 View run at https://wandb.ai/millman-none/mariorl/runs/SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+        ...
+    --> resumed at update 9
+        ...
     """
 
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
@@ -83,7 +84,7 @@ class Args:
     """the id of a wandb run to resume"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
-    checkpoint_frequency: int = 100
+    checkpoint_frequency: int = 10
     """create a checkpoint every N updates"""
 
     # Algorithm specific arguments
@@ -189,8 +190,6 @@ class Agent(nn.Module):
 
 
 def main():
-    working_dir = str(Path(__file__).parent)
-
     args = tyro.cli(Args)
 
     # Derived args.
@@ -222,7 +221,7 @@ def main():
             #name=run_name,
             monitor_gym=True,
             save_code=True,
-            #id=run_name,
+            id=run_name,
         )
 
     writer = SummaryWriter(f"runs/{run_name}")
@@ -261,11 +260,6 @@ def main():
     start_time = time.time()
     next_obs, _ = envs.reset(seed=args.seed)
 
-    print(f"ACTION SPACE: {envs.single_action_space}")
-    print(f"ACTION SPACE.shape: {envs.single_action_space.shape}")
-
-    print(f"NEXT OBS SHAPE: {next_obs.shape}")
-
     next_obs = torch.Tensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
 
@@ -274,23 +268,20 @@ def main():
         # Updated with example from: https://wandb.ai/lavanyashukla/save_and_restore/reports/Saving-and-Restoring-Machine-Learning-Models-with-W-B--Vmlldzo3MDQ3Mw
 
         starting_iter = run.starting_step
-
         global_step = starting_iter * args.batch_size
-
         model = run.restore('files/agent.ckpt')
-
-        print(f"MODEL FILE: {model.name}")
 
         agent.load_state_dict(torch.load(model.name, map_location=device))
 
         agent.eval()
 
-        print(f"resumed at update {starting_iter}")
+        print(f"Resumed at update {starting_iter}")
     else:
         starting_iter = 1
 
     for iteration in range(starting_iter, args.num_iterations + 1):
-        print(f"ITER: {iteration}")
+        print(f"Iter: {iteration}")
+
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
@@ -300,7 +291,6 @@ def main():
         steps_start = time.time()
 
         for step in range(0, args.num_steps):
-            # print(f"STEP: {step}")
             global_step += args.num_envs
             obs[step] = next_obs
             dones[step] = next_done
@@ -345,8 +335,6 @@ def main():
                 advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
             returns = advantages + values
 
-        print("DONE ITERATIONS")
-
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
         b_logprobs = logprobs.reshape(-1)
@@ -354,9 +342,6 @@ def main():
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
-
-
-        print(f"B_ACTIONS: {b_actions}")
 
         executed_epochs = 0
         epochs_start = time.time()
@@ -444,14 +429,14 @@ def main():
         writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
         writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
-        print("SPS:", int(global_step / (time.time() - start_time)))
+        print("Steps/sec:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
         # Checkpoint.
         if args.track:
-            # make sure to tune `CHECKPOINT_FREQUENCY`
-            # so models are not saved too frequently
             if args.checkpoint_frequency > 0 and iteration % args.checkpoint_frequency == 0:
+                print(f"Checkpoint at iter: {iteration}")
+                start_checkpoint = time.time()
 
                 # NOTE: The run.dir location includes a 'files/' suffix.
                 #
@@ -459,12 +444,9 @@ def main():
                 #   /Users/dave/rl/nes-ai/wandb/run-20250418_130130-SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30/files/agent.ckpt
                 #
                 torch.save(agent.state_dict(), f"{run.dir}/agent.ckpt")
-                #wandb.save(f"{run.dir}/agent.ckpt", policy="now", base_path=working_dir)
                 wandb.save(f"{run.dir}/agent.ckpt", policy="now")
 
-                print(f"SAVED TO: {run.dir}/agent.ckpt")
-                print(f"CURRENT STEP: {run.step}")
-            break
+                print(f"Checkpoint done: {time.time() - start_checkpoint:.4f}s")
 
     envs.close()
     writer.close()
