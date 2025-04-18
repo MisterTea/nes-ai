@@ -1,4 +1,5 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_ataripy
+from typing import Literal
 from typing import Optional
 
 import gymnasium as gym
@@ -6,8 +7,9 @@ import numpy as np
 import torch
 
 from nes import NES, SYNC_AUDIO, SYNC_NONE, SYNC_PYGAME, SYNC_VSYNC
-from nes_ai.ai.base import SELECT, START, compute_reward_map
+from nes_ai.ai.base import SELECT, START, RewardMap, compute_reward_map
 
+NdArrayUint8 = np.ndarray[tuple[Literal[4]], np.dtype[np.uint8]]
 
 class NesAle:
     def __init__(self):
@@ -17,43 +19,51 @@ class NesAle:
         return 1
 
 
+# From: nes/peripherals.py:323:
+#   self.is_pressed[self.A] = int(state[self.A])
+#   self.is_pressed[self.B] = int(state[self.B])
+#   self.is_pressed[self.SELECT] = int(state[self.SELECT])
+#   self.is_pressed[self.START] = int(state[self.START])
+#   self.is_pressed[self.UP] = int(state[self.UP])
+#   self.is_pressed[self.DOWN] = int(state[self.DOWN])
+#   self.is_pressed[self.LEFT] = int(state[self.LEFT])
+#   self.is_pressed[self.RIGHT] = int(state[self.RIGHT])
+CONTROLLER_STATE_DESC = ["A", "B", "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT"]
+
+def _describe_controller_vector(is_pressed: NdArrayUint8) -> str:
+    pressed = [
+        desc
+        for is_button_pressed, desc in zip(is_pressed, CONTROLLER_STATE_DESC)
+        if is_button_pressed
+    ]
+    return str(pressed)
+
+
+def _to_controller_presses(buttons: list[str]) -> NdArrayUint8:
+    is_pressed = np.zeros(8, dtype=np.uint8)
+    for button in buttons:
+        button_index = CONTROLLER_STATE_DESC.index(button.upper())
+        is_pressed[button_index] = 1
+    return is_pressed
+
 class SimpleAiHandler:
     def __init__(self):
         print("INIT AI HANDLER")
         self.frame_num = -1
-        self.controller1_pressed_state = np.zeros(shape=(8,), dtype=np.uint8)
         self.screen_buffer_image = np.zeros((3, 224, 224))
 
         self.last_reward_map = None
         self.reward_map = None
+        self.reward_vector = None
 
         self.prev_info = None
-
-        # From: nes/peripherals.py:323:
-        #   self.is_pressed[self.A] = int(state[self.A])
-        #   self.is_pressed[self.B] = int(state[self.B])
-        #   self.is_pressed[self.SELECT] = int(state[self.SELECT])
-        #   self.is_pressed[self.START] = int(state[self.START])
-        #   self.is_pressed[self.UP] = int(state[self.UP])
-        #   self.is_pressed[self.DOWN] = int(state[self.DOWN])
-        #   self.is_pressed[self.LEFT] = int(state[self.LEFT])
-        #   self.is_pressed[self.RIGHT] = int(state[self.RIGHT])
-        self.controller_state_desc = ["A", "B", "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT"]
-
-    def _describe_controller_vector(self, is_pressed) -> str:
-        pressed = [
-            desc
-            for is_button_pressed, desc in zip(is_pressed, self.controller_state_desc)
-            if is_button_pressed
-        ]
-        return str(pressed)
-
 
     def shutdown(self):
         print("Shutting down ai handler")
 
     def update(self, frame: int, controller1, ram, screen_buffer_image):
-        self.reward_map, reward_vector = compute_reward_map(
+        self.last_reward_map = self.reward_map
+        self.reward_map, self.reward_vector = compute_reward_map(
             self.last_reward_map, torch.from_numpy(ram).int()
         )
         # if self.frames_until_exit > 0:
@@ -69,10 +79,10 @@ class SimpleAiHandler:
         #         if self.reward_map.level > 0:
         #             print("GOT NEW LEVEL")
         #             self.frames_until_exit = 300
-        if _PRINT_FRAME_INFO := False:
+        if _PRINT_FRAME_INFO := True:
             always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
-            controller_desc = self._describe_controller_vector(controller1.is_pressed)
-            new_info = f"Left pos: {self.reward_map.left_pos:<5} Reward: {self.reward_map} {reward_vector} Controller: {controller_desc}"
+            controller_desc = _describe_controller_vector(controller1.is_pressed)
+            new_info = f"Left pos: {self.reward_map.left_pos:<5} Reward: {self.reward_map} {self.reward_vector} Controller: {controller_desc}"
             if new_info == self.prev_info:
                 # Clear out old line and display again.
                 #print("", end='\r', flush=True)
@@ -93,12 +103,11 @@ class SimpleAiHandler:
             #     print("TOO LITTLE PROGRESS, DYING")
             #     ram[0x75A] = 1
             # print("FALLING IN PIT", torch.from_numpy(ram).int()[0x0712])
-            print("REWARD", self.reward_map, reward_vector)
+            print("REWARD", self.reward_map, self.reward_vector)
 
             print("CONTROLLER", controller1.is_pressed)
 
         self.frame_num = frame
-        self.controller1_pressed_state = controller1.is_pressed
         self.screen_buffer_image = screen_buffer_image
 
         # print(f"SCREEN BUFFER SHAPE: {self.screen_buffer_image.shape}, sum={self.screen_buffer_image.sum()}")
@@ -320,8 +329,21 @@ class SuperMarioEnv(gym.Env):
         #   self.is_pressed[self.LEFT] = int(state[self.LEFT])
         #   self.is_pressed[self.RIGHT] = int(state[self.RIGHT])
 
-        self.action_space = gym.spaces.Discrete(8)
+        self.action_controller_presses = [
+            _to_controller_presses(['a']),
+            _to_controller_presses(['b']),
+            _to_controller_presses(['left']),
+            _to_controller_presses(['right']),
+            _to_controller_presses(['a', 'b']),
+            _to_controller_presses(['a', 'left']),
+            _to_controller_presses(['a', 'right']),
+            _to_controller_presses(['b', 'left']),
+            _to_controller_presses(['b', 'right']),
+            _to_controller_presses(['a', 'b', 'left']),
+            _to_controller_presses(['a', 'b', 'right']),
+        ]
 
+        self.action_space = gym.spaces.Discrete(len(self.action_controller_presses))
 
         # From: https://gymnasium.farama.org/api/spaces/fundamental/
         #
@@ -416,24 +438,43 @@ class SuperMarioEnv(gym.Env):
 
         return observation, info
 
-    def step(self, action):
-        # print("STEPPING")
+    def step(self, action_index: int):
+        PRINT_CONTROLLER = False
 
-        # Apply actions to controller.
-        action = np.zeros(8, dtype=np.uint8)
+        if PRINT_CONTROLLER:
+            controller_desc = _describe_controller_vector(self.nes.controller1.is_pressed)
+            print(f"Controller before: {controller_desc}")
 
-        # Start button.
-        action[3] = 1
+        # Read the controller from the keyboard.
+        if _USE_KEYBOARD_INPUT := True:
+            self.nes.read_controller_presses()
 
-        # Right button.
-        action[7] = 1
-        action = 7
+        # If user pressed anything, avoid apply actions.
+        if any(self.nes.controller1.is_pressed):
+            if PRINT_CONTROLLER:
+                controller_desc = _describe_controller_vector(self.nes.controller1.is_pressed)
+                print(f"Controller (user pressed): {controller_desc}")
+        else:
+            # Convert an action_index into a specific set of controller actions.
+            action = np.array(self.action_controller_presses[action_index])
+
+            # Right button.
+            # action[7] = 1
+
+            if PRINT_CONTROLLER:
+                controller_desc = _describe_controller_vector(action)
+                print(f"Controller (input action): {controller_desc}")
+
+            self.nes.controller1.set_state(action)
+
+        if PRINT_CONTROLLER:
+            controller_desc = _describe_controller_vector(self.nes.controller1.is_pressed)
+            print(f"Controller after: {controller_desc}")
 
         # Take a step in the emulator.
         self.nes.run_frame()
 
         # Read off the current reward.
-
 
         # Map the action (element of {0,1,2,3}) to the direction we walk in
         # direction = self._action_to_direction[action]
@@ -446,7 +487,11 @@ class SuperMarioEnv(gym.Env):
         # terminated = np.array_equal(self._agent_location, self._target_location)
         # truncated = False
         # reward = 1 if terminated else 0  # the agent is only reached at the end of the episode
-        reward = 0
+        # reward = 0
+
+        reward = RewardMap.combine_reward_vector_single(self.ai_handler.reward_vector)
+        print(f"REWARD: {reward}")
+
         terminated = False
         truncated = False
         observation = self._get_obs()
@@ -524,12 +569,3 @@ class SuperMarioEnv(gym.Env):
         #         np.array(pygame.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
         #     )
         pass
-
-
-from gymnasium.envs.registration import register
-
-register(
-     id="SuperMarioBros-v0",
-     entry_point=SuperMarioEnv,
-     max_episode_steps=60 * 60 * 5,
-)

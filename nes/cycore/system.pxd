@@ -89,3 +89,4 @@ cdef class NES:
     # Stateful runs.
     cpdef void run_init(self)
     cpdef bint run_frame(self)
+    cpdef void read_controller_presses(self)

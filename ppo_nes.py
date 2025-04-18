@@ -54,6 +54,8 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
+    checkpoint_frequency: int = 100
+    """create a checkpoint every N updates"""
 
     # Algorithm specific arguments
     env_id: str = "SuperMarioBros-v0"
@@ -166,7 +168,7 @@ if __name__ == "__main__":
     if args.track:
         import wandb
 
-        wandb.init(
+        run = wandb.init(
             project=args.wandb_project_name,
             entity=args.wandb_entity,
             sync_tensorboard=True,
@@ -175,6 +177,7 @@ if __name__ == "__main__":
             monitor_gym=True,
             save_code=True,
         )
+
     writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
         "hyperparameters",
@@ -211,12 +214,29 @@ if __name__ == "__main__":
     start_time = time.time()
     next_obs, _ = envs.reset(seed=args.seed)
 
+    print(f"ACTION SPACE: {envs.single_action_space}")
+    print(f"ACTION SPACE.shape: {envs.single_action_space.shape}")
+
     print(f"NEXT OBS SHAPE: {next_obs.shape}")
 
     next_obs = torch.Tensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
 
-    for iteration in range(1, args.num_iterations + 1):
+    if args.track and wandb.run.resumed:
+        starting_iter = run.summary.get("charts/update") + 1
+        global_step = starting_iter * args.batch_size
+        api = wandb.Api()
+        run = api.run(f"{run.entity}/{run.project}/{run.id}")
+        model = run.file("agent.pt")
+        model.download(f"models/{args.exp_name}/")
+        agent.load_state_dict(torch.load(
+            f"models/{args.exp_name}/agent.pt", map_location=device))
+        agent.eval()
+        print(f"resumed at update {starting_iter}")
+    else:
+        starting_iter = 1
+
+    for iteration in range(starting_iter, args.num_iterations + 1):
         print(f"ITER: {iteration}")
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
@@ -281,6 +301,9 @@ if __name__ == "__main__":
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
+
+
+        print(f"B_ACTIONS: {b_actions}")
 
         executed_epochs = 0
         epochs_start = time.time()
@@ -370,6 +393,14 @@ if __name__ == "__main__":
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+
+        # Checkpoint.
+        if args.track:
+            # make sure to tune `CHECKPOINT_FREQUENCY`
+            # so models are not saved too frequently
+            if args.checkpoint_frequency > 0 and iteration % args.checkpoint_frequency == 0:
+                torch.save(agent.state_dict(), f"{wandb.run.dir}/agent.pt")
+                wandb.save(f"{wandb.run.dir}/agent.pt", policy="now")
 
     envs.close()
     writer.close()

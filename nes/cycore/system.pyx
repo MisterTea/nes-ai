@@ -423,6 +423,12 @@ cdef class NES:
         self.audio = False
         self.keep_going = True
 
+    cpdef void read_controller_presses(self):
+        # update the controllers once per frame
+        self.controller1.update()
+        self.controller2.update()
+        pass
+
     cpdef bint run_frame(self):
         # cdef int vblank_started=False
         # cdef float volume = 0.5
@@ -446,8 +452,8 @@ cdef class NES:
             vblank_started = self.step(log_cpu)
 
         # update the controllers once per frame
-        self.controller1.update()
-        self.controller2.update()
+        # self.controller1.update()
+        # self.controller2.update()
 
         clock = self.clock = pygame.time.Clock()
         frame = self.frame
