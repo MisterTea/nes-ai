@@ -5,10 +5,12 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-from nes import NES, SYNC_PYGAME
+from PIL import Image
+from nes import NES, SYNC_NONE, SYNC_PYGAME
 from nes_ai.ai.base import RewardMap, compute_reward_map
 
-NdArrayUint8 = np.ndarray[tuple[Literal[4]], np.dtype[np.uint8]]
+NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
+NdArrayRGB8 = np.ndarray[tuple[Literal[4]], np.dtype[np.uint8]]
 
 class NesAle:
     """
@@ -25,10 +27,10 @@ class NesAle:
     """
 
     def __init__(self):
-        self.lives = 0
+        self._lives = 1
 
     def lives(self):
-        return self.lives
+        return self._lives
 
 
 # From: nes/peripherals.py:323:
@@ -58,6 +60,10 @@ def _to_controller_presses(buttons: list[str]) -> NdArrayUint8:
         is_pressed[button_index] = 1
     return is_pressed
 
+
+# Ram size shows up as 34816, which is from NES RAM (2048) + Game (32768).
+RAM_SIZE = 32768 + 2048
+
 class SimpleAiHandler:
     def __init__(self):
         self.frame_num = -1
@@ -65,18 +71,21 @@ class SimpleAiHandler:
         self.reset()
 
     def reset(self):
-        self.screen_buffer_image = np.zeros((3, 224, 224))
+        self.ram = np.zeros(RAM_SIZE, dtype=np.uint8)
+        self.screen_image = Image.fromarray(np.zeros((224, 224, 3), dtype=np.uint8))
 
         self.last_reward_map = None
-        self.reward_map = None
-        self.reward_vector = None
+        self.reward_map, self.reward_vector = compute_reward_map(None, self.ram)
 
         self.prev_info = None
 
     def shutdown(self):
         print("Shutting down ai handler")
 
-    def update(self, frame: int, controller1, ram, screen_buffer_image):
+    def update(self, frame: int, controller1, ram: NdArrayUint8, screen_image: Image):
+        assert screen_image.size == (224, 224)
+
+        self.ram = ram
 
         # Update rewards.
         self.last_reward_map = self.reward_map
@@ -98,7 +107,7 @@ class SimpleAiHandler:
         #             print("GOT NEW LEVEL")
         #             self.frames_until_exit = 300
 
-        _PRINT_FRAME_INFO = False
+        _PRINT_FRAME_INFO = True
 
         # Print frame updates.
         if _PRINT_FRAME_INFO:
@@ -130,9 +139,67 @@ class SimpleAiHandler:
             print("CONTROLLER", controller1.is_pressed)
 
         self.frame_num = frame
-        self.screen_buffer_image = screen_buffer_image
+        self.screen_image = screen_image
 
         return True
+
+
+_DEBUG_LEVEL_START = False
+
+def _debug_level_from_ram(ai_handler, desc: str):
+    if not _DEBUG_LEVEL_START:
+        return
+
+    ram = ai_handler.ram
+
+    level = ram[0x0760]
+    game_mode = ram[0x0770]
+    prelevel = ram[0x075E]
+    prelevel_timer = ram[0x07A0]
+    level_entry = ram[0x0752]
+    before_level_load = ram[0x0753]
+    level_loading = ram[0x0772]
+    print(f"{desc}: frame={ai_handler.frame_num} {level=} {game_mode=} {prelevel=} {prelevel_timer=} {level_entry=} {before_level_load=} {level_loading=}")
+
+
+def _run_until_game_started(ai_handler, nes):
+    _debug_level_from_ram(ai_handler, "RUNNING GAME START")
+
+    # Run frames until start screen.
+    # TODO(millman): Not sure why this is 34 frames?  Found by binary searching until this worked.
+    for i in range(34):
+        nes.run_frame()
+
+    _debug_level_from_ram(ai_handler, "BEFORE START PRESSED")
+
+    # Press start.
+    nes.controller1.set_state(_to_controller_presses(['start']))
+
+    # Run one frame.
+    nes.run_frame()
+
+    # Make sure "game mode" is set to "normal".
+    game_mode = ai_handler.ram[0x0770]
+    assert game_mode == 1, f"Unexpected game mode (0=demo 1=normal): {game_mode} != 1"
+
+    # Set controller back to no-op.
+    nes.controller1.set_state(_to_controller_presses([]))
+
+    _debug_level_from_ram(ai_handler, "AFTER START PRESSED")
+
+    # Wait until the level is set.
+    # The level loading byte looks like it counts from 1 (during load) to 2 (right before load) to 3 (ready).
+    level_loading = ai_handler.ram[0x0772]
+    while level_loading <= 2:
+        _debug_level_from_ram(ai_handler, "WAITING FOR LEVEL")
+        level_loading = ai_handler.ram[0x0772]
+
+        nes.run_frame()
+
+    # We're now ready to play.
+    _debug_level_from_ram(ai_handler, "READY TO PLAY")
+
+
 
 
 # Reference: https://gymnasium.farama.org/introduction/create_custom_env/
@@ -176,18 +243,22 @@ class SuperMarioEnv(gym.Env):
             "./roms/Super_mario_brothers.nes",
             SimpleAiHandler(),
             sync_mode=SYNC_PYGAME,
+            # sync_mode=SYNC_NONE,
             opengl=True,
             audio=False,
             verbose=False,
         )
         self.ai_handler = self.nes.ai_handler
 
+        # NOTE: reset() looks like it's called automatically by the gym environment, before starting.
+        # self.reset()
+
     def _get_obs(self):
         # Get screen buffer.  Shape = (3, 244, 244)
-        screen_buffer = np.array(self.ai_handler.screen_buffer_image)
-        assert screen_buffer.dtype == np.uint8, f"Unexpected screen_buffer.dtype: {screen_buffer.dtype} != {np.uint8}"
+        screen_image = np.array(self.ai_handler.screen_image)
+        assert screen_image.dtype == np.uint8, f"Unexpected screen_image.dtype: {screen_image.dtype} != {np.uint8}"
 
-        obs = screen_buffer
+        obs = screen_image
 
         return obs
 
@@ -218,18 +289,19 @@ class SuperMarioEnv(gym.Env):
 
         # Reset ai handler.
         self.ai_handler.reset()
-        self.ale.lives = self.ai_handler.reward_map.lives
 
         # Reset CPU and controller.
         self.nes.reset()
         self.nes.run_init()
 
-        # Take a single step.
-        self.nes.run_frame()
+        # Step until game started.
+        _run_until_game_started(self.ai_handler, self.nes)
 
         # Get initial values.
         observation = self._get_obs()
         info = self._get_info()
+
+        self.ale._lives = self.ai_handler.reward_map.lives
 
         return observation, info
 
@@ -244,7 +316,7 @@ class SuperMarioEnv(gym.Env):
         if _USE_KEYBOARD_INPUT := True:
             self.nes.read_controller_presses()
 
-        # If user pressed anything, avoid apply actions.
+        # If user pressed anything, avoid applying actions.
         if any(self.nes.controller1.is_pressed):
             if PRINT_CONTROLLER:
                 controller_desc = _describe_controller_vector(self.nes.controller1.is_pressed)
@@ -274,10 +346,10 @@ class SuperMarioEnv(gym.Env):
         # Read off the current reward.  Convert to a single value reward for this timestep.
         reward = RewardMap.combine_reward_vector_single(self.ai_handler.reward_vector)
 
-        self.ale.lives = self.ai_handler.reward_map.lives
+        self.ale._lives = self.ai_handler.reward_map.lives
 
         # TODO(millman): set terminated/truncated based on lives and level change.
-        terminated = self.ai_handler.reward_map.lives <= 0
+        terminated = self.ale._lives <= 0
         truncated = False
         observation = self._get_obs()
         info = self._get_info()

@@ -337,10 +337,12 @@ def compute_reward_map(last_reward_map: RewardMap | None, ram):
     sliding_down_flagpole = ram[0x001D] == 0x03
 
     coins = ram[0x75E]
+
     world = ram[0x75F]
     level = ram[0x760] + sliding_down_flagpole
+
     powerup_level = ram[0x756]
-    left_pos = (ram[0x006D] * 256) + ram[0x0086]
+    left_pos = (int(ram[0x006D]) * 256) + ram[0x0086]
 
     #  0 = above viewport
     #  1 = within viewport
