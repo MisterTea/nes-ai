@@ -27,7 +27,7 @@ from nes_ai.ai.nes_dataset import NESDataset
 # print(len(avail_pretrained_models), avail_pretrained_models)
 
 BATCH_STEP_SIZE = 32
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 REWARD_VECTOR_SIZE = 8
 CLIP_COEFFICIENT = 0.1
 ENTROPY_LOSS_SCALE = 0.01
@@ -63,7 +63,7 @@ class LitPPO(pl.LightningModule):
 
         advantages_accum = RewardMap.combine_reward_vector(advantages)
 
-        if True:  # Advantage normalization
+        if False:  # Advantage normalization
             advantages_accum = (advantages_accum - advantages_accum.mean()) / (
                 advantages_accum.std() + 1e-8
             )
@@ -137,7 +137,10 @@ class LitPPO(pl.LightningModule):
         #     print(_action_lp)
         #     print("ACTION LOG PROB MISMATCH")
         #     asdlkjasd
-        logratio = torch.clamp(action_log_prob - recorded_action_log_prob, -10, 10)
+        #
+        # logratio = torch.clamp(action_log_prob - recorded_action_log_prob, -10, 10)
+        logratio = action_log_prob - recorded_action_log_prob
+
         print("LOGRATIO", logratio)
         ratio = logratio.exp()
 
@@ -148,8 +151,8 @@ class LitPPO(pl.LightningModule):
             # clipfracs += [
             #     ((ratio - 1.0).abs() > CLIP_COEFFICIENT).float().mean().item()
             # ]
-            # print("KL INFO")
-            # print(logratio, ratio, approx_kl, old_approx_kl)
+            print("KL INFO")
+            print(logratio, ratio, approx_kl, old_approx_kl)
             self.log(
                 "approx_kl",
                 approx_kl,
@@ -161,17 +164,17 @@ class LitPPO(pl.LightningModule):
 
         # Policy loss
         ratio = ratio.unsqueeze(1)
-        pg_loss1 = -advantages_accum
+        pg_loss1 = -advantages_accum * ratio
         pg_loss2 = -advantages_accum * torch.clamp(
             ratio, 1 - CLIP_COEFFICIENT, 1 + CLIP_COEFFICIENT
         )
         pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
         # Entropy loss
-        entropy_loss = -1 * entropy.mean()
+        entropy_loss = entropy.mean()
 
         # Total actor loss
-        actor_loss = pg_loss + (ENTROPY_LOSS_SCALE * entropy_loss)
+        actor_loss = pg_loss - (ENTROPY_LOSS_SCALE * entropy_loss)
 
         self.log("actor_train_loss", actor_loss, prog_bar=True)
 
@@ -190,7 +193,7 @@ class LitPPO(pl.LightningModule):
         self.log("critic_lr", critic_sch.get_last_lr()[0], prog_bar=True)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.actor.parameters(), lr=0.0001 * BATCH_SIZE)
+        optimizer = torch.optim.AdamW(self.actor.parameters(), lr=1.0e-5 * BATCH_SIZE)
         actor_opt = {
             "optimizer": optimizer,
             "lr_scheduler": {
@@ -203,7 +206,7 @@ class LitPPO(pl.LightningModule):
                 # multiple of "trainer.check_val_every_n_epoch".
             },
         }
-        optimizer = torch.optim.AdamW(self.critic.parameters(), lr=0.00001 * BATCH_SIZE)
+        optimizer = torch.optim.AdamW(self.critic.parameters(), lr=1.0e-5 * BATCH_SIZE)
         critic_opt = {
             "optimizer": optimizer,
             "lr_scheduler": {
@@ -280,16 +283,16 @@ def train_rl(data_path: Path, checkpoint_path: Path | None = None):
         print("Loading from checkpoint", checkpoint_path)
         model = LitPPO.load_from_checkpoint(checkpoint_path)
     trainer = pl.Trainer(
-        max_epochs=1,
+        max_epochs=1000,
         accelerator="auto",
         logger=TensorBoardLogger("logs/", name="timm_rl_logs"),
         callbacks=[
             LearningRateMonitor(logging_interval="step"),
-            # EarlyStopping(
-            #     monitor="approx_kl_epoch",
-            #     divergence_threshold=0.05,
-            #     verbose=True,
-            # ),
+            EarlyStopping(
+                monitor="approx_kl_epoch",
+                divergence_threshold=0.05,
+                verbose=True,
+            ),
             ModelCheckpoint(
                 dirpath="timm_rl_models",
                 # monitor="val_loss",
