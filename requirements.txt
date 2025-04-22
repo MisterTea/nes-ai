@@ -16,3 +16,8 @@ tensorboard
 pyaudio
 sqlitedict
 PyOpenGL
+matplotlib
+pandas
+seaborn
+gymnasium
+pyinstrument
