@@ -93,20 +93,6 @@ class SimpleAiHandler:
             self.last_reward_map, torch.from_numpy(ram).int()
         )
 
-        # if self.frames_until_exit > 0:
-        #     self.frames_until_exit -= 1
-        #     if self.frames_until_exit == 0:
-        #         print("REACHED END")
-        #         return False
-        # else:
-        #     if frame > 200:
-        #         if self.reward_map.lives < 2:
-        #             print("LOST LIFE")
-        #             self.frames_until_exit = 10
-        #         if self.reward_map.level > 0:
-        #             print("GOT NEW LEVEL")
-        #             self.frames_until_exit = 300
-
         _PRINT_FRAME_INFO = True
 
         # Print frame updates.
@@ -122,21 +108,6 @@ class SimpleAiHandler:
                 print('\n' + always_changing_info + new_info, end='\r', flush=True)
 
             self.prev_info = new_info
-
-        # TODO(millman): Debugging for resetting episode.
-        if False:
-            print(f"FRAME: {frame}")
-            print(
-                "TIME LEFT", self.reward_map.time_left, "LEFT POS", self.reward_map.left_pos
-            )
-            # minimum_progress = (400 - self.reward_map.time_left) * 2
-            # if frame > 200 and self.reward_map.left_pos < minimum_progress:
-            #     print("TOO LITTLE PROGRESS, DYING")
-            #     ram[0x75A] = 1
-            # print("FALLING IN PIT", torch.from_numpy(ram).int()[0x0712])
-            print("REWARD", self.reward_map, self.reward_vector)
-
-            print("CONTROLLER", controller1.is_pressed)
 
         self.frame_num = frame
         self.screen_image = screen_image
@@ -160,6 +131,23 @@ def _debug_level_from_ram(ai_handler, desc: str):
     before_level_load = ram[0x0753]
     level_loading = ram[0x0772]
     print(f"{desc}: frame={ai_handler.frame_num} {level=} {game_mode=} {prelevel=} {prelevel_timer=} {level_entry=} {before_level_load=} {level_loading=}")
+
+
+def _run_until_level_started(ai_handler, nes):
+    # Wait until the level is set.
+    # The level loading byte looks like it counts from 1 (during load) to 2 (right before load) to 3 (ready).
+    level_loading = ai_handler.ram[0x0772]
+
+    if level_loading >= 3:
+        # We're already in a level, don't do anything.
+        return
+    else:
+        # We're waiting for a level to load.  Run until load, and then notify.
+        while level_loading <= 2:
+            _debug_level_from_ram(ai_handler, "WAITING FOR LEVEL")
+            level_loading = ai_handler.ram[0x0772]
+
+            nes.run_frame()
 
 
 def _run_until_game_started(ai_handler, nes):
@@ -187,14 +175,7 @@ def _run_until_game_started(ai_handler, nes):
 
     _debug_level_from_ram(ai_handler, "AFTER START PRESSED")
 
-    # Wait until the level is set.
-    # The level loading byte looks like it counts from 1 (during load) to 2 (right before load) to 3 (ready).
-    level_loading = ai_handler.ram[0x0772]
-    while level_loading <= 2:
-        _debug_level_from_ram(ai_handler, "WAITING FOR LEVEL")
-        level_loading = ai_handler.ram[0x0772]
-
-        nes.run_frame()
+    _run_until_level_started(ai_handler, nes)
 
     # We're now ready to play.
     _debug_level_from_ram(ai_handler, "READY TO PLAY")
@@ -242,8 +223,8 @@ class SuperMarioEnv(gym.Env):
         self.nes = NES(
             "./roms/Super_mario_brothers.nes",
             SimpleAiHandler(),
-            sync_mode=SYNC_PYGAME,
-            # sync_mode=SYNC_NONE,
+            # sync_mode=SYNC_PYGAME,
+            sync_mode=SYNC_NONE,
             opengl=True,
             audio=False,
             verbose=False,
@@ -306,6 +287,10 @@ class SuperMarioEnv(gym.Env):
         return observation, info
 
     def step(self, action_index: int):
+        # Wait for level to start.  Does nothing if we're already in a level.
+        # Necessary to handle continuing episodes after losing a life.
+        _run_until_level_started(self.ai_handler, self.nes)
+
         PRINT_CONTROLLER = False
 
         if PRINT_CONTROLLER:
