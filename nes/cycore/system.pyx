@@ -136,6 +136,7 @@ cdef class NES:
                  palette_file=None,         # supply a palette file to use; None gives default
                  headless=False,            # runs the nes in headless mode without the pygame screen being started
                  audio=True,
+                 show_hud=True,
                  ):
         """
         Build a NES and cartridge from the bits and pieces we have lying around plus some rom data!  Also do some things
@@ -261,7 +262,7 @@ cdef class NES:
         self.fps=0.
         self.t_start=0.
         self.dt=-0.
-        self.show_hud=True
+        self.show_hud=show_hud
         self.log_cpu=False
         self.mute=False
         self.audio_drop=False
@@ -411,7 +412,7 @@ cdef class NES:
         self.fps = 0
         self.t_start =0.
         self.dt = -0.
-        self.show_hud = True
+        #self.show_hud = True
         self.log_cpu = False
         self.mute = False
         self.audio_drop = False
@@ -471,7 +472,7 @@ cdef class NES:
             t_start = time.time()
             frame_start = frame
 
-        if show_hud:
+        if self.screen is not None and show_hud:
             # display information on the HUD (turn on/off with '1' key)
             self.screen.add_text("{:.0f} fps, {}Hz, {} samples".format(fps, self.apu.get_rate(), self.apu.buffer_remaining()),
                                 (self.OSD_FPS_X, self.OSD_Y),
@@ -607,7 +608,8 @@ cdef class NES:
                     # image = image.resize((224,224))
 
         # show the display (if using SYNC_VSYNC mode, this should provide a sync, which must be at 60Hz)
-        self.screen.show()
+        if self.screen is not None:
+            self.screen.show()
 
         if self.sync_mode == SYNC_AUDIO:
             # wait for the audio buffer to empty, but only if the audio is playing
