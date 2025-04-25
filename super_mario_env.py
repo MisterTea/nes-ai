@@ -7,7 +7,7 @@ import pygame
 import pygame.freetype
 import torch
 
-from PIL import Image
+from PIL import Image, ImageDraw
 from nes import NES, SYNC_NONE, SYNC_PYGAME
 from nes_ai.ai.base import RewardMap, compute_reward_map
 
@@ -328,9 +328,10 @@ class SuperMarioEnv(gym.Env):
         w = 224
         h = 224
 
-        self.screen = _OpenGlMultiScreen2()
+        # self.screen = _OpenGlMultiScreen2()
 
         self.action_controller_presses = [
+            _to_controller_presses([]),
             _to_controller_presses(['a']),
             _to_controller_presses(['b']),
             _to_controller_presses(['left']),
@@ -490,10 +491,24 @@ class SuperMarioEnv(gym.Env):
 
     def render(self):
         if self.render_mode == "rgb_array":
-            w, h = 224, 224
-            img = self.ai_handler.screen_image.resize((w*3, h*3), resample=Image.Resampling.NEAREST)
-            image_array = np.asarray(img)
-            return image_array
+            # Scale the display size.
+            w, h = SCREEN_W*3, SCREEN_H*3
+
+            screen_resized = self.ai_handler.screen_image.resize((w, h), resample=Image.Resampling.NEAREST)
+
+            # 2 Screens, 1 next to the other.
+            multiscreen = Image.new("RGB", (w*2, h))
+
+            # Draw main screen.
+            multiscreen.paste(screen_resized, (0, 0))
+
+            # Draw debug screen.
+            screen_debug = Image.new(mode="RGB", size=(w, h))
+            ImageDraw.Draw(screen_debug).circle(xy=(w/2, h/2), radius=w/4, outline='red')
+
+            multiscreen.paste(screen_debug, (w, 0))
+
+            return np.asarray(multiscreen)
 
             # return self._render_frame()
         elif self.render_mode == "human":
