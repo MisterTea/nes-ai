@@ -153,6 +153,7 @@ def make_env(env_id, idx, capture_video, run_name):
         env = gym.wrappers.GrayscaleObservation(env)
         env = gym.wrappers.FrameStackObservation(env, 4)
 
+        # TODO(millman): Should natively support rendering instead.
         env = gym.wrappers.HumanRendering(env)
 
         return env
