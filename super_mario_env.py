@@ -105,17 +105,47 @@ class SimpleAiHandler:
 
         # Print frame updates.
         if _PRINT_FRAME_INFO:
-            always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
-            controller_desc = _describe_controller_vector(controller1.is_pressed)
-            new_info = f"Left pos: {self.reward_map.left_pos:<5} Reward: {self.reward_map} {self.reward_vector} Controller: {controller_desc}"
-            if new_info == self.prev_info:
-                # Clear out old line and display again.
-                print(always_changing_info + new_info, end='\r', flush=True)
-            else:
-                # New info, start a new line.
-                print('\n' + always_changing_info + new_info, end='\r', flush=True)
+            if False:
+                always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
+                controller_desc = _describe_controller_vector(controller1.is_pressed)
+                new_info = f"Left pos: {self.reward_map.left_pos:<5} Reward: {self.reward_map} {self.reward_vector} Controller: {controller_desc}"
+                if new_info == self.prev_info:
+                    # Clear out old line and display again.
+                    print(always_changing_info + new_info, end='\r', flush=True)
+                else:
+                    # New info, start a new line.
+                    print('\n' + always_changing_info + new_info, end='\r', flush=True)
 
-            self.prev_info = new_info
+            if True:
+                # For debugging screen positions.
+
+                always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
+
+                # 0x0086	Player x position on screen
+                # 0x006D	Player horizontal position in level
+
+                # 0x00B5    Player vertical screen position
+                # 0x00CE    Player y pos on screen (multiply with value at 0x00B5 to get level y pos)
+
+                # Player horizontal position in level.
+                level_x = ram[0x006D]
+
+                # Screen X position.
+                screen_x = ram[0x0086]
+
+                # Player x pos within current screen offset.
+                screen_offset = ram[0x03AD]
+
+                new_info = f"level_x={level_x:>3} screen_x={screen_x:>3} screen_offset={screen_offset:>3}"
+
+                if True: # new_info == self.prev_info:
+                    # Clear out old line and display again.
+                    print(always_changing_info + new_info, end='\r', flush=True)
+                else:
+                    # New info, start a new line.
+                    print('\n' + always_changing_info + new_info, end='\r', flush=True)
+
+                self.prev_info = new_info
 
         self.frame_num = frame
         self.screen_image = screen_image
@@ -311,8 +341,6 @@ def _run_until_game_started(ai_handler, nes):
     _debug_level_from_ram(ai_handler, "READY TO PLAY")
 
 
-
-
 # Reference: https://gymnasium.farama.org/introduction/create_custom_env/
 class SuperMarioEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 120}
@@ -320,13 +348,11 @@ class SuperMarioEnv(gym.Env):
     def __init__(self, render_mode: str | None = None):
         #super().__init__()
 
+        # TODO(millman): Try natively supporting render mode "human"
         self.render_mode = render_mode
 
         # self.render_mode = render_mode
         print(f"RENDER MODE FROM INIT: {self.render_mode}")
-
-        w = 224
-        h = 224
 
         # self.screen = _OpenGlMultiScreen2()
 
@@ -381,6 +407,9 @@ class SuperMarioEnv(gym.Env):
 
         # NOTE: reset() looks like it's called automatically by the gym environment, before starting.
         # self.reset()
+
+        # For visualization.
+        self.second_screen_image = Image.new(mode="RGB", size=(SCREEN_W, SCREEN_H))
 
     def _get_obs(self):
         # Get screen buffer.  Shape = (3, 240, 224)
@@ -481,13 +510,15 @@ class SuperMarioEnv(gym.Env):
 
         self.ale._lives = self.ai_handler.reward_map.lives
 
-        # TODO(millman): set terminated/truncated based on lives and level change.
         terminated = self.ale._lives <= 0
         truncated = False
         observation = self._get_obs()
         info = self._get_info()
 
+        # TODO(millman): if we just died, run until the game/level start.
+
         return observation, reward, terminated, truncated, info
+
 
     def render(self):
         if self.render_mode == "rgb_array":
@@ -502,12 +533,21 @@ class SuperMarioEnv(gym.Env):
             # Draw main screen.
             multiscreen.paste(screen_resized, (0, 0))
 
+            if False:
+                values_image_np_uint8 = np.random.randint(0, 256, size=(SCREEN_H, SCREEN_W), dtype=np.uint8)
+                values_gray = Image.fromarray(values_image_np_uint8, mode='L')
+                values_rgb = values_gray.convert('RGB')
+
+                self.second_screen_image = values_rgb
+
             # Draw debug screen.
-            screen_debug = Image.new(mode="RGB", size=(w, h))
-            ImageDraw.Draw(screen_debug).circle(xy=(w/2, h/2), radius=w/4, outline='red')
+            assert self.second_screen_image.size == (SCREEN_W, SCREEN_H), f"Unexpected screen size: {self.second_screen_image.size} != {SCREEN_W, SCREEN_H}"
+            screen_debug = self.second_screen_image.resize((w, h), resample=Image.Resampling.NEAREST)
+
+            if False:
+                ImageDraw.Draw(screen_debug).circle(xy=(w/2, h/2), radius=w/4, outline='red')
 
             multiscreen.paste(screen_debug, (w, 0))
-
             return np.asarray(multiscreen)
 
             # return self._render_frame()
@@ -532,7 +572,7 @@ class SuperMarioEnv(gym.Env):
 
         if False:
         # else:
-            # Get screen buffer.  Shape = (3, 244, 244)
+            # Get screen buffer.  Shape = (3, 240, 224)
             image = np.array(self.ai_handler.screen_image)
             assert image.dtype == np.uint8, f"Unexpected screen_image.dtype: {image.dtype} != {np.uint8}"
 
