@@ -495,7 +495,7 @@ cdef class NES:
         )
         image = Image.fromarray(sb)
         assert image.size == (w, h)
-        image = image.resize((224, 224))
+        #image = image.resize((224, 224))
 
         keep_going = self.ai_handler.update(frame, self.controller1, self.memory.ram, image)
 
@@ -603,7 +603,8 @@ cdef class NES:
                     sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
                     image = Image.fromarray(sb)
                     assert image.size == (w,h)
-                    image = image.resize((224,224))
+
+                    # image = image.resize((224,224))
 
         # show the display (if using SYNC_VSYNC mode, this should provide a sync, which must be at 60Hz)
         self.screen.show()

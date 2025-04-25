@@ -61,6 +61,9 @@ def _to_controller_presses(buttons: list[str]) -> NdArrayUint8:
     return is_pressed
 
 
+SCREEN_W = 240
+SCREEN_H = 224
+
 # Ram size shows up as 34816, which is from NES RAM (2048) + Game (32768).
 RAM_SIZE = 32768 + 2048
 
@@ -72,7 +75,7 @@ class SimpleAiHandler:
 
     def reset(self):
         self.ram = np.zeros(RAM_SIZE, dtype=np.uint8)
-        self.screen_image = Image.fromarray(np.zeros((224, 224, 3), dtype=np.uint8))
+        self.screen_image = Image.fromarray(np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8))
 
         self.last_reward_map = None
         self.reward_map, self.reward_vector = compute_reward_map(None, self.ram)
@@ -83,7 +86,7 @@ class SimpleAiHandler:
         print("Shutting down ai handler")
 
     def update(self, frame: int, controller1, ram: NdArrayUint8, screen_image: Image):
-        assert screen_image.size == (224, 224)
+        assert screen_image.size == (SCREEN_W, SCREEN_H), f"Unexpected screen size: {screen_image.size} != {(SCREEN_W, SCREEN_H)}"
 
         self.ram = ram
 
@@ -215,7 +218,7 @@ class SuperMarioEnv(gym.Env):
         # From: nes/ai_handler.py:34
         # self.screen_buffer = torch.zeros((4, 3, 224, 224), dtype=torch.float)
 
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(224, 224, 3), dtype=np.uint8)
+        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8)
 
         self.ale = NesAle()
 
@@ -235,7 +238,7 @@ class SuperMarioEnv(gym.Env):
         # self.reset()
 
     def _get_obs(self):
-        # Get screen buffer.  Shape = (3, 244, 244)
+        # Get screen buffer.  Shape = (3, 240, 224)
         screen_image = np.array(self.ai_handler.screen_image)
         assert screen_image.dtype == np.uint8, f"Unexpected screen_image.dtype: {screen_image.dtype} != {np.uint8}"
 
