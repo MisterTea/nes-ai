@@ -110,6 +110,8 @@ class Screen(ScreenBase):
             pygame.font.get_default_font(), 12 * self.scale
         )
 
+        print("INIT Screen")
+
     def write_at(self, x, y, color):
         # only used in py_compatibility_mode
         self.buffer_surf.set_at((x, y), color)
@@ -187,6 +189,8 @@ class ScreenGL(ScreenBase):
         self.font = pygame.freetype.SysFont(pygame.font.get_default_font(), 12)
         self._text_buffer = []
 
+        print("INIT ScreenGL")
+
     def opengl_init(self):
         """
         Set up the OpenGL boilerplate to get going
@@ -262,6 +266,7 @@ class ScreenGL(ScreenBase):
             self.font.render_to(surf, position, text, color)
 
     def show(self):
+        raise RuntimeError("STOP")
         self.ppu.copy_screen_buffer_to(self.buffer_sa)
         self._render_text(self.buffer_surf)
         self.show_gl()

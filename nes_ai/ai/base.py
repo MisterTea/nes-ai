@@ -66,7 +66,12 @@ class RewardMap(BaseModel):
             + (1 * reward_vector[RewardIndex.LEFT_POS])
             + (0 * reward_vector[RewardIndex.TOP_POS])
             + (10000 * reward_vector[RewardIndex.POWERUP_LEVEL])
-        )
+        ).item()
+
+        if type(retval) is not float:
+            print(f"Unexpected reward retval: {type(retval)} != float, {retval=}")
+
+        assert type(retval) is float, f"Unexpected reward retval: {type(retval)} != float"
         return retval
 
     @staticmethod

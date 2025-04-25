@@ -138,7 +138,10 @@ def make_env(env_id, idx, capture_video, run_name):
             env = gym.make(env_id, render_mode="rgb_array")
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
-            env = gym.make(env_id)
+            env = gym.make(env_id, render_mode="rgb_array")
+
+        print(f"RENDER MODE: {env.render_mode}")
+
         env = gym.wrappers.RecordEpisodeStatistics(env)
         #env = NoopResetEnv(env, noop_max=30)
         env = MaxAndSkipEnv(env, skip=4)
@@ -149,6 +152,9 @@ def make_env(env_id, idx, capture_video, run_name):
         env = gym.wrappers.ResizeObservation(env, (84, 84))
         env = gym.wrappers.GrayscaleObservation(env)
         env = gym.wrappers.FrameStackObservation(env, 4)
+
+        env = gym.wrappers.HumanRendering(env)
+
         return env
 
     return thunk
@@ -294,6 +300,9 @@ def main():
             global_step += args.num_envs
             obs[step] = next_obs
             dones[step] = next_done
+
+            # DISPLAY
+            #envs.render()
 
             # ALGO LOGIC: action logic
             with torch.no_grad():

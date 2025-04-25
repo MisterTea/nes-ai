@@ -3,6 +3,8 @@ from typing import Optional
 
 import gymnasium as gym
 import numpy as np
+import pygame
+import pygame.freetype
 import torch
 
 from PIL import Image
@@ -64,8 +66,8 @@ def _to_controller_presses(buttons: list[str]) -> NdArrayUint8:
 SCREEN_W = 240
 SCREEN_H = 224
 
-# Ram size shows up as 34816, which is from NES RAM (2048) + Game (32768).
-RAM_SIZE = 32768 + 2048
+# Ram size shows up as 2048, but the max value in the RAM map is 34816, which is from NES RAM (2048) + Game (32768).
+RAM_SIZE = 2048
 
 class SimpleAiHandler:
     def __init__(self):
@@ -87,6 +89,9 @@ class SimpleAiHandler:
 
     def update(self, frame: int, controller1, ram: NdArrayUint8, screen_image: Image):
         assert screen_image.size == (SCREEN_W, SCREEN_H), f"Unexpected screen size: {screen_image.size} != {(SCREEN_W, SCREEN_H)}"
+
+        if self.ram.shape != ram.shape:
+            print(f"Unexpected ram size: {self.ram.shape} != {ram.shape}")
 
         self.ram = ram
 
@@ -116,6 +121,127 @@ class SimpleAiHandler:
         self.screen_image = screen_image
 
         return True
+
+
+from OpenGL import GL
+
+class _OpenGlMultiScreen2:
+    """
+    PyGame / OpenGL based screen.
+    Keep *all* OpenGL-specific stuff in here
+    Keep PyGame-specific stuff in here (don't want PyGame specific stuff all over the rest of the code)
+    """
+
+    def __init__(
+        self,
+        scale=3,
+        vsync=False,
+    ):
+        self.width = 224
+        self.height = 224
+        self.scale = scale
+
+        # screens and buffers
+        self.buffer_surf = pygame.Surface((self.width, self.height))
+        self.buffer_sa = pygame.surfarray.pixels2d(self.buffer_surf)
+        self.screen = pygame.display.set_mode(
+            (self.width * scale, self.height * scale),
+            flags=pygame.DOUBLEBUF | pygame.OPENGL,
+            vsync=vsync,
+        )
+
+        self.arr = bytearray([0] * (self.width * self.height * 3))
+        self.gltex = None  # the texture that we will use for the screen
+        self.opengl_init()
+
+        # font for writing to HUD
+        pygame.freetype.init()
+        self.font = pygame.freetype.SysFont(pygame.font.get_default_font(), 12)
+        self._text_buffer = []
+
+    def opengl_init(self):
+        """
+        Set up the OpenGL boilerplate to get going
+        """
+        self.gltex = GL.glGenTextures(1)
+        GL.glViewport(0, 0, self.width * self.scale, self.height * self.scale)
+        GL.glDepthRange(0, 1)
+        GL.glMatrixMode(GL.GL_PROJECTION)
+        GL.glMatrixMode(GL.GL_MODELVIEW)
+        GL.glLoadIdentity()
+        GL.glShadeModel(GL.GL_SMOOTH)
+        GL.glClearColor(0.0, 0.0, 0.0, 0.0)
+        GL.glClearDepth(1.0)
+        GL.glDisable(GL.GL_DEPTH_TEST)
+        GL.glDisable(GL.GL_LIGHTING)
+        GL.glDepthFunc(GL.GL_LEQUAL)
+        GL.glHint(GL.GL_PERSPECTIVE_CORRECTION_HINT, GL.GL_NICEST)
+        GL.glEnable(GL.GL_BLEND)
+
+    def show_gl(self):
+        """
+        Show the screen by copying the buffer to an OpenGL texture and displaying a rectangle with that texture
+        :return:
+        """
+        # prepare to render the texture-mapped rectangle
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glLoadIdentity()
+        GL.glDisable(GL.GL_LIGHTING)
+        GL.glEnable(GL.GL_TEXTURE_2D)
+
+        # draw texture openGL Texture
+        self.surface_to_texture(self.buffer_surf)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self.gltex)
+        GL.glBegin(GL.GL_QUADS)
+        GL.glTexCoord2f(0, 0)
+        GL.glVertex2f(-1, 1)
+        GL.glTexCoord2f(0, 1)
+        GL.glVertex2f(-1, -1)
+        GL.glTexCoord2f(1, 1)
+        GL.glVertex2f(1, -1)
+        GL.glTexCoord2f(1, 0)
+        GL.glVertex2f(1, 1)
+        GL.glEnd()
+
+    def surface_to_texture(self, pygame_surface):
+        """
+        Copy a PyGame surface to an OpenGL texture.  This came from a StackOverflow answer that I sadly can't find now.
+        There is probably a faster way to do this, but this works for now
+        """
+        rgb_surface = pygame.image.tostring(pygame_surface, "RGB")
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self.gltex)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP)
+        surface_rect = pygame_surface.get_rect()
+        GL.glTexImage2D(
+            GL.GL_TEXTURE_2D,
+            0,
+            GL.GL_RGB,
+            surface_rect.width,
+            surface_rect.height,
+            0,
+            GL.GL_RGB,
+            GL.GL_UNSIGNED_BYTE,
+            rgb_surface,
+        )
+        GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+
+    def _render_text(self, surf):
+        for text, position, color, _ in self._text_buffer:
+            self.font.render_to(surf, position, text, color)
+
+    def show(self):
+        # self.ppu.copy_screen_buffer_to(self.buffer_sa)
+        # self._render_text(self.buffer_surf)
+        self.show_gl()
+        pygame.display.flip()
+        #self.update_text()
+
+    def clear(self, color=(0, 0, 0)):
+        self.buffer_surf.fill(color)
 
 
 _DEBUG_LEVEL_START = False
@@ -158,7 +284,8 @@ def _run_until_game_started(ai_handler, nes):
 
     # Run frames until start screen.
     # TODO(millman): Not sure why this is 34 frames?  Found by binary searching until this worked.
-    for i in range(34):
+    # for i in range(34):
+    for i in range(50):
         nes.run_frame()
 
     _debug_level_from_ram(ai_handler, "BEFORE START PRESSED")
@@ -188,8 +315,21 @@ def _run_until_game_started(ai_handler, nes):
 
 # Reference: https://gymnasium.farama.org/introduction/create_custom_env/
 class SuperMarioEnv(gym.Env):
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 120}
 
-    def __init__(self):
+    def __init__(self, render_mode: str | None = None):
+        #super().__init__()
+
+        self.render_mode = render_mode
+
+        # self.render_mode = render_mode
+        print(f"RENDER MODE FROM INIT: {self.render_mode}")
+
+        w = 224
+        h = 224
+
+        self.screen = _OpenGlMultiScreen2()
+
         self.action_controller_presses = [
             _to_controller_presses(['a']),
             _to_controller_presses(['b']),
@@ -218,7 +358,7 @@ class SuperMarioEnv(gym.Env):
         # From: nes/ai_handler.py:34
         # self.screen_buffer = torch.zeros((4, 3, 224, 224), dtype=torch.float)
 
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8)
+        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
 
         self.ale = NesAle()
 
@@ -231,6 +371,10 @@ class SuperMarioEnv(gym.Env):
             opengl=True,
             audio=False,
             verbose=False,
+
+            # TOOD(millman): Testing out using screen from here.
+            headless=True,
+            show_hud=False,
         )
         self.ai_handler = self.nes.ai_handler
 
@@ -346,12 +490,57 @@ class SuperMarioEnv(gym.Env):
 
     def render(self):
         if self.render_mode == "rgb_array":
+            w, h = 224, 224
+            img = self.ai_handler.screen_image.resize((w*3, h*3), resample=Image.Resampling.NEAREST)
+            image_array = np.asarray(img)
+            return image_array
+
+            # return self._render_frame()
+        elif self.render_mode == "human":
             return self._render_frame()
         else:
             return None
 
     def _render_frame(self):
+        # raise RuntimeError("STOP")
         # TODO(millman): All rendering is handled by pygame right now in the NES emulator; come back to this later.
+
+        w = 224
+        h = 224
+
+        # if self.window is None:
+        #     self.window = pygame.display.set_mode((w, h), 0, 32)
+
+        if False:
+            canvas = self.screen.buffer_surf
+            canvas.fill((128, 0, 0))
+
+        if False:
+        # else:
+            # Get screen buffer.  Shape = (3, 244, 244)
+            image = np.array(self.ai_handler.screen_image)
+            assert image.dtype == np.uint8, f"Unexpected screen_image.dtype: {image.dtype} != {np.uint8}"
+
+            # mode = image.mode
+            mode = "RGB"
+            size = image.size
+            data = image.tobytes()
+
+            # Create a Pygame surface from string data
+            pygame_image = pygame.image.fromstring(data, (w, h), mode)
+
+            #self.screen.buffer_sa.blit(pygame_image)
+            # pygame_image.blit(self.screen.buffer_surf, (0,0))
+
+            self.screen.buffer_surf.blit(pygame_image, (0,0))
+
+        # The following line copies our drawings from `canvas` to the visible window
+        # self.window.blit(canvas, canvas.get_rect())
+        # pygame.event.pump()
+        # pygame.display.update()
+        # self.screen.show()
+
+
 
         # if self.window is None and self.render_mode == "human":
         #     pygame.init()
