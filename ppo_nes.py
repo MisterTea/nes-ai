@@ -153,8 +153,8 @@ def make_env(env_id, idx, capture_video, run_name):
         # if "FIRE" in env.unwrapped.get_action_meanings():
         #     env = FireResetEnv(env)
         env = ClipRewardEnv(env)
-        env = gym.wrappers.ResizeObservation(env, (84, 84))
         env = gym.wrappers.GrayscaleObservation(env)
+        env = gym.wrappers.ResizeObservation(env, (84, 84))
         env = gym.wrappers.FrameStackObservation(env, 4)
 
         # TODO(millman): Should natively support rendering instead.
@@ -274,7 +274,7 @@ def _set_mario_pos_in_ram(ram: NdArrayUint8, x: int, y: int, xvel: int, yvel: in
     ram[0x0433] = 0
 
 
-def _get_value_at_offset(ram: NdArrayUint8, envs: Any, device: str, agent: Any, x: int, y: int, xvel: int, yvel: int) -> float:
+def _get_value_at_offset(ram: NdArrayUint8, envs: Any, device: str, agent: Any, x: int, y: int, xvel: int, yvel: int) -> tuple[float, Any]:
     # Put Mario into position and render.
     #   1. Set RAM.
     #   2. Step.
@@ -308,7 +308,7 @@ def _get_value_at_offset(ram: NdArrayUint8, envs: Any, device: str, agent: Any, 
 
     value_single = value[0][0]
 
-    return value_single
+    return value_single, next_obs
 
 
 def _render_mario_pos_value_sweep(envs: Any, device: str, agent: Any):
@@ -326,7 +326,7 @@ def _render_mario_pos_value_sweep(envs: Any, device: str, agent: Any):
 
     for j, y in enumerate(y_steps):
         for i, x in enumerate(x_steps):
-            value = _get_value_at_offset(ram=ram, envs=envs, device=device, agent=agent, x=x, y=y, xvel=0, yvel=0)
+            value, obs = _get_value_at_offset(ram=ram, envs=envs, device=device, agent=agent, x=x, y=y, xvel=0, yvel=0)
             values_grid[j][i] = value
 
     # Normalize values to 0-255.
@@ -336,18 +336,32 @@ def _render_mario_pos_value_sweep(envs: Any, device: str, agent: Any):
 
     # Convert values to grayscale image.
     if _TEST_RANDOM_IMAGE := False:
-        values_image_np_uint8 = np.random.randint(0, 256, size=(h, w), dtype=np.uint8)
+        #values_image_np_uint8 = np.random.randint(0, 256, size=(h, w), dtype=np.uint8)
+        values_image_np_uint8 = np.random.randint(200, 256, size=(h, w), dtype=np.uint8)
     else:
         values_image_np_uint8 = (values_normalized * 255).astype(np.uint8)
 
     values_gray = Image.fromarray(values_image_np_uint8, mode='L').resize((w, h), resample=Image.Resampling.NEAREST)
 
     # Convert to RGB.
-    values_rgb = values_gray.convert('RGB')
-    assert values_rgb.size == (w, h), f"Unexpected values_rgb.size: {values_rgb.size} != {(w,h)}"
+    values_rgba = values_gray.convert('RGBA')
+    assert values_rgba.size == (w, h), f"Unexpected values_rgba.size: {values_rgba.size} != {(w,h)}"
+
+    # Create an image of the regular screen, with high alpha.
+    if False:
+        obs_np = obs[-1][-1].to(torch.uint8).numpy()
+        obs_grayscale = Image.fromarray(obs_np, mode='L').resize((w, h), resample=Image.Resampling.NEAREST)
+        obs_rgba = obs_grayscale.convert('RGBA')
+        obs_rgba.putalpha(int(0.25 * 256))
+    else:
+        obs_rgba = env.ai_handler.screen_image.convert('RGBA')
+        obs_rgba.putalpha(int(0.15 * 256))
+
+    # Paste the current observation onto the image.  Take the mask from the alpha values.
+    values_rgba.paste(obs_rgba, (0, 0), mask=obs_rgba)
 
     # Set screen values.
-    env.second_screen_image = values_rgb
+    env.second_screen_image = values_rgba
 
 
 def main():
@@ -457,7 +471,11 @@ def main():
             dones[step] = next_done
 
             # DISPLAY
-            #envs.render()
+            if True:
+                # TODO(millman): THERES A BUG IN THE GRAYSCALE???
+                obs_img = Image.fromarray(next_obs[0][0].cpu().numpy(), 'L').resize((240, 224)).convert('RGB')
+
+                # envs.envs[0].unwrapped.second_screen_image = obs_img
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
@@ -470,7 +488,31 @@ def main():
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
-            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
+
+            orig_obs = next_obs
+
+            # NOTE: Silent conversion to float32 for Tensor.
+            next_obs = torch.Tensor(next_obs).to(device)
+            next_done = torch.Tensor(next_done).to(device)
+
+            if False:
+                env = envs.envs[0].unwrapped
+
+                # NOTE: There was a silent conversion from uint8 observations to float.  Change it back to uint8 for display.
+                assert orig_obs.dtype == np.uint8
+                obs_cpu = next_obs.to(torch.uint8).numpy()
+
+                if False:
+                    assert (orig_obs == obs_cpu).all(), f"mismatch cpu:\n{orig_obs=}\n{obs_cpu}"
+                    assert (orig_obs.shape == obs_cpu.shape), f"mismatch shape:\n{orig_obs.shape=}\n{obs_cpu.shape=}"
+                    assert (orig_obs.dtype == obs_cpu.dtype), f"mismatch dtype:\n{orig_obs.dtype=}\n{obs_cpu.dtype=}"
+
+                obs_single = obs_cpu[-1][-1]
+
+                second_screen_image = Image.fromarray(obs_single, 'L').resize((240, 224), Image.Resampling.NEAREST).convert('RGB')
+
+                # env.second_screen_image=<PIL.Image.Image image mode=RGB size=240x224 at 0x16BF48710>
+                env.second_screen_image = second_screen_image
 
             if "final_info" in infos:
                 for info in infos["final_info"]:
@@ -614,7 +656,7 @@ def main():
                 print(f"Checkpoint done: {time.time() - start_checkpoint:.4f}s")
 
         # Show value sweep.
-        if iteration % 50 == 0:
+        if iteration % 5 == 0:
             _render_mario_pos_value_sweep(envs=envs, device=device, agent=agent)
 
     envs.close()
