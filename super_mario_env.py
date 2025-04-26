@@ -184,127 +184,6 @@ class SimpleAiHandler:
         return True
 
 
-from OpenGL import GL
-
-class _OpenGlMultiScreen2:
-    """
-    PyGame / OpenGL based screen.
-    Keep *all* OpenGL-specific stuff in here
-    Keep PyGame-specific stuff in here (don't want PyGame specific stuff all over the rest of the code)
-    """
-
-    def __init__(
-        self,
-        scale=3,
-        vsync=False,
-    ):
-        self.width = 224
-        self.height = 224
-        self.scale = scale
-
-        # screens and buffers
-        self.buffer_surf = pygame.Surface((self.width, self.height))
-        self.buffer_sa = pygame.surfarray.pixels2d(self.buffer_surf)
-        self.screen = pygame.display.set_mode(
-            (self.width * scale, self.height * scale),
-            flags=pygame.DOUBLEBUF | pygame.OPENGL,
-            vsync=vsync,
-        )
-
-        self.arr = bytearray([0] * (self.width * self.height * 3))
-        self.gltex = None  # the texture that we will use for the screen
-        self.opengl_init()
-
-        # font for writing to HUD
-        pygame.freetype.init()
-        self.font = pygame.freetype.SysFont(pygame.font.get_default_font(), 12)
-        self._text_buffer = []
-
-    def opengl_init(self):
-        """
-        Set up the OpenGL boilerplate to get going
-        """
-        self.gltex = GL.glGenTextures(1)
-        GL.glViewport(0, 0, self.width * self.scale, self.height * self.scale)
-        GL.glDepthRange(0, 1)
-        GL.glMatrixMode(GL.GL_PROJECTION)
-        GL.glMatrixMode(GL.GL_MODELVIEW)
-        GL.glLoadIdentity()
-        GL.glShadeModel(GL.GL_SMOOTH)
-        GL.glClearColor(0.0, 0.0, 0.0, 0.0)
-        GL.glClearDepth(1.0)
-        GL.glDisable(GL.GL_DEPTH_TEST)
-        GL.glDisable(GL.GL_LIGHTING)
-        GL.glDepthFunc(GL.GL_LEQUAL)
-        GL.glHint(GL.GL_PERSPECTIVE_CORRECTION_HINT, GL.GL_NICEST)
-        GL.glEnable(GL.GL_BLEND)
-
-    def show_gl(self):
-        """
-        Show the screen by copying the buffer to an OpenGL texture and displaying a rectangle with that texture
-        :return:
-        """
-        # prepare to render the texture-mapped rectangle
-        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-        GL.glLoadIdentity()
-        GL.glDisable(GL.GL_LIGHTING)
-        GL.glEnable(GL.GL_TEXTURE_2D)
-
-        # draw texture openGL Texture
-        self.surface_to_texture(self.buffer_surf)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, self.gltex)
-        GL.glBegin(GL.GL_QUADS)
-        GL.glTexCoord2f(0, 0)
-        GL.glVertex2f(-1, 1)
-        GL.glTexCoord2f(0, 1)
-        GL.glVertex2f(-1, -1)
-        GL.glTexCoord2f(1, 1)
-        GL.glVertex2f(1, -1)
-        GL.glTexCoord2f(1, 0)
-        GL.glVertex2f(1, 1)
-        GL.glEnd()
-
-    def surface_to_texture(self, pygame_surface):
-        """
-        Copy a PyGame surface to an OpenGL texture.  This came from a StackOverflow answer that I sadly can't find now.
-        There is probably a faster way to do this, but this works for now
-        """
-        rgb_surface = pygame.image.tostring(pygame_surface, "RGB")
-        GL.glBindTexture(GL.GL_TEXTURE_2D, self.gltex)
-        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST)
-        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST)
-        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP)
-        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP)
-        surface_rect = pygame_surface.get_rect()
-        GL.glTexImage2D(
-            GL.GL_TEXTURE_2D,
-            0,
-            GL.GL_RGB,
-            surface_rect.width,
-            surface_rect.height,
-            0,
-            GL.GL_RGB,
-            GL.GL_UNSIGNED_BYTE,
-            rgb_surface,
-        )
-        GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
-
-    def _render_text(self, surf):
-        for text, position, color, _ in self._text_buffer:
-            self.font.render_to(surf, position, text, color)
-
-    def show(self):
-        # self.ppu.copy_screen_buffer_to(self.buffer_sa)
-        # self._render_text(self.buffer_surf)
-        self.show_gl()
-        pygame.display.flip()
-        #self.update_text()
-
-    def clear(self, color=(0, 0, 0)):
-        self.buffer_surf.fill(color)
-
-
 _DEBUG_LEVEL_START = False
 
 def _debug_level_from_ram(ai_handler, desc: str):
@@ -400,16 +279,16 @@ def _run_until_game_started(ai_handler, nes):
 class SuperMarioEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 120}
 
-    def __init__(self, render_mode: str | None = None):
-        #super().__init__()
-
-        # TODO(millman): Try natively supporting render mode "human"
+    def __init__(self, render_mode: str | None = None, render_fps: int | None = None):
         self.render_mode = render_mode
+        self.render_fps = render_fps
 
-        # self.render_mode = render_mode
-        print(f"RENDER MODE FROM INIT: {self.render_mode}")
+        # Screen setup.  2 Screens, 1 next to the other.
+        self.screen_size = None
+        self.multiscreen_image = Image.new("RGB", (SCREEN_W * 2, SCREEN_H))
 
-        # self.screen = _OpenGlMultiScreen2()
+        self.window = None
+        self.clock = None
 
         self.action_controller_presses = [
             _to_controller_presses([]),
@@ -468,7 +347,7 @@ class SuperMarioEnv(gym.Env):
 
     def _get_obs(self):
         # Get screen buffer.  Shape = (3, 240, 224)
-        screen_image = np.array(self.ai_handler.screen_image)
+        screen_image = np.asarray(self.ai_handler.screen_image)
         assert screen_image.shape == (SCREEN_H, SCREEN_W, 3), f"Unexpected screen_image.shape: {screen_image.shape} != {(SCREEN_H, SCREEN_W, 3)}"
         assert screen_image.dtype == np.uint8, f"Unexpected screen_image.dtype: {screen_image.dtype} != {np.uint8}"
 
@@ -490,16 +369,6 @@ class SuperMarioEnv(gym.Env):
 
         # We need the following line to seed self.np_random
         # super().reset(seed=seed)
-
-        # # Choose the agent's location uniformly at random
-        # self._agent_location = self.np_random.integers(0, self.size, size=2, dtype=int)
-
-        # # We will sample the target's location randomly until it does not coincide with the agent's location
-        # self._target_location = self._agent_location
-        # while np.array_equal(self._target_location, self._agent_location):
-        #     self._target_location = self.np_random.integers(
-        #         0, self.size, size=2, dtype=int
-        #     )
 
         # Reset ai handler.
         self.ai_handler.reset()
@@ -562,6 +431,10 @@ class SuperMarioEnv(gym.Env):
         # Take a step in the emulator.
         self.nes.run_frame()
 
+        if self.render_mode == "human":
+            frame_image = self._build_frame()
+            self._render_frame(frame_image)
+
         # Read off the current reward.  Convert to a single value reward for this timestep.
         reward = RewardMap.combine_reward_vector_single(self.ai_handler.reward_vector)
 
@@ -572,148 +445,75 @@ class SuperMarioEnv(gym.Env):
         observation = self._get_obs()
         info = self._get_info()
 
-        # TODO(millman): if we just died, run until the game/level start.
-
         return observation, reward, terminated, truncated, info
-
 
     def render(self):
         if self.render_mode == "rgb_array":
-            # Scale the display size.
-            w, h = SCREEN_W*3, SCREEN_H*3
-
-            screen_resized = self.ai_handler.screen_image.resize((w, h), resample=Image.Resampling.NEAREST)
-
-            # 2 Screens, 1 next to the other.
-            multiscreen = Image.new("RGB", (w*2, h))
-
-            # Draw main screen.
-            multiscreen.paste(screen_resized, (0, 0))
-
-            if False:
-                values_image_np_uint8 = np.random.randint(0, 256, size=(SCREEN_H, SCREEN_W), dtype=np.uint8)
-                values_gray = Image.fromarray(values_image_np_uint8, mode='L')
-                values_rgb = values_gray.convert('RGB')
-
-                self.second_screen_image = values_rgb
-
-            # Draw debug screen.
-            assert self.second_screen_image.size == (SCREEN_W, SCREEN_H), f"Unexpected screen size: {self.second_screen_image.size} != {SCREEN_W, SCREEN_H}"
-            screen_debug = self.second_screen_image.resize((w, h), resample=Image.Resampling.NEAREST)
-
-            if False:
-                ImageDraw.Draw(screen_debug).circle(xy=(w/2, h/2), radius=w/4, outline='red')
-
-            multiscreen.paste(screen_debug, (w, 0))
-            return np.asarray(multiscreen)
-
-            # return self._render_frame()
+            return self._build_frame()
         elif self.render_mode == "human":
-            return self._render_frame()
+            return None
         else:
             return None
 
-    def _render_frame(self):
-        # raise RuntimeError("STOP")
-        # TODO(millman): All rendering is handled by pygame right now in the NES emulator; come back to this later.
+    def _build_frame(self) -> NdArrayRGB8:
+        # Use original image sizes here.  Scale everything later.
+        w, h = SCREEN_W, SCREEN_H
 
-        w = 224
-        h = 224
-
-        # if self.window is None:
-        #     self.window = pygame.display.set_mode((w, h), 0, 32)
-
-        if False:
-            canvas = self.screen.buffer_surf
-            canvas.fill((128, 0, 0))
+        # Draw main screen.
+        screen0 = self.ai_handler.screen_image
+        assert screen0.size == (SCREEN_W, SCREEN_H), f"Unexpected screen0 size: {screen0.size} != {SCREEN_W, SCREEN_H}"
+        self.multiscreen_image.paste(screen0, (0, 0))
 
         if False:
-        # else:
-            # Get screen buffer.  Shape = (3, 240, 224)
-            image = np.array(self.ai_handler.screen_image)
-            assert image.dtype == np.uint8, f"Unexpected screen_image.dtype: {image.dtype} != {np.uint8}"
+            values_image_np_uint8 = np.random.randint(0, 256, size=(SCREEN_H, SCREEN_W), dtype=np.uint8)
+            values_gray = Image.fromarray(values_image_np_uint8, mode='L')
+            values_rgb = values_gray.convert('RGB')
 
-            # mode = image.mode
-            mode = "RGB"
-            size = image.size
-            data = image.tobytes()
+            self.second_screen_image = values_rgb
 
-            # Create a Pygame surface from string data
-            pygame_image = pygame.image.fromstring(data, (w, h), mode)
+        # Draw debug screen.
+        screen1 = self.second_screen_image
+        assert screen1.size == (SCREEN_W, SCREEN_H), f"Unexpected screen1 size: {screen1.size} != {SCREEN_W, SCREEN_H}"
+        self.multiscreen_image.paste(screen1, (w, 0))
 
-            #self.screen.buffer_sa.blit(pygame_image)
-            # pygame_image.blit(self.screen.buffer_surf, (0,0))
+        return self.multiscreen_image
 
-            self.screen.buffer_surf.blit(pygame_image, (0,0))
+    def _render_frame(self, frame_image: Image):
+        # Scale up the image sizes.
+        w, h = frame_image.size[0] * 3, frame_image.size[1] * 3
 
-        # The following line copies our drawings from `canvas` to the visible window
-        # self.window.blit(canvas, canvas.get_rect())
-        # pygame.event.pump()
-        # pygame.display.update()
-        # self.screen.show()
+        last_rgb_array = frame_image.resize((w, h), resample=Image.Resampling.NEAREST)
 
+        # Pygame is displayed as GRB?
+        rgb_array = np.transpose(last_rgb_array, axes=(1, 0, 2))
 
+        if self.screen_size is None:
+            self.screen_size = rgb_array.shape[:2]
 
-        # if self.window is None and self.render_mode == "human":
-        #     pygame.init()
-        #     pygame.display.init()
-        #     self.window = pygame.display.set_mode(
-        #         (self.window_size, self.window_size)
-        #     )
-        # if self.clock is None and self.render_mode == "human":
-        #     self.clock = pygame.time.Clock()
+        assert (
+            self.screen_size == rgb_array.shape[:2]
+        ), f"The shape of the rgb array has changed from {self.screen_size} to {rgb_array.shape[:2]}"
 
-        # canvas = pygame.Surface((self.window_size, self.window_size))
-        # canvas.fill((255, 255, 255))
-        # pix_square_size = (
-        #     self.window_size / self.size
-        # )  # The size of a single grid square in pixels
+        if self.window is None:
+            pygame.init()
+            pygame.display.init()
+            self.window = pygame.display.set_mode(self.screen_size)
 
-        # # First we draw the target
-        # pygame.draw.rect(
-        #     canvas,
-        #     (255, 0, 0),
-        #     pygame.Rect(
-        #         pix_square_size * self._target_location,
-        #         (pix_square_size, pix_square_size),
-        #     ),
-        # )
-        # # Now we draw the agent
-        # pygame.draw.circle(
-        #     canvas,
-        #     (0, 0, 255),
-        #     (self._agent_location + 0.5) * pix_square_size,
-        #     pix_square_size / 3,
-        # )
+        if self.clock is None:
+            self.clock = pygame.time.Clock()
 
-        # # Finally, add some gridlines
-        # for x in range(self.size + 1):
-        #     pygame.draw.line(
-        #         canvas,
-        #         0,
-        #         (0, pix_square_size * x),
-        #         (self.window_size, pix_square_size * x),
-        #         width=3,
-        #     )
-        #     pygame.draw.line(
-        #         canvas,
-        #         0,
-        #         (pix_square_size * x, 0),
-        #         (pix_square_size * x, self.window_size),
-        #         width=3,
-        #     )
+        surf = pygame.surfarray.make_surface(rgb_array)
+        self.window.blit(surf, (0, 0))
+        pygame.event.pump()
 
-        # if self.render_mode == "human":
-        #     # The following line copies our drawings from `canvas` to the visible window
-        #     self.window.blit(canvas, canvas.get_rect())
-        #     pygame.event.pump()
-        #     pygame.display.update()
+        if self.render_fps:
+            print(f"TICKING TO {self.render_fps}")
+            self.clock.tick(self.render_fps)
 
-        #     # We need to ensure that human-rendering occurs at the predefined framerate.
-        #     # The following line will automatically add a delay to keep the framerate stable.
-        #     self.clock.tick(self.metadata["render_fps"])
-        # else:  # rgb_array
-        #     return np.transpose(
-        #         np.array(pygame.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
-        #     )
-        pass
+        pygame.display.flip()
+
+    def close(self):
+        if self.window is not None:
+            pygame.display.quit()
+            pygame.quit()
+        super().close()
