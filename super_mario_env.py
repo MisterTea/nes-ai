@@ -414,6 +414,7 @@ class SuperMarioEnv(gym.Env):
     def _get_obs(self):
         # Get screen buffer.  Shape = (3, 240, 224)
         screen_image = np.array(self.ai_handler.screen_image)
+        assert screen_image.shape == (SCREEN_H, SCREEN_W, 3), f"Unexpected screen_image.shape: {screen_image.shape} != {(SCREEN_H, SCREEN_W, 3)}"
         assert screen_image.dtype == np.uint8, f"Unexpected screen_image.dtype: {screen_image.dtype} != {np.uint8}"
 
         obs = screen_image
