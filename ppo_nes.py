@@ -142,7 +142,7 @@ def make_env(env_id, idx, capture_video, run_name):
             env = gym.make(env_id, render_mode="rgb_array")
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
-            env = gym.make(env_id, render_mode="rgb_array")
+            env = gym.make(env_id, render_mode="human")
 
         print(f"RENDER MODE: {env.render_mode}")
 
@@ -156,9 +156,6 @@ def make_env(env_id, idx, capture_video, run_name):
         env = gym.wrappers.GrayscaleObservation(env)
         env = gym.wrappers.ResizeObservation(env, (84, 84))
         env = gym.wrappers.FrameStackObservation(env, 4)
-
-        # TODO(millman): Should natively support rendering instead.
-        env = gym.wrappers.HumanRendering(env)
 
         return env
 
@@ -469,13 +466,6 @@ def main():
             global_step += args.num_envs
             obs[step] = next_obs
             dones[step] = next_done
-
-            # DISPLAY
-            if True:
-                # TODO(millman): THERES A BUG IN THE GRAYSCALE???
-                obs_img = Image.fromarray(next_obs[0][0].cpu().numpy(), 'L').resize((240, 224)).convert('RGB')
-
-                # envs.envs[0].unwrapped.second_screen_image = obs_img
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
