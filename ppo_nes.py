@@ -523,7 +523,7 @@ def main():
 
         steps_end = time.time()
 
-        if True:
+        if False:
             optimize_networks_start = time.time()
 
             # bootstrap value if not done
@@ -656,7 +656,7 @@ def main():
                 print(f"Checkpoint done: {time.time() - start_checkpoint:.4f}s")
 
         # Show value sweep.
-        if iteration % 5 == 0:
+        if False: #iteration % 5 == 0:
             _render_mario_pos_value_sweep(envs=envs, device=device, agent=agent)
 
     envs.close()

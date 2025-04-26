@@ -116,7 +116,7 @@ class SimpleAiHandler:
                     # New info, start a new line.
                     print('\n' + always_changing_info + new_info, end='\r', flush=True)
 
-            if True:
+            if False:
                 # For debugging screen positions.
 
                 always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
@@ -146,6 +146,37 @@ class SimpleAiHandler:
                     print('\n' + always_changing_info + new_info, end='\r', flush=True)
 
                 self.prev_info = new_info
+
+            if False:
+                # For debugging player state / end of level.
+
+                # Player's state
+                # 0x00 - Leftmost of screen
+                # 0x01 - Climbing vine
+                # 0x02 - Entering reversed-L pipe
+                # 0x03 - Going down a pipe
+                # 0x04 - Autowalk
+                # 0x05 - Autowalk
+                # 0x06 - Player dies
+                # 0x07 - Entering area
+                # 0x08 - Normal
+                # 0x09 - Transforming from Small to Large (cannot move)
+                # 0x0A - Transforming from Large to Small (cannot move)
+                # 0x0B - Dying
+                # 0x0C - Transforming to Fire Mario (cannot move)
+                player_state = ram[0x000E]
+
+                always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
+
+                new_info = f"player_state={player_state}"
+
+                if True: # new_info == self.prev_info:
+                    # Clear out old line and display again.
+                    print(always_changing_info + new_info, end='\r', flush=True)
+                else:
+                    # New info, start a new line.
+                    print('\n' + always_changing_info + new_info, end='\r', flush=True)
+
 
         self.frame_num = frame
         self.screen_image = screen_image
@@ -291,6 +322,30 @@ def _debug_level_from_ram(ai_handler, desc: str):
     level_loading = ram[0x0772]
     print(f"{desc}: frame={ai_handler.frame_num} {level=} {game_mode=} {prelevel=} {prelevel_timer=} {level_entry=} {before_level_load=} {level_loading=}")
 
+
+def _run_until_not_dead(ai_handler, nes):
+    ram = ai_handler.ram
+
+    # Player's state
+    # 0x00 - Leftmost of screen
+    # 0x01 - Climbing vine
+    # 0x02 - Entering reversed-L pipe
+    # 0x03 - Going down a pipe
+    # 0x04 - Autowalk
+    # 0x05 - Autowalk
+    # 0x06 - Player dies
+    # 0x07 - Entering area
+    # 0x08 - Normal
+    # 0x09 - Transforming from Small to Large (cannot move)
+    # 0x0A - Transforming from Large to Small (cannot move)
+    # 0x0B - Dying
+    # 0x0C - Transforming to Fire Mario (cannot move)
+    player_state = ram[0x000E]
+
+    # Wait for player dying animation to finish.
+    while player_state == 0x0B:
+        nes.run_frame()
+        player_state = ai_handler.ram[0x000E]
 
 def _run_until_level_started(ai_handler, nes):
     # Wait until the level is set.
@@ -468,6 +523,7 @@ class SuperMarioEnv(gym.Env):
         # Wait for level to start.  Does nothing if we're already in a level.
         # Necessary to handle continuing episodes after losing a life.
         _run_until_level_started(self.ai_handler, self.nes)
+        _run_until_not_dead(self.ai_handler, self.nes)
 
         PRINT_CONTROLLER = False
 
