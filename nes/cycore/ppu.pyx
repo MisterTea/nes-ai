@@ -135,7 +135,17 @@ cdef class NESPPU:
         np.asarray(_sprite_line),                    # lines of the active sprite that we are on
         np.asarray(_sprite_pattern),             # decoded patterns for the active sprites
         self._num_active_sprites,                # how many sprites are active in this current line
-        np.asarray(irq_tick_triggers),             # whether or not an irq tick is triggered on this pixel of sprite fetch
+
+        # NOTE: Using np.asarray('cdef bint [:,:]') duplicates memoryview copy definition:
+        #
+        #   cpython-311/pyrex/nes/cycore/ppu.c:38850:34: error: redefinition of '__pyx_memview_get_int'
+        #   38850 |   static CYTHON_INLINE PyObject *__pyx_memview_get_int(const char *itemp) {
+        #
+        # Ideally we would use:
+        #   np.asarray(irq_tick_triggers),
+        # But we'll allow a copy to happen, using np.asarray() on the original value, not the memoryview.
+
+        np.asarray(self.irq_tick_triggers, dtype=np.bool_),             # whether or not an irq tick is triggered on this pixel of sprite fetch
 
         # Background rendering
         self._pattern_lo, self._pattern_hi,   # 16-bit bkg pattern registers (only bottom 16 bits relevant)
