@@ -483,22 +483,26 @@ cdef class NES:
                 self.screen.add_text("MUTE", (self.OSD_MUTE_X, self.OSD_Y), self.OSD_TEXT_COLOR)
 
 
-        h = 224
-        w = 240
-        sb = np.zeros((w, h), dtype=np.uint32)
-        self.ppu.copy_screen_buffer_to(
-            sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan
-        )
-        sb = (
-            sb.view(dtype=np.uint8)
-            .reshape((w, h, 4))[:, :, np.array([2, 1, 0])]
-            .swapaxes(0, 1)
-        )
-        image = Image.fromarray(sb)
-        assert image.size == (w, h)
-        #image = image.resize((224, 224))
+        if True:
+            h = 224
+            w = 240
+            sb = np.zeros((w, h), dtype=np.uint32)
+            self.ppu.copy_screen_buffer_to(
+                sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan
+            )
+            sb = (
+                sb.view(dtype=np.uint8)
+                .reshape((w, h, 4))[:, :, np.array([2, 1, 0])]
+                .swapaxes(0, 1)
+            )
+            image = Image.fromarray(sb)
+            assert image.size == (w, h)
+            #image = image.resize((224, 224))
 
-        keep_going = self.ai_handler.update(frame, self.controller1, self.memory.ram, image)
+            keep_going = self.ai_handler.update(frame, self.controller1, self.memory.ram, image)
+        else:
+            keep_going = self.ai_handler.update(frame, self.controller1, self.memory.ram, None)
+            keep_going = True
 
         if not keep_going:
             return False
@@ -969,9 +973,25 @@ cdef class NES:
         buffer_rgb = buffer.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
         return buffer_rgb
 
+    def get_screen_view_full(self):
+        return self.ppu.get_screen_buffer_view_full()
 
+    def get_screen_view(self):
+        return self.ppu.get_screen_buffer_view()
 
+    def get_screen_image(self):
+        w, h = 240, 224
+        sb = np.zeros((w, h), dtype=np.uint32)
+        self.ppu.copy_screen_buffer_to(
+            sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan
+        )
+        sb = (
+            sb.view(dtype=np.uint8)
+            .reshape((w, h, 4))[:, :, np.array([2, 1, 0])]
+            .swapaxes(0, 1)
+        )
+        image = Image.fromarray(sb)
+        assert image.size == (w, h)
 
-
-
+        return image
 
