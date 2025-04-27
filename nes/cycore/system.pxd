@@ -90,3 +90,5 @@ cdef class NES:
     cpdef void run_init(self)
     cpdef bint run_frame(self)
     cpdef void read_controller_presses(self)
+
+    # cpdef object get_screen_view(self)
