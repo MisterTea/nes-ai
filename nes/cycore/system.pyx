@@ -483,7 +483,7 @@ cdef class NES:
                 self.screen.add_text("MUTE", (self.OSD_MUTE_X, self.OSD_Y), self.OSD_TEXT_COLOR)
 
 
-        if True:
+        if False:
             h = 224
             w = 240
             sb = np.zeros((w, h), dtype=np.uint32)
@@ -502,7 +502,6 @@ cdef class NES:
             keep_going = self.ai_handler.update(frame, self.controller1, self.memory.ram, image)
         else:
             keep_going = self.ai_handler.update(frame, self.controller1, self.memory.ram, None)
-            keep_going = True
 
         if not keep_going:
             return False

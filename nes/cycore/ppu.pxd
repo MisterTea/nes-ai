@@ -134,7 +134,6 @@ cdef class NESPPU:
     #cpdef void copy_screen_buffer_to(self, unsigned int[:, :] dest, bint v_overscan=?, bint h_overscan=?)
     cdef void _clear_to_bkg(self)
 
-    # cdef unsigned int[:, :] get_screen_buffer_view(self)
     # cpdef object get_screen_buffer_view(self)
 
     # registers read/write

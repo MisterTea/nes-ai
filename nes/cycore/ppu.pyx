@@ -445,6 +445,8 @@ cdef class NESPPU:
         cdef unsigned int [:,:] view = self.screen_buffer
         return view
 
+    # TODO(millman): For some reason, defining this as a cpdef causes memory violation errors.
+    #   Maybe the python GIL is saving us somehow?
     def get_screen_buffer_view(self, v_overscan=False, h_overscan=False):
         cdef int start_line=VERTICAL_OVERSCAN_PX, end_line=SCREEN_HEIGHT_PX - VERTICAL_OVERSCAN_PX
         cdef int start_row=HORIZONTAL_OVERSCAN_PX, end_row=SCREEN_WIDTH_PX - HORIZONTAL_OVERSCAN_PX
