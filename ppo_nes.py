@@ -351,14 +351,16 @@ def _render_mario_pos_value_sweep(envs: Any, device: str, agent: Any):
         obs_rgba = obs_grayscale.convert('RGBA')
         obs_rgba.putalpha(int(0.25 * 256))
     else:
-        obs_rgba = env.ai_handler.screen_image.convert('RGBA')
+        obs_image = env.screen.get_image(screen_index=0)
+        obs_rgba = obs_image.convert('RGBA')
         obs_rgba.putalpha(int(0.15 * 256))
 
     # Paste the current observation onto the image.  Take the mask from the alpha values.
     values_rgba.paste(obs_rgba, (0, 0), mask=obs_rgba)
 
     # Set screen values.
-    env.second_screen_image = values_rgba
+    values_rgb = values_rgba.convert('RGB')
+    env.screen.set_image(values_rgb, screen_index=1)
 
 
 def main():

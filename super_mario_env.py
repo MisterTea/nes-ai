@@ -76,7 +76,6 @@ class SimpleAiHandler:
 
     def reset(self):
         self.ram = np.zeros(RAM_SIZE, dtype=np.uint8)
-        self.screen_image = Image.fromarray(np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8))
 
         self.last_reward_map = None
         self.reward_map, self.reward_vector = compute_reward_map(None, self.ram)
@@ -87,9 +86,6 @@ class SimpleAiHandler:
         print("Shutting down ai handler")
 
     def update(self, frame: int, controller1, ram: NdArrayUint8, screen_image: Image):
-        if screen_image is not None:
-            assert screen_image.size == (SCREEN_W, SCREEN_H), f"Unexpected screen size: {screen_image.size} != {(SCREEN_W, SCREEN_H)}"
-
         if self.ram.shape != ram.shape:
             print(f"Unexpected ram size: {self.ram.shape} != {ram.shape}")
 
@@ -180,10 +176,6 @@ class SimpleAiHandler:
 
         self.frame_num = frame
 
-        if screen_image is not None:
-            self.screen_image = screen_image
-        assert self.screen_image.size == (SCREEN_W, SCREEN_H), f"Unexpected screen size: {self.screen_image.size} != {(SCREEN_W, SCREEN_H)}"
-
         return True
 
 
@@ -196,24 +188,29 @@ class SimpleScreen2x1:
 
         self.window = None
 
-        if False:
-            print(f"SURFACE WITHOUT SRCALPHA: {pygame.Surface((1,1)).get_bitsize()}")
-            print(f"SURFACE WITH SRCALPHA: {pygame.Surface((1,1), flags=pygame.SRCALPHA).get_bitsize()}")
-
+        self.combined_surf = pygame.Surface((w * 2, h))
         self.surfs = [
-            pygame.Surface(self.screen_size),
-            pygame.Surface(self.screen_size),
+            # NOTE: Rect(left, top, width, height)
+            self.combined_surf.subsurface(pygame.Rect(0, 0, w, h)),
+            self.combined_surf.subsurface(pygame.Rect(w, 0, w, h)),
         ]
-        self.surfs_scaled = [
-            pygame.Surface(self.screen_size_scaled),
-            pygame.Surface(self.screen_size_scaled),
-        ]
+        self.combined_surf_scaled = pygame.Surface(self.window_size)
+
+    def get_image(self, screen_index: int) -> Image:
+        surf = self.surfs[screen_index]
+
+        data = pygame.image.tostring(surf, 'RGB')
+        width, height = surf.get_size()
+        image = Image.frombytes(mode='RGB', size=(width, height), data=data)
+
+        return image
 
     def set_image_np(self, image_np: NdArrayRGB8, screen_index: int):
         # print(f"SURF SIZE: {self.surfs[screen_index].get_size()}  image.shape={image_np.shape}")
         pygame.surfarray.blit_array(self.surfs[screen_index], image_np)
 
     def set_image(self, image: Image, screen_index: int):
+        assert image.mode == 'RGB', f"Unexpected image mode: {image.mode} != RGB"
         image_np = np.asarray(image).swapaxes(0, 1)
         pygame.surfarray.blit_array(self.surfs[screen_index], image_np)
 
@@ -223,10 +220,8 @@ class SimpleScreen2x1:
             pygame.display.init()
             self.window = pygame.display.set_mode(self.window_size)
 
-        w = self.screen_size_scaled[0]
-        for i, (surf, surf_scaled) in enumerate(zip(self.surfs, self.surfs_scaled)):
-            pygame.transform.scale(surface=surf, size=self.screen_size_scaled, dest_surface=surf_scaled)
-            self.window.blit(surf_scaled, dest=(w * i, 0))
+        pygame.transform.scale(surface=self.combined_surf, size=self.window_size, dest_surface=self.combined_surf_scaled)
+        self.window.blit(self.combined_surf_scaled, dest=(0, 0))
 
         pygame.event.pump()
         pygame.display.flip()
@@ -401,9 +396,6 @@ class SuperMarioEnv(gym.Env):
         # NOTE: reset() looks like it's called automatically by the gym environment, before starting.
         # self.reset()
 
-        # For visualization.
-        self.second_screen_image = Image.new(mode="RGB", size=(SCREEN_W, SCREEN_H))
-
     def _get_obs(self) -> NdArrayRGB8:
         screen_view = self.nes.get_screen_view()
         screen_view_np = self._screen_view_to_np(screen_view)
@@ -509,7 +501,7 @@ class SuperMarioEnv(gym.Env):
 
         # Show the screen, if requested.
         if self.render_mode == "human":
-            self._render_frame()
+            self.screen.show()
 
         return observation, reward, terminated, truncated, info
 
@@ -518,7 +510,7 @@ class SuperMarioEnv(gym.Env):
             #return self._build_frame()
             raise RuntimeError("TODO, be efficient about this?")
         elif self.render_mode == "human":
-            self._render_frame()
+            self.screen.show()
             return None
         else:
             return None
@@ -548,167 +540,6 @@ class SuperMarioEnv(gym.Env):
             print(f"SCREEN VIEW RGB: shape={screen_view_rgb.shape} size={screen_view_rgb.size} cont={screen_view_rgb.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_rgb)}")
 
         return screen_view_rgb
-
-    def _render_frame(self) -> NdArrayRGB8:
-        # Use original image sizes here.  Scale everything later.
-        w, h = SCREEN_W, SCREEN_H
-
-        # screen_view_raw_direct: type=<class 'nes.cycore.ppu._memoryviewslice'> shape=(240, 224) size=53760 base=view
-        screen_view_raw_direct = self.nes.get_screen_view()
-        screen_view_rgb = self._screen_view_to_np(screen_view_raw_direct)
-
-        if False:
-            # SCREEN VIEW: screen_view=<MemoryView of 'array' at 0x335e8adc0> shape=(240, 224)
-
-            # NOTE: These operations are carefully constructed to avoid memory copies, they are all views.
-            #   Starting type is: (240, 224) uint32 as BGRA.
-            #   Ending type is: (240, 224, 3) uint8 as RGB.
-
-            print()
-
-            screen_view_raw_direct = self.nes.get_screen_view()
-            print(f"SCREEN VIEW RAW DIRECT: type={type(screen_view_raw_direct)} shape={screen_view_raw_direct.shape} size={screen_view_raw_direct.size} base={_is_copy(screen_view_raw_direct)}")
-
-            screen_view_np = np.asarray(screen_view_raw_direct, copy=False)
-            print(f"SCREEN VIEW NP: shape={screen_view_np.shape} size={screen_view_np.size} cont={screen_view_np.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_np)}")
-
-            screen_view_bgra = screen_view_np.view(np.uint8).reshape((240, 224, 4))
-            print(f"SCREEN VIEW BGRA: shape={screen_view_bgra.shape} size={screen_view_bgra.size} cont={screen_view_bgra.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_bgra)}")
-
-            screen_view_bgr = screen_view_bgra[:, :, :3]
-            print(f"SCREEN VIEW BGR: shape={screen_view_bgr.shape} size={screen_view_bgr.size} cont={screen_view_bgr.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_bgr)}")
-
-            screen_view_rgb = screen_view_bgr[:, :, ::-1]
-            print(f"SCREEN VIEW RGB: shape={screen_view_rgb.shape} size={screen_view_rgb.size} cont={screen_view_rgb.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_rgb)}")
-
-
-        if False:
-            print()
-
-            screen_view_raw_full = self.nes.get_screen_view_full()
-            print(f"SCREEN VIEW RAW FULL: shape={screen_view_raw_full.shape} size={screen_view_raw_full.size} base={_is_copy(screen_view_raw_full)}")
-
-            screen_view_full_np = np.asarray(screen_view_raw_full, copy=False)
-            print(f"SCREEN VIEW NP: shape={screen_view_full_np.shape} size={screen_view_full_np.size} cont={screen_view_full_np.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_full_np)}")
-
-            screen_view_abgr = screen_view_full_np.view(np.uint8).reshape((256, 240, 4))
-            print(f"SCREEN VIEW ABGR: shape={screen_view_abgr.shape} size={screen_view_abgr.size} cont={screen_view_abgr.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_abgr)}")
-
-            screen_view_crop = screen_view_abgr[:240, :224, :3]
-            print(f"SCREEN VIEW CROP: shape={screen_view_crop.shape} size={screen_view_crop.size} cont={screen_view_crop.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_crop)}")
-
-            screen_view_rgb = np.take(screen_view_crop, indices=[2, 1, 0], axis=-1)
-
-        if False:
-            screen_view_rgba = screen_view_abgr[..., ::-1]
-            print(f"SCREEN VIEW RGBA: shape={screen_view_rgba.shape} size={screen_view_rgba.size} cont={screen_view_rgba.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_rgba)}")
-
-            screen_view_rgb = screen_view_rgba[:,:,:3]
-            print(f"SCREEN VIEW RGB: shape={screen_view_rgb.shape} size={screen_view_rgb.size} cont={screen_view_rgb.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_rgb)}")
-
-        if False:
-            screen_view_rgb = np.random.randint(0, 256, size=(240, 224, 3), dtype=np.uint8)
-
-        # Set first screen.
-        self.screen.set_image_np(screen_view_rgb, screen_index=0)
-
-        # Set second screen.
-        self.screen.set_image(self.second_screen_image, screen_index=1)
-
-        # Show the screen.
-        self.screen.show()
-
-    def _build_frame_old(self) -> NdArrayRGB8:
-        # Use original image sizes here.  Scale everything later.
-        w, h = SCREEN_W, SCREEN_H
-
-        # Draw main screen.
-        if True:
-            screen0 = self.ai_handler.screen_image
-        else:
-
-            # FROM copy_to_buffer
-            # sb.view(dtype=np.uint8)
-            #     .reshape((w, h, 4))[:, :, np.array([2, 1, 0])]
-            #     .swapaxes(0, 1)
-
-            if True:
-                print()
-
-                def _is_copy(arr):
-                    return 'view' if arr.base is not None else 'new'
-
-                # SCREEN VIEW: screen_view=<MemoryView of 'array' at 0x335e8adc0> shape=(256, 240) size=61440
-                screen_view_raw = self.nes.get_screen_view()
-                print(f"SCREEN VIEW RAW: shape={screen_view_raw.shape} size={screen_view_raw.size}")
-
-                screen_view_np = np.asarray(screen_view_raw, copy=False)
-                print(f"SCREEN VIEW NP: shape={screen_view_np.shape} size={screen_view_np.size} cont={screen_view_np.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_np)}")
-
-                screen_view_uint8 = screen_view_np.view(np.uint8).reshape((256, 240, 4))
-                print(f"SCREEN VIEW UINT8: shape={screen_view_uint8.shape} size={screen_view_uint8.size} cont={screen_view_uint8.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_uint8)}")
-
-                screen_view_transposed = screen_view_uint8.swapaxes(0, 1)
-                print(f"SCREEN VIEW BGR: shape={screen_view_transposed.shape} size={screen_view_transposed.size} cont={screen_view_transposed.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_transposed)}")
-
-                screen_view_rgb = np.take(screen_view_transposed, indices=[2, 1, 0], axis=-1)
-                print(f"SCREEN VIEW RGB: shape={screen_view_rgb.shape} size={screen_view_rgb.size} cont={screen_view_rgb.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_rgb)}")
-
-                screen_view_crop = screen_view_rgb[:240, :224, :3]
-                print(f"SCREEN VIEW CROP: shape={screen_view_crop.shape} size={screen_view_crop.size} cont={screen_view_crop.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_crop)}")
-
-                #print(f"SCREEN VIEW: {screen_view=} shape={screen_view.shape} size={screen_view.size}")
-                # screen0 = Image.frombuffer(mode='RGB', size=(240, 224), data=screen_view_crop.copy())
-
-            # WORKS
-            if False:
-                screen_image = self.nes.get_screen_image()
-
-                print(f"SCREEN IMAGE: size={screen_image.size} mode={screen_image.mode}")
-
-                screen_view_raw = self.nes.get_screen_view()
-                print(f"SCREEN VIEW RAW: shape={screen_view_raw.shape} size={screen_view_raw.size}")
-                sb = np.array(screen_view_raw[:240,:224], dtype=np.uint32)
-                print(f"SB: shape={sb.shape} size={sb.size}")
-                sb_reshaped = sb.view(dtype=np.uint8).reshape((w, h, 4))
-                print(f"SB RESHAPED: shape={sb_reshaped.shape} size={sb_reshaped.size}")
-                sb_drop_axis = sb_reshaped[:, :, np.array([2, 1, 0])]
-                print(f"SB DROPPED: shape={sb_drop_axis.shape} size={sb_drop_axis.size}")
-                sb_swapped_axis = sb_drop_axis.swapaxes(0, 1)
-                print(f"SB SWAPPED: shape={sb_swapped_axis.shape} size={sb_swapped_axis.size}")
-
-                # WORKS:
-                #screen0 = Image.fromarray(sb_swapped_axis)
-
-                # WORKS:
-                screen0 = Image.frombuffer(mode='RGB', size=(w, h), data=sb_swapped_axis.tobytes())
-
-                # FAILS: not contiguous
-                # screen0 = Image.frombuffer(mode='RGB', size=(w, h), data=sb_swapped_axis)
-
-
-            # rand_vals = np.random.randint(0, 256, size=(SCREEN_H, SCREEN_W), dtype=np.uint8)
-            # screen0 = Image.fromarray(rand_vals, mode='L').convert('RGB')
-
-            # WORKS
-            # screen0 = self.nes.get_screen_image()
-
-        assert screen0.size == (SCREEN_W, SCREEN_H), f"Unexpected screen0 size: {screen0.size} != {SCREEN_W, SCREEN_H}"
-        self.multiscreen_image.paste(screen0, (0, 0))
-
-        if False:
-            values_image_np_uint8 = np.random.randint(0, 256, size=(SCREEN_H, SCREEN_W), dtype=np.uint8)
-            values_gray = Image.fromarray(values_image_np_uint8, mode='L')
-            values_rgb = values_gray.convert('RGB')
-
-            self.second_screen_image = values_rgb
-
-        # Draw debug screen.
-        screen1 = self.second_screen_image
-        assert screen1.size == (SCREEN_W, SCREEN_H), f"Unexpected screen1 size: {screen1.size} != {SCREEN_W, SCREEN_H}"
-        self.multiscreen_image.paste(screen1, (w, 0))
-
-        return self.multiscreen_image
 
     def close(self):
         self.screen.close()
