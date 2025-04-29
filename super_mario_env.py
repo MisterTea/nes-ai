@@ -3,15 +3,17 @@ from typing import Any, Literal, Optional
 import gymnasium as gym
 import numpy as np
 import pygame
-import pygame.freetype
 import torch
 
-from PIL import Image, ImageDraw
+from PIL import Image
 from nes import NES, SYNC_NONE, SYNC_PYGAME
 from nes_ai.ai.base import RewardMap, compute_reward_map
 
+from super_mario_env_ram_hacks import skip_after_step
+
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 NdArrayRGB8 = np.ndarray[tuple[Literal[4]], np.dtype[np.uint8]]
+
 
 class NesAle:
     """
@@ -61,6 +63,8 @@ def _to_controller_presses(buttons: list[str]) -> NdArrayUint8:
         is_pressed[button_index] = 1
     return is_pressed
 
+CONTROLLER_NOOP = _to_controller_presses([])
+
 
 SCREEN_W = 240
 SCREEN_H = 224
@@ -75,10 +79,10 @@ class SimpleAiHandler:
         self.reset()
 
     def reset(self):
-        self.ram = np.zeros(RAM_SIZE, dtype=np.uint8)
-
         self.last_reward_map = None
-        self.reward_map, self.reward_vector = compute_reward_map(None, self.ram)
+
+        ram = np.zeros(RAM_SIZE, dtype=np.uint8)
+        self.reward_map, self.reward_vector = compute_reward_map(None, ram)
 
         self.prev_info = None
 
@@ -86,11 +90,6 @@ class SimpleAiHandler:
         print("Shutting down ai handler")
 
     def update(self, frame: int, controller1, ram: NdArrayUint8, screen_image: Image):
-        if self.ram.shape != ram.shape:
-            print(f"Unexpected ram size: {self.ram.shape} != {ram.shape}")
-
-        self.ram = ram
-
         # Update rewards.
         self.last_reward_map = self.reward_map
         self.reward_map, self.reward_vector = compute_reward_map(
@@ -235,14 +234,11 @@ class SimpleScreen2x1:
             pygame.quit()
 
 
-
 _DEBUG_LEVEL_START = False
 
-def _debug_level_from_ram(ai_handler, desc: str):
+def _debug_level_from_ram(ram: NdArrayUint8, frame_num: int, desc: str):
     if not _DEBUG_LEVEL_START:
         return
-
-    ram = ai_handler.ram
 
     level = ram[0x0760]
     game_mode = ram[0x0770]
@@ -251,52 +247,13 @@ def _debug_level_from_ram(ai_handler, desc: str):
     level_entry = ram[0x0752]
     before_level_load = ram[0x0753]
     level_loading = ram[0x0772]
-    print(f"{desc}: frame={ai_handler.frame_num} {level=} {game_mode=} {prelevel=} {prelevel_timer=} {level_entry=} {before_level_load=} {level_loading=}")
+    print(f"{desc}: frame={frame_num} {level=} {game_mode=} {prelevel=} {prelevel_timer=} {level_entry=} {before_level_load=} {level_loading=}")
 
 
-def _run_until_not_dead(ai_handler, nes):
-    ram = ai_handler.ram
+def _skip_start_screen(nes: Any):
+    ram = nes.ram()
 
-    # Player's state
-    # 0x00 - Leftmost of screen
-    # 0x01 - Climbing vine
-    # 0x02 - Entering reversed-L pipe
-    # 0x03 - Going down a pipe
-    # 0x04 - Autowalk
-    # 0x05 - Autowalk
-    # 0x06 - Player dies
-    # 0x07 - Entering area
-    # 0x08 - Normal
-    # 0x09 - Transforming from Small to Large (cannot move)
-    # 0x0A - Transforming from Large to Small (cannot move)
-    # 0x0B - Dying
-    # 0x0C - Transforming to Fire Mario (cannot move)
-    player_state = ram[0x000E]
-
-    # Wait for player dying animation to finish.
-    while player_state == 0x0B:
-        nes.run_frame()
-        player_state = ai_handler.ram[0x000E]
-
-def _run_until_level_started(ai_handler, nes):
-    # Wait until the level is set.
-    # The level loading byte looks like it counts from 1 (during load) to 2 (right before load) to 3 (ready).
-    level_loading = ai_handler.ram[0x0772]
-
-    if level_loading >= 3:
-        # We're already in a level, don't do anything.
-        return
-    else:
-        # We're waiting for a level to load.  Run until load, and then notify.
-        while level_loading <= 2:
-            _debug_level_from_ram(ai_handler, "WAITING FOR LEVEL")
-            level_loading = ai_handler.ram[0x0772]
-
-            nes.run_frame()
-
-
-def _run_until_game_started(ai_handler, nes):
-    _debug_level_from_ram(ai_handler, "RUNNING GAME START")
+    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="RUNNING GAME START")
 
     # Run frames until start screen.
     # TODO(millman): Not sure why this is 34 frames?  Found by binary searching until this worked.
@@ -304,7 +261,7 @@ def _run_until_game_started(ai_handler, nes):
     for i in range(34 * 4):
         nes.run_frame()
 
-    _debug_level_from_ram(ai_handler, "BEFORE START PRESSED")
+    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="BEFORE START PRESSED")
 
     # Press start.
     nes.controller1.set_state(_to_controller_presses(['start']))
@@ -313,23 +270,16 @@ def _run_until_game_started(ai_handler, nes):
     nes.run_frame()
 
     # Make sure "game mode" is set to "normal".
-    if True:
-        game_mode = ai_handler.ram[0x0770]
-        assert game_mode == 1, f"Unexpected game mode (0=demo 1=normal): {game_mode} != 1"
+    game_mode = ram[0x0770]
+    assert game_mode == 1, f"Unexpected game mode (0=demo 1=normal): {game_mode} != 1"
 
-        # Set controller back to no-op.
-        nes.controller1.set_state(_to_controller_presses([]))
+    # Set controller back to no-op.
+    nes.controller1.set_state(_to_controller_presses([]))
 
-        _debug_level_from_ram(ai_handler, "AFTER START PRESSED")
+    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="AFTER START PRESSED")
 
-        _run_until_level_started(ai_handler, nes)
-
-        # We're now ready to play.
-        _debug_level_from_ram(ai_handler, "READY TO PLAY")
-
-        print("READY TO PLAY")
-    else:
-        print("READY TO PLAY")
+    # We're now ready to play.
+    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="READY TO PLAY")
 
 
 # Reference: https://gymnasium.farama.org/introduction/create_custom_env/
@@ -433,7 +383,7 @@ class SuperMarioEnv(gym.Env):
         self.nes.run_init()
 
         # Step until game started.
-        _run_until_game_started(self.ai_handler, self.nes)
+        _skip_start_screen(self.nes)
 
         # Get initial values.
         observation = self._get_obs()
@@ -445,11 +395,6 @@ class SuperMarioEnv(gym.Env):
         return observation, info
 
     def step(self, action_index: int):
-        # Wait for level to start.  Does nothing if we're already in a level.
-        # Necessary to handle continuing episodes after losing a life.
-        # _run_until_level_started(self.ai_handler, self.nes)
-        # _run_until_not_dead(self.ai_handler, self.nes)
-
         PRINT_CONTROLLER = False
 
         if PRINT_CONTROLLER:
@@ -503,6 +448,9 @@ class SuperMarioEnv(gym.Env):
         if self.render_mode == "human":
             self.screen.set_image_np(observation, screen_index=0)
             self.screen.show()
+
+        # Speed through any prelevel screens, dying animations, etc. that we don't care about.
+        skip_after_step(self.nes)
 
         return observation, reward, terminated, truncated, info
 
