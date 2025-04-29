@@ -40,6 +40,11 @@ register(
 
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 
+
+
+USE_OBSERVATION_224x224 = False
+
+
 @dataclass
 class Args:
     r"""
@@ -89,6 +94,12 @@ class Args:
     """whether to capture videos of the agent performances (check out `videos` folder)"""
     checkpoint_frequency: int = 10
     """create a checkpoint every N updates"""
+    train_agent: bool = True
+    """enable or disable training of the agent"""
+
+    # Visualization
+    value_sweep_frequency: int | None = 50
+    """create a value sweep visualization every N updates"""
 
     # Algorithm specific arguments
     env_id: str = "SuperMarioBros-mame-v0"
@@ -154,8 +165,12 @@ def make_env(env_id, idx, capture_video, run_name):
         #     env = FireResetEnv(env)
         env = ClipRewardEnv(env)
         env = gym.wrappers.GrayscaleObservation(env)
-        env = gym.wrappers.ResizeObservation(env, (84, 84))
-        # env = gym.wrappers.ResizeObservation(env, (224, 224))
+
+        if not USE_OBSERVATION_224x224:
+            env = gym.wrappers.ResizeObservation(env, (84, 84))
+        else:
+            env = gym.wrappers.ResizeObservation(env, (224, 224))
+
         env = gym.wrappers.FrameStackObservation(env, 4)
 
         return env
@@ -172,7 +187,8 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 class Agent(nn.Module):
     def __init__(self, envs):
         super().__init__()
-        self.network = nn.Sequential(
+
+        layers = [
             layer_init(nn.Conv2d(4, 32, 8, stride=4)),
             nn.ReLU(),
             layer_init(nn.Conv2d(32, 64, 4, stride=2)),
@@ -180,10 +196,17 @@ class Agent(nn.Module):
             layer_init(nn.Conv2d(64, 64, 3, stride=1)),
             nn.ReLU(),
             nn.Flatten(),
-            layer_init(nn.Linear(64 * 7 * 7, 512)),
-            # layer_init(nn.Linear(64 * 24 * 24, 512)),
-            nn.ReLU(),
-        )
+        ]
+
+        if not USE_OBSERVATION_224x224:
+            # Input size for an input observation of size: 84x84
+            layers.append(layer_init(nn.Linear(64 * 7 * 7, 512)))
+        else:
+            # Input size for an input observation of size: 224x224
+            layers.append(layer_init(nn.Linear(64 * 24 * 24, 512)))
+
+        self.network = nn.Sequential(*layers)
+
         self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
         self.critic = layer_init(nn.Linear(512, 1), std=1)
 
@@ -330,7 +353,7 @@ def main():
 
         steps_end = time.time()
 
-        if True:
+        if args.train_agent:
             optimize_networks_start = time.time()
 
             # bootstrap value if not done
@@ -463,7 +486,7 @@ def main():
                 print(f"Checkpoint done: {time.time() - start_checkpoint:.4f}s")
 
         # Show value sweep.
-        if iteration % 1 == 0:
+        if args.value_sweep_frequency and iteration % args.value_sweep_frequency == 0:
             env = envs.envs[0].unwrapped
             values_sweep_rgb = render_mario_pos_value_sweep(envs=envs, device=device, agent=agent)
             env.screen.set_image(values_sweep_rgb, screen_index=1)

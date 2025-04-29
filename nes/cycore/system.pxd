@@ -80,6 +80,8 @@ cdef class NES:
         object pyaudio_obj
         object clock
 
+    cpdef int get_frame_num(self)
+
     cpdef int step(self, int log_cpu)
     cpdef void run(self)
 

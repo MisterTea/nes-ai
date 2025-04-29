@@ -313,6 +313,12 @@ cdef class NES:
     def reset(self):
         self.cpu.reset()
 
+    def ram(self):
+        return self.memory.ram
+
+    cpdef int get_frame_num(self):
+        return self.frame
+
     cpdef int step(self, int log_cpu):
         """
         The heartbeat of the system.  Run one instruction on the CPU and the corresponding amount of cycles on the
