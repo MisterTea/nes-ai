@@ -123,7 +123,7 @@ def render_mario_pos_value_sweep(envs: Any, device: str, agent: Any):
     w = 240
     h = 224
     env = envs.envs[0].unwrapped
-    ram = env.ai_handler.ram
+    ram = env.nes.ram()
 
     # Sweep mario positions, get value function.
     x_steps = list(range(0, w, 15))
