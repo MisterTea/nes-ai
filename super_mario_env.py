@@ -184,7 +184,9 @@ class SimpleScreen2x1:
         w, h = screen_size
         self.screen_size = screen_size
         self.screen_size_scaled = (w * scale, h * scale)
-        self.window_size = (self.screen_size_scaled[0] * 2, self.screen_size_scaled[1])
+        #self.window_size = (self.screen_size_scaled[0] * 2, self.screen_size_scaled[1])
+
+        self.window_size = (self.screen_size[0] * 2, self.screen_size[1])
 
         self.window = None
 
@@ -220,8 +222,9 @@ class SimpleScreen2x1:
             pygame.display.init()
             self.window = pygame.display.set_mode(self.window_size)
 
-        pygame.transform.scale(surface=self.combined_surf, size=self.window_size, dest_surface=self.combined_surf_scaled)
-        self.window.blit(self.combined_surf_scaled, dest=(0, 0))
+        #pygame.transform.scale(surface=self.combined_surf, size=self.window_size, dest_surface=self.combined_surf_scaled)
+        #self.window.blit(self.combined_surf_scaled, dest=(0, 0))
+        self.window.blit(self.combined_surf, dest=(0, 0))
 
         pygame.event.pump()
         pygame.display.flip()
@@ -415,11 +418,8 @@ class SuperMarioEnv(gym.Env):
         return {}
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
-        print(f"RESETTING???: {self.resets}")
         self.resets += 1
 
-        if self.resets > 10:
-            raise RuntimeError("STOP")
         # TODO(millman): fix seed, etc.
 
         # We need the following line to seed self.np_random
@@ -440,14 +440,15 @@ class SuperMarioEnv(gym.Env):
         info = self._get_info()
 
         self.ale._lives = self.ai_handler.reward_map.lives
+        self.last_observation = observation
 
         return observation, info
 
     def step(self, action_index: int):
         # Wait for level to start.  Does nothing if we're already in a level.
         # Necessary to handle continuing episodes after losing a life.
-        _run_until_level_started(self.ai_handler, self.nes)
-        _run_until_not_dead(self.ai_handler, self.nes)
+        # _run_until_level_started(self.ai_handler, self.nes)
+        # _run_until_not_dead(self.ai_handler, self.nes)
 
         PRINT_CONTROLLER = False
 
@@ -496,19 +497,18 @@ class SuperMarioEnv(gym.Env):
         observation = self._get_obs()
         info = self._get_info()
 
-        # Update screen.
-        self.screen.set_image_np(observation, screen_index=0)
+        self.last_observation = observation
 
         # Show the screen, if requested.
         if self.render_mode == "human":
+            self.screen.set_image_np(observation, screen_index=0)
             self.screen.show()
 
         return observation, reward, terminated, truncated, info
 
     def render(self):
         if self.render_mode == "rgb_array":
-            #return self._build_frame()
-            raise RuntimeError("TODO, be efficient about this?")
+            return self.last_observation
         elif self.render_mode == "human":
             self.screen.show()
             return None
