@@ -227,13 +227,13 @@ class Agent(nn.Module):
         print(o.reshape(1, -1).shape[1])
         self.num_timm_features = o.reshape(1, -1).shape[1]
 
-        self.trunk2 = timm.create_model(
-            IMAGE_MODEL_NAME,
-            pretrained=True,
-            num_classes=0,
-            # global_pool="",
-        )
-        # self.trunk2 = self.trunk
+        # self.trunk2 = timm.create_model(
+        #     IMAGE_MODEL_NAME,
+        #     pretrained=True,
+        #     num_classes=0,
+        #     # global_pool="",
+        # )
+        self.trunk2 = self.trunk
 
         layers = [
             # layer_init(nn.Conv2d(4, 32, 8, stride=4)),
