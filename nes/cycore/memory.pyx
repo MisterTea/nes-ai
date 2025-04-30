@@ -126,8 +126,8 @@ cdef class NESMappedRAM(MemoryBase):
 
     def save(self):
         cdef unsigned char [:] ram = self.ram
-        print("RAM SAVE")
-        print(np.asarray(ram).sum())
+        #print("RAM SAVE")
+        #print(np.asarray(ram).sum())
 
         return (self.ram, self._last_bus)
 

@@ -206,15 +206,52 @@ cdef class NESPPU:
         cdef unsigned char [:] np__nametables
         cdef unsigned char [:] np_palette_ram
 
-        self.ppu_ctrl, self.ppu_mask, self.oam_addr, self.oam_data, self._ppu_data_buffer, self._io_latch, \
-        np_ppu_scroll, self.ppu_addr, self._ppu_byte_latch, \
-        self.line, self.pixel, self.in_vblank, self.sprite_zero_hit, self.sprite_overflow, self.ignore_ppu_ctrl, \
-        self.frames_since_reset, self.time_at_new_frame, self.cycles_since_reset, \
-        np_oam, np__oam, np__active_sprite_addrs, np__sprite_bkg_priority, np__sprite_line, np__sprite_pattern, \
-        self._num_active_sprites, np_irq_tick_triggers, \
-        self._pattern_lo, self._pattern_hi, self._effective_x, self._effective_y, np__palette, \
-        np_screen_buffer, np_hex_palette, self.transparent_color, self.bkg_color, \
-        np__palette_cache, np__palette_cache_valid, np__nametables, np_palette_ram = buffer
+        self.ppu_ctrl = buffer[0]
+        self.ppu_mask = buffer[1]
+        self.oam_addr = buffer[2]
+        self.oam_data = buffer[3]
+        self._ppu_data_buffer = buffer[4]
+        self._io_latch = buffer[5]
+        np_ppu_scroll = buffer[6]
+        self.ppu_addr = buffer[7]
+        self._ppu_byte_latch = buffer[8]
+        self.line = buffer[9]
+        self.pixel = buffer[10]
+        self.in_vblank = buffer[11]
+        self.sprite_zero_hit = buffer[12]
+        self.sprite_overflow = buffer[13]
+        self.ignore_ppu_ctrl = buffer[14]
+
+        self.frames_since_reset = buffer[15]
+        self.time_at_new_frame = buffer[16]
+        self.cycles_since_reset = buffer[17]
+
+        np_oam = buffer[18]
+        np__oam = buffer[19]
+        np__active_sprite_addrs = buffer[20]
+        np__sprite_bkg_priority = buffer[21]
+        np__sprite_line = buffer[22]
+        np__sprite_pattern = buffer[23]
+
+        self._num_active_sprites = buffer[24]
+        np_irq_tick_triggers = buffer[25].astype(np.int32)
+
+        self._pattern_lo = buffer[26]
+        self._pattern_hi = buffer[27]
+        self._effective_x = buffer[28]
+        self._effective_y = buffer[29]
+        np__palette = buffer[30]
+
+        np_screen_buffer = buffer[31]
+        np_hex_palette = buffer[32]
+        self.transparent_color = buffer[33]
+        self.bkg_color = buffer[34]
+
+        np__palette_cache = buffer[35]
+        np__palette_cache_valid = buffer[36]
+        np__nametables = buffer[37]
+        np_palette_ram = buffer[38]
+
 
         ppu_scroll[:] = np_ppu_scroll
         oam[:] = np_oam
