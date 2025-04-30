@@ -19,3 +19,4 @@ PyOpenGL
 stable-baselines3
 gymnasium[all]
 gymnasium[atari]
+tyro
