@@ -4,11 +4,10 @@ import gymnasium as gym
 import numpy as np
 import pygame
 import torch
-
 from PIL import Image
+
 from nes import NES, SYNC_NONE, SYNC_PYGAME
 from nes_ai.ai.base import RewardMap, compute_reward_map
-
 from super_mario_env_ram_hacks import skip_after_step
 
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
@@ -47,6 +46,7 @@ class NesAle:
 #   self.is_pressed[self.RIGHT] = int(state[self.RIGHT])
 CONTROLLER_STATE_DESC = ["A", "B", "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT"]
 
+
 def _describe_controller_vector(is_pressed: NdArrayUint8) -> str:
     pressed = [
         desc
@@ -63,6 +63,7 @@ def _to_controller_presses(buttons: list[str]) -> NdArrayUint8:
         is_pressed[button_index] = 1
     return is_pressed
 
+
 CONTROLLER_NOOP = _to_controller_presses([])
 
 
@@ -71,6 +72,7 @@ SCREEN_H = 224
 
 # Ram size shows up as 2048, but the max value in the RAM map is 34816, which is from NES RAM (2048) + Game (32768).
 RAM_SIZE = 2048
+
 
 class SimpleAiHandler:
     def __init__(self):
@@ -101,20 +103,24 @@ class SimpleAiHandler:
         # Print frame updates.
         if _PRINT_FRAME_INFO:
             if False:
-                always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
+                always_changing_info = (
+                    f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
+                )
                 controller_desc = _describe_controller_vector(controller1.is_pressed)
                 new_info = f"Left pos: {self.reward_map.left_pos:<5} Reward: {self.reward_map} {self.reward_vector} Controller: {controller_desc}"
                 if new_info == self.prev_info:
                     # Clear out old line and display again.
-                    print(always_changing_info + new_info, end='\r', flush=True)
+                    print(always_changing_info + new_info, end="\r", flush=True)
                 else:
                     # New info, start a new line.
-                    print('\n' + always_changing_info + new_info, end='\r', flush=True)
+                    print("\n" + always_changing_info + new_info, end="\r", flush=True)
 
             if False:
                 # For debugging screen positions.
 
-                always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
+                always_changing_info = (
+                    f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
+                )
 
                 # 0x0086	Player x position on screen
                 # 0x006D	Player horizontal position in level
@@ -133,12 +139,12 @@ class SimpleAiHandler:
 
                 new_info = f"level_x={level_x:>3} screen_x={screen_x:>3} screen_offset={screen_offset:>3}"
 
-                if True: # new_info == self.prev_info:
+                if True:  # new_info == self.prev_info:
                     # Clear out old line and display again.
-                    print(always_changing_info + new_info, end='\r', flush=True)
+                    print(always_changing_info + new_info, end="\r", flush=True)
                 else:
                     # New info, start a new line.
-                    print('\n' + always_changing_info + new_info, end='\r', flush=True)
+                    print("\n" + always_changing_info + new_info, end="\r", flush=True)
 
                 self.prev_info = new_info
 
@@ -161,17 +167,18 @@ class SimpleAiHandler:
                 # 0x0C - Transforming to Fire Mario (cannot move)
                 player_state = ram[0x000E]
 
-                always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
+                always_changing_info = (
+                    f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
+                )
 
                 new_info = f"player_state={player_state}"
 
-                if True: # new_info == self.prev_info:
+                if True:  # new_info == self.prev_info:
                     # Clear out old line and display again.
-                    print(always_changing_info + new_info, end='\r', flush=True)
+                    print(always_changing_info + new_info, end="\r", flush=True)
                 else:
                     # New info, start a new line.
-                    print('\n' + always_changing_info + new_info, end='\r', flush=True)
-
+                    print("\n" + always_changing_info + new_info, end="\r", flush=True)
 
         self.frame_num = frame
 
@@ -183,7 +190,7 @@ class SimpleScreen2x1:
         w, h = screen_size
         self.screen_size = screen_size
         self.screen_size_scaled = (w * scale, h * scale)
-        #self.window_size = (self.screen_size_scaled[0] * 2, self.screen_size_scaled[1])
+        # self.window_size = (self.screen_size_scaled[0] * 2, self.screen_size_scaled[1])
 
         self.window_size = (self.screen_size[0] * 2, self.screen_size[1])
 
@@ -200,9 +207,9 @@ class SimpleScreen2x1:
     def get_image(self, screen_index: int) -> Image:
         surf = self.surfs[screen_index]
 
-        data = pygame.image.tostring(surf, 'RGB')
+        data = pygame.image.tostring(surf, "RGB")
         width, height = surf.get_size()
-        image = Image.frombytes(mode='RGB', size=(width, height), data=data)
+        image = Image.frombytes(mode="RGB", size=(width, height), data=data)
 
         return image
 
@@ -211,7 +218,7 @@ class SimpleScreen2x1:
         pygame.surfarray.blit_array(self.surfs[screen_index], image_np)
 
     def set_image(self, image: Image, screen_index: int):
-        assert image.mode == 'RGB', f"Unexpected image mode: {image.mode} != RGB"
+        assert image.mode == "RGB", f"Unexpected image mode: {image.mode} != RGB"
         image_np = np.asarray(image).swapaxes(0, 1)
         pygame.surfarray.blit_array(self.surfs[screen_index], image_np)
 
@@ -221,8 +228,8 @@ class SimpleScreen2x1:
             pygame.display.init()
             self.window = pygame.display.set_mode(self.window_size)
 
-        #pygame.transform.scale(surface=self.combined_surf, size=self.window_size, dest_surface=self.combined_surf_scaled)
-        #self.window.blit(self.combined_surf_scaled, dest=(0, 0))
+        # pygame.transform.scale(surface=self.combined_surf, size=self.window_size, dest_surface=self.combined_surf_scaled)
+        # self.window.blit(self.combined_surf_scaled, dest=(0, 0))
         self.window.blit(self.combined_surf, dest=(0, 0))
 
         pygame.event.pump()
@@ -236,6 +243,7 @@ class SimpleScreen2x1:
 
 _DEBUG_LEVEL_START = False
 
+
 def _debug_level_from_ram(ram: NdArrayUint8, frame_num: int, desc: str):
     if not _DEBUG_LEVEL_START:
         return
@@ -247,7 +255,9 @@ def _debug_level_from_ram(ram: NdArrayUint8, frame_num: int, desc: str):
     level_entry = ram[0x0752]
     before_level_load = ram[0x0753]
     level_loading = ram[0x0772]
-    print(f"{desc}: frame={frame_num} {level=} {game_mode=} {prelevel=} {prelevel_timer=} {level_entry=} {before_level_load=} {level_loading=}")
+    print(
+        f"{desc}: frame={frame_num} {level=} {game_mode=} {prelevel=} {prelevel_timer=} {level_entry=} {before_level_load=} {level_loading=}"
+    )
 
 
 def _skip_start_screen(nes: Any):
@@ -261,10 +271,12 @@ def _skip_start_screen(nes: Any):
     for i in range(34 * 4):
         nes.run_frame()
 
-    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="BEFORE START PRESSED")
+    _debug_level_from_ram(
+        ram, frame_num=nes.get_frame_num(), desc="BEFORE START PRESSED"
+    )
 
     # Press start.
-    nes.controller1.set_state(_to_controller_presses(['start']))
+    nes.controller1.set_state(_to_controller_presses(["start"]))
 
     # Run one frame.
     nes.run_frame()
@@ -276,7 +288,9 @@ def _skip_start_screen(nes: Any):
     # Set controller back to no-op.
     nes.controller1.set_state(_to_controller_presses([]))
 
-    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="AFTER START PRESSED")
+    _debug_level_from_ram(
+        ram, frame_num=nes.get_frame_num(), desc="AFTER START PRESSED"
+    )
 
     # We're now ready to play.
     _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="READY TO PLAY")
@@ -297,22 +311,9 @@ class SuperMarioEnv(gym.Env):
 
         self.clock = None
 
-        self.action_controller_presses = [
-            _to_controller_presses([]),
-            _to_controller_presses(['a']),
-            _to_controller_presses(['b']),
-            _to_controller_presses(['left']),
-            _to_controller_presses(['right']),
-            _to_controller_presses(['a', 'b']),
-            _to_controller_presses(['a', 'left']),
-            _to_controller_presses(['a', 'right']),
-            _to_controller_presses(['b', 'left']),
-            _to_controller_presses(['b', 'right']),
-            _to_controller_presses(['a', 'b', 'left']),
-            _to_controller_presses(['a', 'b', 'right']),
-        ]
-
-        self.action_space = gym.spaces.Discrete(len(self.action_controller_presses))
+        # space 1: left vs right.
+        # space 2: jump vs no jump
+        self.action_space = gym.spaces.MultiDiscrete([2, 2])
 
         # From: https://gymnasium.farama.org/api/spaces/fundamental/
         #
@@ -326,7 +327,9 @@ class SuperMarioEnv(gym.Env):
         # From: nes/ai_handler.py:34
         # self.screen_buffer = torch.zeros((4, 3, 224, 224), dtype=torch.float)
 
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8)
+        self.observation_space = gym.spaces.Box(
+            low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8
+        )
 
         self.ale = NesAle()
 
@@ -339,7 +342,6 @@ class SuperMarioEnv(gym.Env):
             opengl=True,
             audio=False,
             verbose=False,
-
             # TOOD(millman): Testing out using screen from here.
             headless=True,
             show_hud=False,
@@ -353,8 +355,14 @@ class SuperMarioEnv(gym.Env):
         screen_view = self.nes.get_screen_view()
         screen_view_np = self._screen_view_to_np(screen_view)
 
-        assert screen_view_np.shape == (SCREEN_W, SCREEN_H, 3), f"Unexpected screen_view_np.shape: {screen_view_np.shape} != {(SCREEN_W, SCREEN_H, 3)}"
-        assert screen_view_np.dtype == np.uint8, f"Unexpected screen_view_np.dtype: {screen_view_np.dtype} != {np.uint8}"
+        assert screen_view_np.shape == (
+            SCREEN_W,
+            SCREEN_H,
+            3,
+        ), f"Unexpected screen_view_np.shape: {screen_view_np.shape} != {(SCREEN_W, SCREEN_H, 3)}"
+        assert (
+            screen_view_np.dtype == np.uint8
+        ), f"Unexpected screen_view_np.dtype: {screen_view_np.dtype} != {np.uint8}"
 
         return screen_view_np
 
@@ -394,11 +402,19 @@ class SuperMarioEnv(gym.Env):
 
         return observation, info
 
-    def step(self, action_index: int):
+    def step(self, actions: tuple[int, int]):
+        if isinstance(actions, int):
+            actions = (0, 0)
+
+        left_right, jump_nojump = actions
         PRINT_CONTROLLER = False
+        if PRINT_CONTROLLER:
+            print("Action:", actions)
 
         if PRINT_CONTROLLER:
-            controller_desc = _describe_controller_vector(self.nes.controller1.is_pressed)
+            controller_desc = _describe_controller_vector(
+                self.nes.controller1.is_pressed
+            )
             print(f"Controller before: {controller_desc}")
 
         # Read the controller from the keyboard.
@@ -408,11 +424,22 @@ class SuperMarioEnv(gym.Env):
         # If user pressed anything, avoid applying actions.
         if any(self.nes.controller1.is_pressed):
             if PRINT_CONTROLLER:
-                controller_desc = _describe_controller_vector(self.nes.controller1.is_pressed)
+                controller_desc = _describe_controller_vector(
+                    self.nes.controller1.is_pressed
+                )
                 print(f"Controller (user pressed): {controller_desc}")
         else:
             # Convert an action_index into a specific set of controller actions.
-            action = np.array(self.action_controller_presses[action_index])
+            buttons = ["b"]
+            assert left_right in [0, 1], f"Unexpected left_right: {left_right}"
+            assert jump_nojump in [0, 1], f"Unexpected jump_nojump: {jump_nojump}"
+            if jump_nojump == 1:
+                buttons.append("a")
+            if left_right == 1:
+                buttons.append("right")
+            elif left_right == 0:
+                buttons.append("left")
+            action = np.array(_to_controller_presses(buttons))
 
             if False:
                 # Set fixed action, for testing.
@@ -426,7 +453,9 @@ class SuperMarioEnv(gym.Env):
             self.nes.controller1.set_state(action)
 
         if PRINT_CONTROLLER:
-            controller_desc = _describe_controller_vector(self.nes.controller1.is_pressed)
+            controller_desc = _describe_controller_vector(
+                self.nes.controller1.is_pressed
+            )
             print(f"Controller after: {controller_desc}")
 
         # Take a step in the emulator.
@@ -465,7 +494,10 @@ class SuperMarioEnv(gym.Env):
 
     @staticmethod
     def _screen_view_to_np(screen_view: Any) -> NdArrayRGB8:
-        assert screen_view.shape == (240, 224), f"Unexpected screen_view shape: {screen_view.shape} != {(240, 224)}"
+        assert screen_view.shape == (
+            240,
+            224,
+        ), f"Unexpected screen_view shape: {screen_view.shape} != {(240, 224)}"
 
         # NOTE: These operations are carefully constructed to avoid memory copies, they are all views.
         #   Starting type is: (240, 224) uint32 as BGRA.
@@ -477,15 +509,26 @@ class SuperMarioEnv(gym.Env):
         screen_view_rgb = screen_view_bgr[:, :, ::-1]
 
         if False:
+
             def _is_copy(arr):
-                return 'view' if arr.base is not None else 'new'
+                return "view" if arr.base is not None else "new"
 
             print()
-            print(f"SCREEN VIEW: type={type(screen_view)} shape={screen_view.shape} size={screen_view.size} base={_is_copy(screen_view)}")
-            print(f"SCREEN VIEW NP: shape={screen_view_np.shape} size={screen_view_np.size} cont={screen_view_np.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_np)}")
-            print(f"SCREEN VIEW BGRA: shape={screen_view_bgra.shape} size={screen_view_bgra.size} cont={screen_view_bgra.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_bgra)}")
-            print(f"SCREEN VIEW BGR: shape={screen_view_bgr.shape} size={screen_view_bgr.size} cont={screen_view_bgr.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_bgr)}")
-            print(f"SCREEN VIEW RGB: shape={screen_view_rgb.shape} size={screen_view_rgb.size} cont={screen_view_rgb.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_rgb)}")
+            print(
+                f"SCREEN VIEW: type={type(screen_view)} shape={screen_view.shape} size={screen_view.size} base={_is_copy(screen_view)}"
+            )
+            print(
+                f"SCREEN VIEW NP: shape={screen_view_np.shape} size={screen_view_np.size} cont={screen_view_np.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_np)}"
+            )
+            print(
+                f"SCREEN VIEW BGRA: shape={screen_view_bgra.shape} size={screen_view_bgra.size} cont={screen_view_bgra.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_bgra)}"
+            )
+            print(
+                f"SCREEN VIEW BGR: shape={screen_view_bgr.shape} size={screen_view_bgr.size} cont={screen_view_bgr.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_bgr)}"
+            )
+            print(
+                f"SCREEN VIEW RGB: shape={screen_view_rgb.shape} size={screen_view_rgb.size} cont={screen_view_rgb.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_rgb)}"
+            )
 
         return screen_view_rgb
 

@@ -17,9 +17,11 @@ import torch.nn as nn
 import torch.optim as optim
 import tyro
 from gymnasium.envs.registration import register
+from torch.distributions.bernoulli import Bernoulli
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
+from nes_ai.action_history_wrapper import ActionHistoryWrapper
 from super_mario_env import SuperMarioEnv
 from super_mario_env_viz import render_mario_pos_value_sweep
 
@@ -146,6 +148,9 @@ class Args:
     """the number of iterations (computed in runtime)"""
 
 
+IMAGE_DIM = 224
+
+
 def make_env(env_id, idx, capture_video, run_name):
     def thunk():
         if capture_video and idx == 0:
@@ -166,12 +171,11 @@ def make_env(env_id, idx, capture_video, run_name):
         env = ClipRewardEnv(env)
         # env = gym.wrappers.GrayscaleObservation(env)
 
-        if not USE_OBSERVATION_224x224:
-            env = gym.wrappers.ResizeObservation(env, (84, 84))
-        else:
-            env = gym.wrappers.ResizeObservation(env, (224, 224))
+        env = gym.wrappers.ResizeObservation(env, (IMAGE_DIM, IMAGE_DIM))
 
         env = gym.wrappers.FrameStackObservation(env, 4)
+
+        # env = ActionHistoryWrapper(env, 4)
 
         return env
 
@@ -187,16 +191,49 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 # IMAGE_MODEL_NAME = "levit_128s.fb_dist_in1k"
 # IMAGE_MODEL_NAME = "levit_256.fb_dist_in1k"
 # IMAGE_MODEL_NAME = "vit_tiny_patch16_224"
-IMAGE_MODEL_NAME = "vit_tiny_patch16_224.augreg_in21k_ft_in1k"
+# IMAGE_MODEL_NAME = "vit_tiny_patch16_224.augreg_in21k_ft_in1k"
+# IMAGE_MODEL_NAME = "eva_giant_patch14_224.clip_ft_in1k"
 # IMAGE_MODEL_NAME = "vit_small_patch32_224.augreg_in21k_ft_in1k"
 # IMAGE_MODEL_NAME = "efficientvit_m5.r224_in1k"
+# IMAGE_MODEL_NAME = "beitv2_large_patch16_224.in1k_ft_in22k_in1k"
+# IMAGE_MODEL_NAME = "tinynet_e.in1k"
+
+# IMAGE_MODEL_NAME = "deit3_small_patch16_224.fb_in22k_ft_in1k"
+
+# Works pretty well
+# IMAGE_MODEL_NAME = "mobilenetv3_small_050.lamb_in1k"
+
+# Bigger mobilenet
+# IMAGE_MODEL_NAME = "mobilenetv4_hybrid_medium.e500_r224_in1k"
+
+# IMAGE_MODEL_NAME = "vit_base_patch16_224.dino"
+
+
+# Smallest mobilenet
+IMAGE_MODEL_NAME = "mobilenetv3_small_050.lamb_in1k"
 
 
 class Agent(nn.Module):
     def __init__(self, envs):
         super().__init__()
 
-        self.trunk = timm.create_model(IMAGE_MODEL_NAME, pretrained=True, num_classes=0)
+        self.trunk = timm.create_model(
+            IMAGE_MODEL_NAME,
+            pretrained=True,
+            num_classes=0,
+            # global_pool="",
+        )
+        o = self.trunk(torch.randn(1, 3, 224, 224))
+        print(o.reshape(1, -1).shape[1])
+        self.num_timm_features = o.reshape(1, -1).shape[1]
+
+        # self.trunk2 = timm.create_model(
+        #     IMAGE_MODEL_NAME,
+        #     pretrained=True,
+        #     num_classes=0,
+        #     # global_pool="",
+        # )
+        self.trunk2 = self.trunk
 
         layers = [
             # layer_init(nn.Conv2d(4, 32, 8, stride=4)),
@@ -208,42 +245,66 @@ class Agent(nn.Module):
             # nn.Flatten(),
         ]
 
-        if not USE_OBSERVATION_224x224:
-            # Input size for an input observation of size: 84x84
-            layers.append(layer_init(nn.Linear(self.trunk.num_features * 4, 512)))
-        else:
-            # Input size for an input observation of size: 224x224
-            layers.append(layer_init(nn.Linear(self.trunk.num_features * 4, 512)))
+        layers.append(layer_init(nn.Linear(self.num_timm_features * 4, 512)))
 
         self.network = nn.Sequential(*layers)
 
-        self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
+        self.actor = layer_init(nn.Linear(512, 2), std=0.01)
         self.critic = layer_init(nn.Linear(512, 1), std=1)
 
     def forward_trunk(self, x):
         # convert from (batch, frames, H, W, C) to (batch, frames, C, H, W)
         batch_size = x.shape[0]
         num_frames = x.shape[1]
-        x = x.permute(0, 1, 4, 2, 3)
-        assert x.shape[1:] == (4, 3, 224, 224), f"{x.shape}"
+        x = x.permute(0, 1, 4, 2, 3).contiguous()
+        assert x.shape[1:] == (4, 3, IMAGE_DIM, IMAGE_DIM), f"{x.shape}"
         # print(x.shape)
-        hidden = self.trunk(x.reshape(-1, 3, 224, 224) / 255.0).reshape(batch_size, -1)
-        # print(hidden.shape)
+        # print(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM).shape)
+        hidden = self.trunk(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0).reshape(
+            batch_size, -1
+        )
+        # print(self.trunk(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0).shape)
+        # print(hidden.shape, self.num_timm_features)
         hidden = self.network(hidden)
-        return hidden
+
+        if self.trunk == self.trunk2:
+            hidden2 = hidden
+        else:
+            hidden2 = self.trunk2(
+                x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0
+            ).reshape(batch_size, -1)
+            # print(self.trunk(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0).shape)
+            # print(hidden.shape, self.num_timm_features)
+            hidden2 = self.network(hidden2)
+
+        return hidden, hidden2
 
     def get_value(self, x):
-        hidden = self.forward_trunk(x)
+        hidden, _ = self.forward_trunk(x)
         return self.critic(hidden)
 
     def get_action_and_value(self, x, action=None):
-        hidden = self.forward_trunk(x)
+        hidden, hidden2 = self.forward_trunk(x)
         # print(hidden.shape)
-        logits = self.actor(hidden)
-        probs = Categorical(logits=logits)
+        logits = self.actor(hidden2)
+
+        probs1 = Bernoulli(logits=logits[:, 0:1])
+        probs2 = Bernoulli(logits=logits[:, 1:2])
+
+        # print(f"probs1: {probs1.probs}")
+        # print(f"probs2: {probs2.probs}")
+
         if action is None:
-            action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
+            action = torch.cat((probs1.sample(), probs2.sample()), dim=1)
+        # print(f"action: {action}, {action.dtype}")
+
+        return (
+            action,
+            probs1.log_prob(action[:, 0].float())
+            + probs2.log_prob(action[:, 1].float()),
+            probs1.entropy() + probs2.entropy(),
+            self.critic(hidden),
+        )
 
 
 def main():
@@ -310,9 +371,9 @@ def main():
             for i in range(args.num_envs)
         ],
     )
-    assert isinstance(
-        envs.single_action_space, gym.spaces.Discrete
-    ), "only discrete action space is supported"
+    # assert isinstance(
+    #     envs.single_action_space, gym.spaces.Discrete
+    # ), "only discrete action space is supported"
 
     agent = Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
