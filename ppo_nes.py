@@ -170,13 +170,13 @@ def make_env(env_id, idx, capture_video, run_name):
         # if "FIRE" in env.unwrapped.get_action_meanings():
         #     env = FireResetEnv(env)
         env = ClipRewardEnv(env)
-        # env = gym.wrappers.GrayscaleObservation(env)
+        env = gym.wrappers.GrayscaleObservation(env)
 
         env = gym.wrappers.ResizeObservation(env, (IMAGE_DIM, IMAGE_DIM))
 
         env = gym.wrappers.FrameStackObservation(env, 4)
 
-        # env = ActionHistoryWrapper(env, 4)
+        env = ActionHistoryWrapper(env, 3)
 
         return env
 
@@ -222,78 +222,61 @@ class Agent(nn.Module):
     def __init__(self, envs):
         super().__init__()
 
-        self.trunk = timm.create_model(
-            IMAGE_MODEL_NAME,
-            pretrained=True,
-            num_classes=0,
-            # global_pool="",
-        )
-        o = self.trunk(torch.randn(1, 3, IMAGE_DIM, IMAGE_DIM))
-        print(o.reshape(1, -1).shape[1])
-        self.num_timm_features = o.reshape(1, -1).shape[1]
-
-        self.trunk2 = timm.create_model(
-            IMAGE_MODEL_NAME,
-            pretrained=True,
-            num_classes=0,
-            # global_pool="",
-        )
-        # self.trunk2 = self.trunk
-
         layers = [
-            # layer_init(nn.Conv2d(4, 32, 8, stride=4)),
-            # nn.ReLU(),
-            # layer_init(nn.Conv2d(32, 64, 4, stride=2)),
-            # nn.ReLU(),
-            # layer_init(nn.Conv2d(64, 64, 3, stride=1)),
-            # nn.ReLU(),
-            # nn.Flatten(),
+            layer_init(nn.Conv2d(4, 32, 8, stride=4)),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
+            nn.ReLU(),
+            nn.Flatten(),
         ]
 
-        layers.append(layer_init(nn.Linear(self.num_timm_features * 4, 512)))
-        layers.append(layer_init(nn.Linear(512, 256)))
-        layers.append(layer_init(nn.Linear(256, 128)))
+        layers.append(layer_init(nn.Linear(64 * 24 * 24, 512)))
 
         self.network = nn.Sequential(*layers)
 
-        self.actor = layer_init(nn.Linear(128, 2), std=0.01)
-        self.critic = layer_init(nn.Linear(128, 1), std=1)
+        self.actor = layer_init(nn.Linear(512 + (3 * 2), 2), std=0.01)
+        self.critic = layer_init(nn.Linear(512 + (3 * 2), 1), std=1)
 
-    def forward_trunk(self, x):
-        # convert from (batch, frames, H, W, C) to (batch, frames, C, H, W)
-        batch_size = x.shape[0]
-        num_frames = x.shape[1]
-        x = x.permute(0, 1, 4, 2, 3).contiguous()
-        assert x.shape[1:] == (4, 3, IMAGE_DIM, IMAGE_DIM), f"{x.shape}"
-        # print(x.shape)
-        # print(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM).shape)
-        hidden = self.trunk(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0).reshape(
-            batch_size, -1
-        )
-        # print(self.trunk(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0).shape)
-        # print(hidden.shape, self.num_timm_features)
-        hidden = self.network(hidden)
+    # def forward_trunk(self, x):
+    #     # convert from (batch, frames, H, W, C) to (batch, frames, C, H, W)
+    #     batch_size = x.shape[0]
+    #     num_frames = x.shape[1]
+    #     x = x.permute(0, 1, 4, 2, 3).contiguous()
+    #     assert x.shape[1:] == (4, 3, IMAGE_DIM, IMAGE_DIM), f"{x.shape}"
+    #     # print(x.shape)
+    #     # print(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM).shape)
+    #     hidden = self.trunk(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0).reshape(
+    #         batch_size, -1
+    #     )
+    #     # print(self.trunk(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0).shape)
+    #     # print(hidden.shape, self.num_timm_features)
+    #     hidden = self.network(hidden)
 
-        if self.trunk == self.trunk2:
-            hidden2 = hidden
-        else:
-            hidden2 = self.trunk2(
-                x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0
-            ).reshape(batch_size, -1)
-            # print(self.trunk(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0).shape)
-            # print(hidden.shape, self.num_timm_features)
-            hidden2 = self.network(hidden2)
+    #     if self.trunk == self.trunk2:
+    #         hidden2 = hidden
+    #     else:
+    #         hidden2 = self.trunk2(
+    #             x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0
+    #         ).reshape(batch_size, -1)
+    #         # print(self.trunk(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0).shape)
+    #         # print(hidden.shape, self.num_timm_features)
+    #         hidden2 = self.network(hidden2)
 
-        return hidden, hidden2
+    #     return hidden, hidden2
 
-    def get_value(self, x):
-        hidden, _ = self.forward_trunk(x)
-        return self.critic(hidden)
+    def get_value(self, x, x_past_actions):
+        return self.critic(torch.cat((self.network(x / 255.0), x_past_actions), dim=1))
 
-    def get_action_and_value(self, x, action=None):
-        hidden, hidden2 = self.forward_trunk(x)
+    def get_action_and_value(self, x, x_past_actions, action=None):
+        assert x_past_actions.shape == (
+            x.shape[0],
+            3 * 2,
+        ), f"{x_past_actions.shape} != {(x.shape[0], 3 * 2)}"
+        hidden = torch.cat((self.network(x / 255.0), x_past_actions), dim=1)
         # print(hidden.shape)
-        logits = self.actor(hidden2)
+        logits = self.actor(hidden)
 
         probs1 = Bernoulli(logits=logits[:, 0:1])
         probs2 = Bernoulli(logits=logits[:, 1:2])
@@ -387,8 +370,9 @@ def main():
 
     # ALGO Logic: Storage setup
     obs = torch.zeros(
-        (args.num_steps, args.num_envs) + envs.single_observation_space.shape
+        (args.num_steps, args.num_envs) + envs.single_observation_space[0].shape
     ).to(device)
+    obs_action = torch.zeros((args.num_steps, args.num_envs, 6)).to(device)
     actions = torch.zeros(
         (args.num_steps, args.num_envs) + envs.single_action_space.shape
     ).to(device)
@@ -402,7 +386,8 @@ def main():
     start_time = time.time()
     next_obs, _ = envs.reset(seed=args.seed)
 
-    next_obs = torch.Tensor(next_obs).to(device)
+    next_obs = torch.Tensor(next_obs[0]).to(device)
+    next_obs_action = torch.zeros((args.num_envs, 6), dtype=torch.float32).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
 
     if args.track and run.resumed:
@@ -435,24 +420,32 @@ def main():
         for step in range(0, args.num_steps):
             global_step += args.num_envs
             obs[step] = next_obs
+            obs_action[step] = next_obs_action
             dones[step] = next_done
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                action, logprob, _, value = agent.get_action_and_value(next_obs)
+                action, logprob, _, value = agent.get_action_and_value(
+                    next_obs, next_obs_action
+                )
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
 
             # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, terminations, truncations, infos = envs.step(
+            next_obs_pair, reward, terminations, truncations, infos = envs.step(
                 action.cpu().numpy()
             )
+            next_obs = next_obs_pair[0]
+            next_obs_action[0, :] = torch.from_numpy(next_obs_pair[1][0]).to(
+                next_obs.device
+            )  # TODO: Probably a better way of doing this
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(torch.float32).to(device).view(-1)
 
             # NOTE: Silent conversion to float32 for Tensor.
             next_obs = torch.Tensor(next_obs).to(device)
+            next_obs_action = torch.Tensor(next_obs_action).to(device)
             next_done = torch.Tensor(next_done).to(device)
 
             if "final_info" in infos:
@@ -475,7 +468,7 @@ def main():
 
             # bootstrap value if not done
             with torch.no_grad():
-                next_value = agent.get_value(next_obs).reshape(1, -1)
+                next_value = agent.get_value(next_obs, next_obs_action).reshape(1, -1)
                 advantages = torch.zeros_like(rewards).to(device)
                 lastgaelam = 0
                 for t in reversed(range(args.num_steps)):
@@ -497,7 +490,8 @@ def main():
                 returns = advantages + values
 
             # flatten the batch
-            b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
+            b_obs = obs.reshape((-1,) + envs.single_observation_space[0].shape)
+            b_obs_action = obs_action.reshape((-1, 6))
             b_logprobs = logprobs.reshape(-1)
             b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
             b_advantages = advantages.reshape(-1)
@@ -519,7 +513,7 @@ def main():
                     mb_inds = b_inds[start:end]
 
                     _, newlogprob, entropy, newvalue = agent.get_action_and_value(
-                        b_obs[mb_inds], b_actions.long()[mb_inds]
+                        b_obs[mb_inds], b_obs_action[mb_inds], b_actions.long()[mb_inds]
                     )
                     logratio = newlogprob - b_logprobs[mb_inds]
                     ratio = logratio.exp()
