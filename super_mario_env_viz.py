@@ -82,7 +82,16 @@ def _set_mario_pos_in_ram(ram: NdArrayUint8, x: int, y: int, xvel: int, yvel: in
     ram[0x0433] = 0
 
 
-def _get_value_at_offset(ram: NdArrayUint8, envs: Any, device: str, agent: Any, x: int, y: int, xvel: int, yvel: int) -> tuple[float, Any]:
+def _get_value_at_offset(
+    ram: NdArrayUint8,
+    envs: Any,
+    device: str,
+    agent: Any,
+    x: int,
+    y: int,
+    xvel: int,
+    yvel: int,
+) -> tuple[float, Any]:
     # Put Mario into position and render.
     #   1. Set RAM.
     #   2. Step.
@@ -97,7 +106,7 @@ def _get_value_at_offset(ram: NdArrayUint8, envs: Any, device: str, agent: Any, 
 
     # Use no-op action.
     action_index = 0
-    action_np = np.array([action_index], dtype=np.int64)
+    action_np = np.array([[action_index, action_index]], dtype=np.int64)
 
     # Step environment.
     #   next_obs.shape: torch.Size([1, 4, 84, 84])
@@ -134,7 +143,9 @@ def render_mario_pos_value_sweep(envs: Any, device: str, agent: Any):
 
     for j, y in enumerate(y_steps):
         for i, x in enumerate(x_steps):
-            value, obs = _get_value_at_offset(ram=ram, envs=envs, device=device, agent=agent, x=x, y=y, xvel=0, yvel=0)
+            value, obs = _get_value_at_offset(
+                ram=ram, envs=envs, device=device, agent=agent, x=x, y=y, xvel=0, yvel=0
+            )
             values_grid[j][i] = value
 
     # Normalize values to 0-255.
@@ -144,32 +155,39 @@ def render_mario_pos_value_sweep(envs: Any, device: str, agent: Any):
 
     # Convert values to grayscale image.
     if _TEST_RANDOM_IMAGE := False:
-        #values_image_np_uint8 = np.random.randint(0, 256, size=(h, w), dtype=np.uint8)
+        # values_image_np_uint8 = np.random.randint(0, 256, size=(h, w), dtype=np.uint8)
         values_image_np_uint8 = np.random.randint(200, 256, size=(h, w), dtype=np.uint8)
     else:
         values_image_np_uint8 = (values_normalized * 255).astype(np.uint8)
 
-    values_gray = Image.fromarray(values_image_np_uint8, mode='L').resize((w, h), resample=Image.Resampling.NEAREST)
+    values_gray = Image.fromarray(values_image_np_uint8, mode="L").resize(
+        (w, h), resample=Image.Resampling.NEAREST
+    )
 
     # Convert to RGB.
-    values_rgba = values_gray.convert('RGBA')
-    assert values_rgba.size == (w, h), f"Unexpected values_rgba.size: {values_rgba.size} != {(w,h)}"
+    values_rgba = values_gray.convert("RGBA")
+    assert values_rgba.size == (
+        w,
+        h,
+    ), f"Unexpected values_rgba.size: {values_rgba.size} != {(w,h)}"
 
     # Create an image of the regular screen, with high alpha.
     if False:
         obs_np = obs[-1][-1].to(torch.uint8).numpy()
-        obs_grayscale = Image.fromarray(obs_np, mode='L').resize((w, h), resample=Image.Resampling.NEAREST)
-        obs_rgba = obs_grayscale.convert('RGBA')
+        obs_grayscale = Image.fromarray(obs_np, mode="L").resize(
+            (w, h), resample=Image.Resampling.NEAREST
+        )
+        obs_rgba = obs_grayscale.convert("RGBA")
         obs_rgba.putalpha(int(0.25 * 256))
     else:
         obs_image = env.screen.get_image(screen_index=0)
-        obs_rgba = obs_image.convert('RGBA')
+        obs_rgba = obs_image.convert("RGBA")
         obs_rgba.putalpha(int(0.15 * 256))
 
     # Paste the current observation onto the image.  Take the mask from the alpha values.
     values_rgba.paste(obs_rgba, (0, 0), mask=obs_rgba)
 
     # Set screen values.
-    values_rgb = values_rgba.convert('RGB')
+    values_rgb = values_rgba.convert("RGB")
 
     return values_rgb

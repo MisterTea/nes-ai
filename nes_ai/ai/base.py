@@ -55,10 +55,12 @@ class RewardMap(BaseModel):
     @staticmethod
     def combine_reward_vector_single(reward_vector) -> float:
         expected_shape = (REWARD_VECTOR_SIZE,)
-        assert reward_vector.shape == expected_shape, f"Unexpected reward_vector.shape: {reward_vector.shape} != {expected_shape}"
+        assert (
+            reward_vector.shape == expected_shape
+        ), f"Unexpected reward_vector.shape: {reward_vector.shape} != {expected_shape}"
         retval = (
             (100 * reward_vector[RewardIndex.SCORE])
-            + (1 * reward_vector[RewardIndex.TIME_LEFT])
+            + (0 * reward_vector[RewardIndex.TIME_LEFT])
             + (100 * reward_vector[RewardIndex.COINS])
             + (0 * reward_vector[RewardIndex.LIVES])
             + (10000 * reward_vector[RewardIndex.WORLD])
@@ -66,18 +68,23 @@ class RewardMap(BaseModel):
             + (1 * reward_vector[RewardIndex.LEFT_POS])
             + (0 * reward_vector[RewardIndex.TOP_POS])
             + (10000 * reward_vector[RewardIndex.POWERUP_LEVEL])
+            - 0.01  # penalty for spending time.  Use this instead of time_left
         ).item()
 
         if type(retval) is not float:
             print(f"Unexpected reward retval: {type(retval)} != float, {retval=}")
 
-        assert type(retval) is float, f"Unexpected reward retval: {type(retval)} != float"
+        assert (
+            type(retval) is float
+        ), f"Unexpected reward retval: {type(retval)} != float"
         return retval
 
     @staticmethod
     def combine_reward_vector(reward_vector):
         expected_shape = (REWARD_VECTOR_SIZE, 1)
-        assert reward_vector.shape == expected_shape, f"Unexpected reward_vector.shape: {reward_vector.shape} != {expected_shape}"
+        assert (
+            reward_vector.shape == expected_shape
+        ), f"Unexpected reward_vector.shape: {reward_vector.shape} != {expected_shape}"
         retval = (
             (100 * reward_vector[:, RewardIndex.SCORE])
             + (1 * reward_vector[:, RewardIndex.TIME_LEFT])
