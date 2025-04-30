@@ -65,7 +65,7 @@ class RewardMap(BaseModel):
             + (0 * reward_vector[RewardIndex.LIVES])
             + (10000 * reward_vector[RewardIndex.WORLD])
             + (10000 * reward_vector[RewardIndex.LEVEL])
-            + (1 * reward_vector[RewardIndex.LEFT_POS])
+            + (0.1 * reward_vector[RewardIndex.LEFT_POS])
             + (0 * reward_vector[RewardIndex.TOP_POS])
             + (10000 * reward_vector[RewardIndex.POWERUP_LEVEL])
             - 0.01  # penalty for spending time.  Use this instead of time_left

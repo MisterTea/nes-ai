@@ -149,6 +149,7 @@ class Args:
 
 
 IMAGE_DIM = 224
+# IMAGE_DIM = 512
 
 
 def make_env(env_id, idx, capture_video, run_name):
@@ -204,13 +205,17 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 # IMAGE_MODEL_NAME = "mobilenetv3_small_050.lamb_in1k"
 
 # Bigger mobilenet
-# IMAGE_MODEL_NAME = "mobilenetv4_hybrid_medium.e500_r224_in1k"
+# IMAGE_MODEL_NAME = "mobilenet_edgetpu_v2_m.ra4_e3600_r224_in1k"
 
 # IMAGE_MODEL_NAME = "vit_base_patch16_224.dino"
 
 
 # Smallest mobilenet
-IMAGE_MODEL_NAME = "mobilenetv3_small_050.lamb_in1k"
+# IMAGE_MODEL_NAME = "mobilenetv3_small_050.lamb_in1k"
+
+# IMAGE_MODEL_NAME = "maxvit_tiny_tf_512.in1k"
+
+IMAGE_MODEL_NAME = "resnet50"
 
 
 class Agent(nn.Module):
@@ -223,17 +228,17 @@ class Agent(nn.Module):
             num_classes=0,
             # global_pool="",
         )
-        o = self.trunk(torch.randn(1, 3, 224, 224))
+        o = self.trunk(torch.randn(1, 3, IMAGE_DIM, IMAGE_DIM))
         print(o.reshape(1, -1).shape[1])
         self.num_timm_features = o.reshape(1, -1).shape[1]
 
-        # self.trunk2 = timm.create_model(
-        #     IMAGE_MODEL_NAME,
-        #     pretrained=True,
-        #     num_classes=0,
-        #     # global_pool="",
-        # )
-        self.trunk2 = self.trunk
+        self.trunk2 = timm.create_model(
+            IMAGE_MODEL_NAME,
+            pretrained=True,
+            num_classes=0,
+            # global_pool="",
+        )
+        # self.trunk2 = self.trunk
 
         layers = [
             # layer_init(nn.Conv2d(4, 32, 8, stride=4)),
@@ -246,11 +251,13 @@ class Agent(nn.Module):
         ]
 
         layers.append(layer_init(nn.Linear(self.num_timm_features * 4, 512)))
+        layers.append(layer_init(nn.Linear(512, 256)))
+        layers.append(layer_init(nn.Linear(256, 128)))
 
         self.network = nn.Sequential(*layers)
 
-        self.actor = layer_init(nn.Linear(512, 2), std=0.01)
-        self.critic = layer_init(nn.Linear(512, 1), std=1)
+        self.actor = layer_init(nn.Linear(128, 2), std=0.01)
+        self.critic = layer_init(nn.Linear(128, 1), std=1)
 
     def forward_trunk(self, x):
         # convert from (batch, frames, H, W, C) to (batch, frames, C, H, W)
