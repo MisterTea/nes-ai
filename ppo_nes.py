@@ -11,12 +11,18 @@ from datetime import datetime
 
 import gymnasium as gym
 import numpy as np
+import timm
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import tyro
+from gymnasium.envs.registration import register
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
+
+from super_mario_env import SuperMarioEnv
+from super_mario_env_viz import render_mario_pos_value_sweep
+
 from stable_baselines3.common.atari_wrappers import (  # isort:skip
     ClipRewardEnv,
     EpisodicLifeEnv,
@@ -25,11 +31,6 @@ from stable_baselines3.common.atari_wrappers import (  # isort:skip
     NoopResetEnv,
 )
 
-
-from super_mario_env import SuperMarioEnv
-from super_mario_env_viz import render_mario_pos_value_sweep
-
-from gymnasium.envs.registration import register
 
 register(
     id="SuperMarioBros-mame-v0",
@@ -41,8 +42,7 @@ register(
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 
 
-
-USE_OBSERVATION_224x224 = False
+USE_OBSERVATION_224x224 = True
 
 
 @dataclass
@@ -158,13 +158,13 @@ def make_env(env_id, idx, capture_video, run_name):
         print(f"RENDER MODE: {env.render_mode}")
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
-        #env = NoopResetEnv(env, noop_max=30)
+        # env = NoopResetEnv(env, noop_max=30)
         env = MaxAndSkipEnv(env, skip=4)
         env = EpisodicLifeEnv(env)
         # if "FIRE" in env.unwrapped.get_action_meanings():
         #     env = FireResetEnv(env)
         env = ClipRewardEnv(env)
-        env = gym.wrappers.GrayscaleObservation(env)
+        # env = gym.wrappers.GrayscaleObservation(env)
 
         if not USE_OBSERVATION_224x224:
             env = gym.wrappers.ResizeObservation(env, (84, 84))
@@ -184,37 +184,61 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
+# IMAGE_MODEL_NAME = "levit_128s.fb_dist_in1k"
+# IMAGE_MODEL_NAME = "levit_256.fb_dist_in1k"
+# IMAGE_MODEL_NAME = "vit_tiny_patch16_224"
+IMAGE_MODEL_NAME = "vit_tiny_patch16_224.augreg_in21k_ft_in1k"
+# IMAGE_MODEL_NAME = "vit_small_patch32_224.augreg_in21k_ft_in1k"
+# IMAGE_MODEL_NAME = "efficientvit_m5.r224_in1k"
+
+
 class Agent(nn.Module):
     def __init__(self, envs):
         super().__init__()
 
+        self.trunk = timm.create_model(IMAGE_MODEL_NAME, pretrained=True, num_classes=0)
+
         layers = [
-            layer_init(nn.Conv2d(4, 32, 8, stride=4)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
-            nn.ReLU(),
-            nn.Flatten(),
+            # layer_init(nn.Conv2d(4, 32, 8, stride=4)),
+            # nn.ReLU(),
+            # layer_init(nn.Conv2d(32, 64, 4, stride=2)),
+            # nn.ReLU(),
+            # layer_init(nn.Conv2d(64, 64, 3, stride=1)),
+            # nn.ReLU(),
+            # nn.Flatten(),
         ]
 
         if not USE_OBSERVATION_224x224:
             # Input size for an input observation of size: 84x84
-            layers.append(layer_init(nn.Linear(64 * 7 * 7, 512)))
+            layers.append(layer_init(nn.Linear(self.trunk.num_features * 4, 512)))
         else:
             # Input size for an input observation of size: 224x224
-            layers.append(layer_init(nn.Linear(64 * 24 * 24, 512)))
+            layers.append(layer_init(nn.Linear(self.trunk.num_features * 4, 512)))
 
         self.network = nn.Sequential(*layers)
 
         self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
         self.critic = layer_init(nn.Linear(512, 1), std=1)
 
+    def forward_trunk(self, x):
+        # convert from (batch, frames, H, W, C) to (batch, frames, C, H, W)
+        batch_size = x.shape[0]
+        num_frames = x.shape[1]
+        x = x.permute(0, 1, 4, 2, 3)
+        assert x.shape[1:] == (4, 3, 224, 224), f"{x.shape}"
+        # print(x.shape)
+        hidden = self.trunk(x.reshape(-1, 3, 224, 224) / 255.0).reshape(batch_size, -1)
+        # print(hidden.shape)
+        hidden = self.network(hidden)
+        return hidden
+
     def get_value(self, x):
-        return self.critic(self.network(x / 255.0))
+        hidden = self.forward_trunk(x)
+        return self.critic(hidden)
 
     def get_action_and_value(self, x, action=None):
-        hidden = self.network(x / 255.0)
+        hidden = self.forward_trunk(x)
+        # print(hidden.shape)
         logits = self.actor(hidden)
         probs = Categorical(logits=logits)
         if action is None:
@@ -251,7 +275,7 @@ def main():
             entity=args.wandb_entity,
             sync_tensorboard=True,
             config=vars(args),
-            #name=run_name,
+            # name=run_name,
             monitor_gym=True,
             save_code=True,
             id=run_name,
@@ -260,7 +284,8 @@ def main():
     writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
         "hyperparameters",
-        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
+        "|param|value|\n|-|-|\n%s"
+        % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
     )
 
     # TRY NOT TO MODIFY: seeding
@@ -435,15 +460,21 @@ def main():
                         # calculate approx_kl http://joschu.net/blog/kl-approx.html
                         old_approx_kl = (-logratio).mean()
                         approx_kl = ((ratio - 1) - logratio).mean()
-                        clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
+                        clipfracs += [
+                            ((ratio - 1.0).abs() > args.clip_coef).float().mean().item()
+                        ]
 
                     mb_advantages = b_advantages[mb_inds]
                     if args.norm_adv:
-                        mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
+                        mb_advantages = (mb_advantages - mb_advantages.mean()) / (
+                            mb_advantages.std() + 1e-8
+                        )
 
                     # Policy loss
                     pg_loss1 = -mb_advantages * ratio
-                    pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                    pg_loss2 = -mb_advantages * torch.clamp(
+                        ratio, 1 - args.clip_coef, 1 + args.clip_coef
+                    )
                     pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                     # Value loss
@@ -462,7 +493,9 @@ def main():
                         v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                     entropy_loss = entropy.mean()
-                    loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                    loss = (
+                        pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                    )
 
                     optimizer.zero_grad()
                     loss.backward()
@@ -484,14 +517,20 @@ def main():
             optimize_networks_dt = optimize_networks_end - optimize_networks_start
 
             print(f"Time steps: (num_steps={args.num_steps}): {steps_dt:.4f}")
-            print(f"Time optimize: (epochs={args.update_epochs} batch_size={args.batch_size} minibatch_size={args.minibatch_size}) per-sample: {per_sample_dt:.4f} optimize_networks: {optimize_networks_dt:.4f}")
+            print(
+                f"Time optimize: (epochs={args.update_epochs} batch_size={args.batch_size} minibatch_size={args.minibatch_size}) per-sample: {per_sample_dt:.4f} optimize_networks: {optimize_networks_dt:.4f}"
+            )
 
             y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
             var_y = np.var(y_true)
-            explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+            explained_var = (
+                np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+            )
 
             # TRY NOT TO MODIFY: record rewards for plotting purposes
-            writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
+            writer.add_scalar(
+                "charts/learning_rate", optimizer.param_groups[0]["lr"], global_step
+            )
             writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
             writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
             writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
@@ -500,11 +539,16 @@ def main():
             writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
             writer.add_scalar("losses/explained_variance", explained_var, global_step)
             print("Steps/sec:", int(global_step / (time.time() - start_time)))
-            writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+            writer.add_scalar(
+                "charts/SPS", int(global_step / (time.time() - start_time)), global_step
+            )
 
         # Checkpoint.
         if args.track:
-            if args.checkpoint_frequency > 0 and iteration % args.checkpoint_frequency == 0:
+            if (
+                args.checkpoint_frequency > 0
+                and iteration % args.checkpoint_frequency == 0
+            ):
                 print(f"Checkpoint at iter: {iteration}")
                 start_checkpoint = time.time()
 
@@ -521,7 +565,9 @@ def main():
         # Show value sweep.
         if args.value_sweep_frequency and iteration % args.value_sweep_frequency == 0:
             env = envs.envs[0].unwrapped
-            values_sweep_rgb = render_mario_pos_value_sweep(envs=envs, device=device, agent=agent)
+            values_sweep_rgb = render_mario_pos_value_sweep(
+                envs=envs, device=device, agent=agent
+            )
             env.screen.set_image(values_sweep_rgb, screen_index=1)
 
     envs.close()
