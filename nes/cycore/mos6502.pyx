@@ -72,7 +72,7 @@ cdef class MOS6502:
         self.reset()
 
     def save(self):
-        print(self.PC)
+        #print(self.PC)
         return (self.A, self.X, self.Y,      # registers
             self.PC, self.SP,                 # program and stack pointers
             self.N, self.V, self.D, self.I, self.Z, self.C,       # status bits
@@ -81,15 +81,15 @@ cdef class MOS6502:
             self.aax_sets_flags, self.undocumented_support_level, self.stack_underflow_causes_exception,)
 
     def load(self, state):
-        print(self.PC)
+        #print(self.PC)
         (self.A, self.X, self.Y,      # registers
             self.PC, self.SP,                 # program and stack pointers
             self.N, self.V, self.D, self.I, self.Z, self.C,       # status bits
 
             self.cycles_since_reset,     # cycles since the processor was reset
             self.aax_sets_flags, self.undocumented_support_level, self.stack_underflow_causes_exception,) = state
-        print(self.PC)
-        print("PC")
+        #print(self.PC)
+        #print("PC")
 
     def reset(self):
         """
