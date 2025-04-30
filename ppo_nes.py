@@ -625,7 +625,11 @@ def main():
                 print(f"Checkpoint done: {time.time() - start_checkpoint:.4f}s")
 
         # Show value sweep.
-        if args.value_sweep_frequency and iteration % args.value_sweep_frequency == 0:
+        if (
+            False
+            and args.value_sweep_frequency
+            and iteration % args.value_sweep_frequency == 0
+        ):
             env = envs.envs[0].unwrapped
             values_sweep_rgb = render_mario_pos_value_sweep(
                 envs=envs, device=device, agent=agent

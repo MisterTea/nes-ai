@@ -111,14 +111,15 @@ def _get_value_at_offset(
     # Step environment.
     #   next_obs.shape: torch.Size([1, 4, 84, 84])
     #   reward.shape: (1,)
-    next_obs, reward, terminations, truncations, infos = envs.step(action_np)
+    next_obs_pair, reward, terminations, truncations, infos = envs.step(action_np)
 
     # Convert to pytorch Tensor
-    next_obs = torch.Tensor(next_obs).to(device)
+    next_obs = torch.Tensor(next_obs_pair[0]).to(device)
+    next_obs_action = torch.Tensor(next_obs_pair[1]).to(device)
 
     # Retrieve value from reward.
     #   value.shape: torch.Size([1, 1])
-    _action, _logprob, _, value = agent.get_action_and_value(next_obs)
+    _action, _logprob, _, value = agent.get_action_and_value(next_obs, next_obs_action)
 
     # Restore ram.
     ram[:] = ram_start
