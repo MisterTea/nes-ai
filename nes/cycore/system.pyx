@@ -240,6 +240,8 @@ cdef class NES:
 
         self.pyaudio_obj = None
 
+        self.keys_pressed = []
+
         # initialize per-frame handling
         # cdef int self.vblank_started=False
         # cdef float self.volume = 0.5
@@ -627,6 +629,8 @@ cdef class NES:
                     assert image.size == (w,h)
 
                     # image = image.resize((224,224))
+
+                self.keys_pressed.append(event.key)
 
         # show the display (if using SYNC_VSYNC mode, this should provide a sync, which must be at 60Hz)
         if self.screen is not None:

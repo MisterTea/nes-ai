@@ -11,6 +11,7 @@ from datetime import datetime
 
 import gymnasium as gym
 import numpy as np
+import pygame
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -300,6 +301,9 @@ def main():
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
+    screen = envs.envs[0].unwrapped.screen
+    nes = envs.envs[0].unwrapped.nes
+
     agent = Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
@@ -362,6 +366,16 @@ def main():
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(device, dtype=torch.float32).view(-1)
+
+            if pygame.K_v in nes.keys_pressed:
+                start_vis = time.time()
+                print("Generating value sweep...")
+                values_sweep_rgb = render_mario_pos_value_sweep(envs=envs, device=device, agent=agent)
+                screen.set_image(values_sweep_rgb, screen_index=1)
+                print(f"Generated value sweep: {time.time()-start_vis:.4f}s")
+
+            if nes.keys_pressed:
+                nes.keys_pressed = []
 
             # NOTE: Silent conversion to float32 for Tensor.
             next_obs = torch.Tensor(next_obs).to(device)
@@ -510,9 +524,8 @@ def main():
 
         # Show value sweep.
         if args.value_sweep_frequency and iteration % args.value_sweep_frequency == 0:
-            env = envs.envs[0].unwrapped
             values_sweep_rgb = render_mario_pos_value_sweep(envs=envs, device=device, agent=agent)
-            env.screen.set_image(values_sweep_rgb, screen_index=1)
+            screen.set_image(values_sweep_rgb, screen_index=1)
 
     envs.close()
     writer.close()
