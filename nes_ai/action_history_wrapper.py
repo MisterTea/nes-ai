@@ -35,15 +35,22 @@ class ActionHistoryWrapper(
             ),
         )
 
+        def transform(obs):
+            return obs, np.array(list(self.action_history)).reshape(6)
+
         gym.utils.RecordConstructorArgs.__init__(self, history_length=history_length)
         TransformObservation.__init__(
             self,
             env=env,
-            func=(lambda obs: (obs, np.array(list(self.action_history)).reshape(6))),
+            func=transform,
             observation_space=new_observation_space,
         )
 
     def step(self, action):
+        if isinstance(action, int):
+            # Caused by stable_baselines3\common\atari_wrappers.py", line 139
+            action = (0, 0)
+
         # Store the current action in the action history
         self.action_history.append(action)
 

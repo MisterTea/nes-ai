@@ -481,6 +481,7 @@ class SuperMarioEnv(gym.Env):
         # Speed through any prelevel screens, dying animations, etc. that we don't care about.
         skip_after_step(self.nes)
 
+        assert truncated == False
         return observation, reward, terminated, truncated, info
 
     def render(self):

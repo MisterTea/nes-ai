@@ -17,6 +17,6 @@ tensorboard
 sqlitedict
 PyOpenGL
 stable-baselines3
-gymnasium[all]
+gymnasium
 gymnasium[atari]
 tyro
