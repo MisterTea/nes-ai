@@ -104,9 +104,9 @@ cdef class NESCart1(NESCart):
     cdef unsigned char shift                    # internal shift register
     cdef int shift_ctr                          # which shift register bit we are currently on
 
-    cdef unsigned char banked_prg_rom[M1_MAX_PRG_BANKS][M1_PRG_ROM_BANK_SIZE]
-    cdef unsigned char banked_chr_rom[M1_MAX_CHR_BANKS][M1_CHR_ROM_BANK_SIZE]
-    cdef unsigned char ram[M1_MAX_PRG_RAM_BANKS][M1_PRG_RAM_BANK_SIZE]
+    cdef unsigned char banked_prg_rom_1[M1_MAX_PRG_BANKS][M1_PRG_ROM_BANK_SIZE]
+    cdef unsigned char banked_chr_rom_1[M1_MAX_CHR_BANKS][M1_CHR_ROM_BANK_SIZE]
+    cdef unsigned char ram_1[M1_MAX_PRG_RAM_BANKS][M1_PRG_RAM_BANK_SIZE]
 
     cdef unsigned char read(self, int address)
     cdef void write(self, int address, unsigned char value)

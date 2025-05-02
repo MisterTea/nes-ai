@@ -222,7 +222,7 @@ cdef class NESCart1(NESCart):
 
         for bnk in range(self.num_prg_banks):
             for i in range(M1_PRG_ROM_BANK_SIZE):
-                self.banked_prg_rom[bnk][i] = prg_rom_data[bnk * M1_PRG_ROM_BANK_SIZE + i]
+                self.banked_prg_rom_1[bnk][i] = prg_rom_data[bnk * M1_PRG_ROM_BANK_SIZE + i]
 
         if self.num_prg_banks > M1_MAX_PRG_BANKS:
             # this is a 512kb prg rom ROM
@@ -235,7 +235,7 @@ cdef class NESCart1(NESCart):
 
         for bnk in range(self.num_chr_banks):
             for i in range(M1_CHR_ROM_BANK_SIZE):
-                self.banked_chr_rom[bnk][i] = chr_rom_data[bnk * M1_CHR_ROM_BANK_SIZE + i]
+                self.banked_chr_rom_1[bnk][i] = chr_rom_data[bnk * M1_CHR_ROM_BANK_SIZE + i]
 
         self.chr_mem_writeable = chr_mem_writeable
 
@@ -282,9 +282,9 @@ cdef class NESCart1(NESCart):
         Save the state of the cart to a tuple of numpy arrays
         """
         cdef unsigned char[:] chr_bank = self.chr_bank
-        cdef unsigned char[:,:] banked_prg_rom = self.banked_prg_rom
-        cdef unsigned char[:,:] banked_chr_rom = self.banked_chr_rom
-        cdef unsigned char[:,:] ram = self.ram
+        cdef unsigned char[:,:] banked_prg_rom_1 = self.banked_prg_rom_1
+        cdef unsigned char[:,:] banked_chr_rom_1 = self.banked_chr_rom_1
+        cdef unsigned char[:,:] ram_1 = self.ram_1
 
         return (
             super().save(),
@@ -295,9 +295,9 @@ cdef class NESCart1(NESCart):
             self.prg_bank, self.prg_ram_bank,
             self.shift,
             self.shift_ctr,
-            np.asarray(banked_prg_rom, copy=True),
-            np.asarray(banked_chr_rom, copy=True),
-            np.asarray(ram, copy=True),
+            np.asarray(banked_prg_rom_1, copy=True),
+            np.asarray(banked_chr_rom_1, copy=True),
+            np.asarray(ram_1, copy=True),
         )
 
     def load(self, state):
@@ -306,9 +306,9 @@ cdef class NESCart1(NESCart):
         """
 
         cdef unsigned char[:] np_chr_bank
-        cdef unsigned char[:,:] np_banked_prg_rom
-        cdef unsigned char[:,:] np_banked_chr_rom
-        cdef unsigned char[:,:] np_ram
+        cdef unsigned char[:,:] np_banked_prg_rom_1
+        cdef unsigned char[:,:] np_banked_chr_rom_1
+        cdef unsigned char[:,:] np_ram_1
 
         (
             state_super,
@@ -319,19 +319,19 @@ cdef class NESCart1(NESCart):
             self.prg_bank, self.prg_ram_bank,
             self.shift,
             self.shift_ctr,
-            np_banked_prg_rom, np_banked_chr_rom,
-            np_ram,
+            np_banked_prg_rom_1, np_banked_chr_rom_1,
+            np_ram_1,
         ) = state
 
         cdef unsigned char[:] chr_bank = self.chr_bank
-        cdef unsigned char[:,:] banked_prg_rom = self.banked_prg_rom
-        cdef unsigned char[:,:] banked_chr_rom = self.banked_chr_rom
-        cdef unsigned char[:,:] ram = self.ram
+        cdef unsigned char[:,:] banked_prg_rom_1 = self.banked_prg_rom_1
+        cdef unsigned char[:,:] banked_chr_rom_1 = self.banked_chr_rom_1
+        cdef unsigned char[:,:] ram_1 = self.ram_1
 
         super().load(state_super)
-        ram[:,:] = np_ram
-        banked_prg_rom[:,:] = np_banked_prg_rom
-        banked_chr_rom[:,:] = np_banked_chr_rom
+        ram_1[:,:] = np_ram_1
+        banked_prg_rom_1[:,:] = np_banked_prg_rom_1
+        banked_chr_rom_1[:,:] = np_banked_chr_rom_1
         chr_bank[:] = np_chr_bank
 
     cdef void write(self, int address, unsigned char value):
@@ -346,7 +346,7 @@ cdef class NESCart1(NESCart):
                     # bank-switched prg ram; only SOROM is supported of this type, and this has the selection bit in
                     # bit 3 of the chr_bank register
                     bank = (self.chr_bank[0] >> 3) & 1
-                self.ram[bank][address % M1_PRG_RAM_BANK_SIZE] = value
+                self.ram_1[bank][address % M1_PRG_RAM_BANK_SIZE] = value
         elif address >= M1_CTRL_REG_START:
             # everything else is a write to the shift register:
             self._write_shift(address, value)
@@ -434,7 +434,7 @@ cdef class NESCart1(NESCart):
                     # bank-switched prg ram; only SOROM is supported of this type, and this has the selection bit in
                     # bit 3 of the chr_bank register
                     bank = (self.chr_bank[0] >> 3) & 1
-                value = self.ram[bank][address % M1_PRG_RAM_BANK_SIZE]
+                value = self.ram_1[bank][address % M1_PRG_RAM_BANK_SIZE]
             else:
                 # open-bus behaviour
                 # todo: should be open bus behaviour, but not sure yet how to implement this
@@ -502,7 +502,7 @@ cdef class NESCart1(NESCart):
         if not self.chr_mem_writeable:
             # this is a ROM, so do nothing
             return
-        self.banked_chr_rom[self._get_chr_bank(address)][address % M1_CHR_ROM_BANK_SIZE] = value
+        self.banked_chr_rom_1[self._get_chr_bank(address)][address % M1_CHR_ROM_BANK_SIZE] = value
 
     cdef unsigned char read_ppu(self, int address):
         """
@@ -510,7 +510,7 @@ cdef class NESCart1(NESCart):
         :param address: address to read from
         :return: a byte read from chr rom
         """
-        value =  self.banked_chr_rom[self._get_chr_bank(address)][address % M1_CHR_ROM_BANK_SIZE]
+        value =  self.banked_chr_rom_1[self._get_chr_bank(address)][address % M1_CHR_ROM_BANK_SIZE]
         return value
 
 
