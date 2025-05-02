@@ -349,6 +349,16 @@ class SuperMarioEnv(gym.Env):
         # NOTE: reset() looks like it's called automatically by the gym environment, before starting.
         # self.reset()
 
+        # Initialize so we can run past the start screen.
+        self.nes.reset()
+        self.nes.run_init()
+
+        # Skip start screen.
+        _skip_start_screen(self.nes)
+
+        # Save a snapshot to restore on next calls to reset.
+        self.start_state = self.nes.save()
+
     def _get_obs(self) -> NdArrayRGB8:
         screen_view = self.nes.get_screen_view()
         screen_view_np = self._screen_view_to_np(screen_view)
@@ -380,10 +390,9 @@ class SuperMarioEnv(gym.Env):
 
         # Reset CPU and controller.
         self.nes.reset()
-        self.nes.run_init()
 
-        # Step until game started.
-        _skip_start_screen(self.nes)
+        # Load from saved state, after start screen.
+        self.nes.load(self.start_state)
 
         # Get initial values.
         observation = self._get_obs()
