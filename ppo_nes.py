@@ -210,8 +210,21 @@ class Agent(nn.Module):
 
         self.network = nn.Sequential(*layers)
 
-        self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
-        self.critic = layer_init(nn.Linear(512, 1), std=1)
+        if SMALL_AGENT := False:
+            self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
+            self.critic = layer_init(nn.Linear(512, 1), std=1)
+        else:
+            self.actor = nn.Sequential(
+                layer_init(nn.Linear(512, 256), std=0.01),
+                layer_init(nn.Linear(256, 128), std=0.01),
+                layer_init(nn.Linear(128, envs.single_action_space.n), std=0.01),
+            )
+
+            self.critic = nn.Sequential(
+                layer_init(nn.Linear(512, 256), std=0.01),
+                layer_init(nn.Linear(256, 128), std=0.01),
+                layer_init(nn.Linear(128, 1), std=1),
+            )
 
     def get_value(self, x):
         return self.critic(self.network(x / 255.0))
