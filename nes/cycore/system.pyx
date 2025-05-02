@@ -296,8 +296,8 @@ cdef class NES:
         logging.root.setLevel(log_level)
 
     def save(self):
-        return (
-            #self.cart.save(),
+        result = (
+            self.cart.save(),
             self.cpu.save(),
             self.memory.save(),
             self.ppu.save(),
@@ -307,11 +307,12 @@ cdef class NES:
             self.interrupt_listener.save(),
         )
 
-    def load(self, state):
-        #(cart, cpu, memory, ppu, apu, controller1, controller2, interrupt_listener) = state
-        (cpu, memory, ppu, apu, controller1, controller2, interrupt_listener) = state
+        return result
 
-        #self.cart.load(cart)
+    def load(self, state):
+        (cart, cpu, memory, ppu, apu, controller1, controller2, interrupt_listener) = state
+
+        self.cart.load(cart)
         self.cpu.load(cpu)
         self.memory.load(memory)
         self.apu.load(apu)

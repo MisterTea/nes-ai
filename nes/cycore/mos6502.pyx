@@ -1,7 +1,7 @@
-#import pyximport; pyximport.install()
-
 from .system cimport OAM_DMA, DMC_DMA, DMC_DMA_DURING_OAM_DMA
 from nes.instructions import INSTRUCTION_SET, NamedInstruction, AddressModes
+
+import numpy as np
 
 cdef class MOS6502:
     """
@@ -72,24 +72,36 @@ cdef class MOS6502:
         self.reset()
 
     def save(self):
-        #print(self.PC)
-        return (self.A, self.X, self.Y,      # registers
-            self.PC, self.SP,                 # program and stack pointers
-            self.N, self.V, self.D, self.I, self.Z, self.C,       # status bits
+        cdef int[:] instr_size_bytes = self.instr_size_bytes
+
+        return (
+            self.A, self.X, self.Y,     # registers
+            self.PC, self.SP,           # program and stack pointers
+            self.N, self.V, self.D, self.I, self.Z, self.C,  # status bits
 
             self.cycles_since_reset,     # cycles since the processor was reset
-            self.aax_sets_flags, self.undocumented_support_level, self.stack_underflow_causes_exception,)
+            self.aax_sets_flags, self.undocumented_support_level, self.stack_underflow_causes_exception,
+
+            np.asarray(instr_size_bytes, copy=True)
+        )
 
     def load(self, state):
-        #print(self.PC)
-        (self.A, self.X, self.Y,      # registers
-            self.PC, self.SP,                 # program and stack pointers
+        cdef int[:] np_instr_size_bytes
+
+        (
+            self.A, self.X, self.Y,     # registers
+            self.PC, self.SP,           # program and stack pointers
             self.N, self.V, self.D, self.I, self.Z, self.C,       # status bits
 
-            self.cycles_since_reset,     # cycles since the processor was reset
-            self.aax_sets_flags, self.undocumented_support_level, self.stack_underflow_causes_exception,) = state
-        #print(self.PC)
-        #print("PC")
+            self.cycles_since_reset,    # cycles since the processor was reset
+            self.aax_sets_flags, self.undocumented_support_level, self.stack_underflow_causes_exception,
+
+            np_instr_size_bytes
+        ) = state
+
+        cdef int[:] instr_size_bytes = self.instr_size_bytes
+
+        instr_size_bytes[:] = np_instr_size_bytes
 
     def reset(self):
         """

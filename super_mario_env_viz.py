@@ -90,7 +90,9 @@ def _get_value_at_offset(ram: NdArrayUint8, envs: Any, device: str, agent: Any, 
     #   4. Put value function through.
     #   5. Restore RAM.
 
-    ram_start = ram.copy()
+    env = envs.envs[0].unwrapped
+
+    saved_state = env.nes.save()
 
     # Set Mario's position and velocity.
     _set_mario_pos_in_ram(ram, x=x, y=y, xvel=xvel, yvel=yvel)
@@ -112,7 +114,7 @@ def _get_value_at_offset(ram: NdArrayUint8, envs: Any, device: str, agent: Any, 
     _action, _logprob, _, value = agent.get_action_and_value(next_obs)
 
     # Restore ram.
-    ram[:] = ram_start
+    env.nes.load(saved_state)
 
     value_single = value[0][0]
 

@@ -123,6 +123,53 @@ cdef class NESCart0(NESCart):
         if self.chr_mem_writeable:
             self.chr_mem[address % M0_CHR_MEM_SIZE] = value
 
+    def save(self):
+        """
+        Save the state of the cart to a tuple of numpy arrays
+        """
+        cdef unsigned char [:] ram = self.ram
+        cdef unsigned char [:] prg_rom = self.prg_rom
+        cdef unsigned char [:] chr_mem = self.chr_mem
+
+        return (
+            np.asarray(ram, copy=True),
+            np.asarray(prg_rom, copy=True),
+            np.asarray(chr_mem, copy=True),
+
+            self.prg_start_addr,
+            self.prg_rom_size,
+            self.ram_size,
+            self.chr_mem_writeable,
+            self.prg_rom_writeable,
+        )
+
+    def load(self, state):
+        """
+        Load the state of the cart from a tuple of numpy arrays
+        """
+        cdef unsigned char [:] np_ram = self.ram
+        cdef unsigned char [:] np_prg_rom = self.prg_rom
+        cdef unsigned char [:] np_chr_mem = self.chr_mem
+
+        (
+            np_ram,
+            np_prg_rom,
+            np_chr_mem,
+
+            self.prg_start_addr,
+            self.prg_rom_size,
+            self.ram_size,
+            self.chr_mem_writeable,
+            self.prg_rom_writeable,
+        ) = state
+
+        cdef unsigned char [:] ram = self.ram
+        cdef unsigned char [:] prg_rom = self.prg_rom
+        cdef unsigned char [:] chr_mem = self.chr_mem
+
+        ram[:] = np_ram
+        prg_rom[:] = np_prg_rom
+        chr_mem[:] = np_chr_mem
 
 ### Mapper 1 (aka MMC1, SxROM) #########################################################################################
 
@@ -234,60 +281,58 @@ cdef class NESCart1(NESCart):
         """
         Save the state of the cart to a tuple of numpy arrays
         """
-        cdef unsigned char [:,:] ram = self.ram
-        cdef unsigned char [:,:] banked_prg_rom = self.banked_prg_rom
-        cdef unsigned char [:,:] banked_chr_rom = self.banked_chr_rom
-        cdef unsigned char [:] chr_bank = self.chr_bank
+        cdef unsigned char[:] chr_bank = self.chr_bank
+        cdef unsigned char[:,:] banked_prg_rom = self.banked_prg_rom
+        cdef unsigned char[:,:] banked_chr_rom = self.banked_chr_rom
+        cdef unsigned char[:,:] ram = self.ram
 
-        print("CART RAM ", np.asarray(banked_chr_rom).sum())
-        print("CART RAM ", np.asarray(banked_chr_rom).shape)
-
-        return (self.num_prg_banks, self.num_chr_banks, self.num_prg_ram_banks,
-        self.chr_mem_writeable,
-        self.ctrl,
-        np.asarray(chr_bank),
-        self.prg_bank, self.prg_ram_bank,
-        self.shift,
-        self.shift_ctr,
-        np.asarray(banked_prg_rom), np.asarray(banked_chr_rom),
-        np.asarray(ram))
+        return (
+            super().save(),
+            self.num_prg_banks, self.num_chr_banks, self.num_prg_ram_banks,
+            self.chr_mem_writeable,
+            self.ctrl,
+            np.asarray(chr_bank, copy=True),
+            self.prg_bank, self.prg_ram_bank,
+            self.shift,
+            self.shift_ctr,
+            np.asarray(banked_prg_rom, copy=True),
+            np.asarray(banked_chr_rom, copy=True),
+            np.asarray(ram, copy=True),
+        )
 
     def load(self, state):
         """
         Load the state of the cart from a tuple of numpy arrays
         """
-        cdef unsigned char [:,:] ram = self.ram
-        cdef unsigned char [:,:] banked_prg_rom = self.banked_prg_rom
-        cdef unsigned char [:,:] banked_chr_rom = self.banked_chr_rom
-        cdef unsigned char [:] chr_bank = self.chr_bank
 
-        cdef unsigned char [:,:] np_ram
-        cdef unsigned char [:,:] np_banked_prg_rom
-        cdef unsigned char [:,:] np_banked_chr_rom
-        cdef unsigned char [:] np_chr_bank
+        cdef unsigned char[:] np_chr_bank
+        cdef unsigned char[:,:] np_banked_prg_rom
+        cdef unsigned char[:,:] np_banked_chr_rom
+        cdef unsigned char[:,:] np_ram
 
-        print("STATE LEN", len(state))
+        (
+            state_super,
+            self.num_prg_banks, self.num_chr_banks, self.num_prg_ram_banks,
+            self.chr_mem_writeable,
+            self.ctrl,
+            np_chr_bank,
+            self.prg_bank, self.prg_ram_bank,
+            self.shift,
+            self.shift_ctr,
+            np_banked_prg_rom, np_banked_chr_rom,
+            np_ram,
+        ) = state
 
-        (self.num_prg_banks, self.num_chr_banks, self.num_prg_ram_banks,
-        self.chr_mem_writeable,
-        self.ctrl,
-        np_chr_bank,
-        self.prg_bank, self.prg_ram_bank,
-        self.shift,
-        self.shift_ctr,
-        np_banked_prg_rom, np_banked_chr_rom,
-        np_ram) = state
+        cdef unsigned char[:] chr_bank = self.chr_bank
+        cdef unsigned char[:,:] banked_prg_rom = self.banked_prg_rom
+        cdef unsigned char[:,:] banked_chr_rom = self.banked_chr_rom
+        cdef unsigned char[:,:] ram = self.ram
 
+        super().load(state_super)
         ram[:,:] = np_ram
-        for x in range(M1_MAX_PRG_BANKS):
-            banked_prg_rom[x,:] = np_banked_prg_rom[x]
+        banked_prg_rom[:,:] = np_banked_prg_rom
         banked_chr_rom[:,:] = np_banked_chr_rom
         chr_bank[:] = np_chr_bank
-
-        print("CART RAM ", np.asarray(banked_chr_rom).sum())
-        print("CART RAM ", np.asarray(banked_chr_rom).shape)
-        print("CART RAM ", banked_chr_rom.shape)
-
 
     cdef void write(self, int address, unsigned char value):
         cdef int bank=0
