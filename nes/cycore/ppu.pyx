@@ -107,7 +107,6 @@ cdef class NESPPU:
         cdef int [:] _palette_cache_valid = self._palette_cache_valid
         cdef unsigned int [:,:] screen_buffer = self.screen_buffer
 
-
         return (
             # ppu registers
             self.ppu_ctrl, self.ppu_mask, self.oam_addr, self.oam_data, self._ppu_data_buffer, self._io_latch,
@@ -294,8 +293,6 @@ cdef class NESPPU:
 
             np__palette_cache = buffer[37]
             np__palette_cache_valid = buffer[38]
-
-        # print("RECEIVED PPU SCROLL: ", np_ppu_scroll)
 
         ppu_scroll[:] = np_ppu_scroll
 
