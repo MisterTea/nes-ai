@@ -570,8 +570,8 @@ cdef class NESAPU:
         self._buffer_start, self._buffer_end,  # start and end index of the sample ring buffer
 
         #### buffers for up to 1s of data for each of the waveform generators
-        np.asarray(output),   # final output from the mixer; power of two sized to make ring buffer easier to implement
-        np.asarray(buffer),
+        np.asarray(output, copy=True),   # final output from the mixer; power of two sized to make ring buffer easier to implement
+        np.asarray(buffer, copy=True),
 
         #### status register
         self.mode, self.irq_inhibit, self.frame_interrupt_flag,

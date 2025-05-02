@@ -125,21 +125,12 @@ cdef class NESMappedRAM(MemoryBase):
         self.interrupt_listener.raise_dma_pause(OAM_DMA)
 
     def save(self):
-        cdef unsigned char [:] ram = self.ram
-        #print("RAM SAVE")
-        #print(np.asarray(ram).sum())
-
-        return (self.ram, self._last_bus)
+        return (self.ram.copy(), self._last_bus)
 
     def load(self, state):
-        #cdef unsigned char [:] ram = self.ram
+        (np_ram, self._last_bus) = state
 
-        (np_ram, _last_bus) = state
-        #cdef unsigned char [:] np_ram_mv = np_ram
-
-        self.ram[:] = np_ram[:]
-
-        self._last_bus = _last_bus
+        self.ram[:] = np_ram
 
 
 
@@ -203,3 +194,30 @@ cdef class NESVRAM(MemoryBase):
                 # (https://wiki.nesdev.com/w/index.php/PPU_palettes)
                 address -= 0x10
             self.palette_ram[address % PALETTE_SIZE_BYTES] = value
+
+    def save(self):
+        cdef unsigned char[:] _nametables = self._nametables
+        cdef unsigned char[:] palette_ram = self.palette_ram
+
+        return (
+            np.asarray(_nametables, copy=True),
+            np.asarray(palette_ram, copy=True),
+            self.cart.save(),
+        )
+
+    def load(self, state):
+        cdef unsigned char[:] np__nametables
+        cdef unsigned char[:] np_palette_ram
+
+        (
+            np__nametables,
+            np_palette_ram,
+            state_cart,
+        ) = state
+
+        cdef unsigned char[:] _nametables = self._nametables
+        cdef unsigned char[:] palette_ram = self.palette_ram
+
+        _nametables[:] = np__nametables
+        palette_ram[:] = np_palette_ram
+        self.cart.load(state_cart)

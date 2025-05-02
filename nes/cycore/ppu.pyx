@@ -101,74 +101,71 @@ cdef class NESPPU:
         cdef unsigned char [:] _sprite_bkg_priority = self._sprite_bkg_priority
         cdef int [:] _sprite_line = self._sprite_line
         cdef char [:,:] _sprite_pattern = self._sprite_pattern
-        cdef bint [:] irq_tick_triggers = self.irq_tick_triggers
         cdef int [:,:] _palette = self._palette
         cdef unsigned int [:] hex_palette = self.hex_palette
         cdef int [:,:] _palette_cache = self._palette_cache
         cdef int [:] _palette_cache_valid = self._palette_cache_valid
         cdef unsigned int [:,:] screen_buffer = self.screen_buffer
 
-        cdef unsigned char [:] _nametables = self.vram._nametables
-        cdef unsigned char [:] palette_ram = self.vram.palette_ram
 
         return (
-        # ppu registers
-        self.ppu_ctrl, self.ppu_mask, self.oam_addr, self.oam_data, self._ppu_data_buffer, self._io_latch,
-        np.asarray(ppu_scroll),
-        self.ppu_addr, self._ppu_byte_latch,
+            # ppu registers
+            self.ppu_ctrl, self.ppu_mask, self.oam_addr, self.oam_data, self._ppu_data_buffer, self._io_latch,
+            np.asarray(ppu_scroll, copy=True),
+            self.ppu_addr, self._ppu_byte_latch,
 
-        # ppu current position
-        self.line, self.pixel,  # screen drawing starts at pixel 1 (not 0) and runs to pixel 256.
+            # ppu current position
+            self.line, self.pixel,  # screen drawing starts at pixel 1 (not 0) and runs to pixel 256.
 
-        # status flags
-        self.in_vblank, self.sprite_zero_hit, self.sprite_overflow, self.ignore_ppu_ctrl,
+            # status flags
+            self.in_vblank, self.sprite_zero_hit, self.sprite_overflow, self.ignore_ppu_ctrl,
 
-        # internal tracking counters
-        self.frames_since_reset, self.time_at_new_frame,
-        self.cycles_since_reset,
+            # internal tracking counters
+            self.frames_since_reset, self.time_at_new_frame,
+            self.cycles_since_reset,
 
-        # Sprite rendering
-        np.asarray(oam),      # main internal OAM memory
-        np.asarray(_oam),                 # a secondary internal OAM array to store sprites active on next scanline
-        np.asarray(_active_sprite_addrs),            # addresses of the active sprites
-        np.asarray(_sprite_bkg_priority),  # a buffer to hold whether a given sprite has priority over background
-        np.asarray(_sprite_line),                    # lines of the active sprite that we are on
-        np.asarray(_sprite_pattern),             # decoded patterns for the active sprites
-        self._num_active_sprites,                # how many sprites are active in this current line
+            # Sprite rendering
+            np.asarray(oam, copy=True),                    # main internal OAM memory
+            np.asarray(_oam, copy=True),                   # a secondary internal OAM array to store sprites active on next scanline
+            np.asarray(_active_sprite_addrs, copy=True),   # addresses of the active sprites
+            np.asarray(_sprite_bkg_priority, copy=True),   # a buffer to hold whether a given sprite has priority over background
+            np.asarray(_sprite_line, copy=True),           # lines of the active sprite that we are on
+            np.asarray(_sprite_pattern, copy=True),        # decoded patterns for the active sprites
+            self._num_active_sprites,                      # how many sprites are active in this current line
 
-        # NOTE: Using np.asarray('cdef bint [:,:]') duplicates memoryview copy definition:
-        #
-        #   cpython-311/pyrex/nes/cycore/ppu.c:38850:34: error: redefinition of '__pyx_memview_get_int'
-        #   38850 |   static CYTHON_INLINE PyObject *__pyx_memview_get_int(const char *itemp) {
-        #
-        # Ideally we would use:
-        #   np.asarray(irq_tick_triggers),
-        # But we'll allow a copy to happen, using np.asarray() on the original value, not the memoryview.
+            # NOTE: Using np.asarray('cdef bint [:,:]') duplicates memoryview copy definition:
+            #
+            #   cpython-311/pyrex/nes/cycore/ppu.c:38850:34: error: redefinition of '__pyx_memview_get_int'
+            #   38850 |   static CYTHON_INLINE PyObject *__pyx_memview_get_int(const char *itemp) {
+            #
+            # Ideally we would use:
+            #   np.asarray(irq_tick_triggers),
+            # But we'll allow a copy to happen, using np.asarray() on the original value, not the memoryview.
 
-        np.asarray(self.irq_tick_triggers, dtype=np.bool_),             # whether or not an irq tick is triggered on this pixel of sprite fetch
+            np.asarray(self.irq_tick_triggers, dtype=np.bool_, copy=True),             # whether or not an irq tick is triggered on this pixel of sprite fetch
 
-        # Background rendering
-        self._pattern_lo, self._pattern_hi,   # 16-bit bkg pattern registers (only bottom 16 bits relevant)
-        self._effective_x, self._effective_y,          # current background tile position being fetched
-        np.asarray(_palette),                      # palettes for next tiles
+            # Background rendering
+            self._pattern_lo, self._pattern_hi,     # 16-bit bkg pattern registers (only bottom 16 bits relevant)
+            self._effective_x, self._effective_y,   # current background tile position being fetched
+            np.asarray(_palette, copy=True),   # palettes for next tiles
 
-        # the screen buffer itself; currently uses a packed 32 bit int with pixel format xRGB
-        np.asarray(screen_buffer),
+            # access to other bits of the system - vram and interrupts
+            self.vram.save(),
+            self.interrupt_listener.save(),
 
-        # palettes for all the colors the NES can display
-        #unsigned int rgb_palette[64][3]    # in standard RGB format
-        np.asarray(hex_palette),       # in packed 32 bit xRGB format
+            # the screen buffer itself; currently uses a packed 32 bit int with pixel format xRGB
+            np.asarray(screen_buffer, copy=True),
 
-        # special colors that are in use
-        self.transparent_color, self.bkg_color,
+            # palettes for all the colors the NES can display
+            #unsigned int rgb_palette[64][3]        # in standard RGB format
+            np.asarray(hex_palette, copy=True),     # in packed 32 bit xRGB format
 
-        # caches for palettes, since decoding them is a bit slow
-        np.asarray(_palette_cache),
-        np.asarray(_palette_cache_valid),
+            # special colors that are in use
+            self.transparent_color, self.bkg_color,
 
-        np.asarray(_nametables),
-        np.asarray(palette_ram),
-
+            # caches for palettes, since decoding them is a bit slow
+            np.asarray(_palette_cache, copy=True),
+            np.asarray(_palette_cache_valid, copy=True),
         )
 
     def load(self, buffer):
@@ -186,9 +183,6 @@ cdef class NESPPU:
         cdef int [:] _palette_cache_valid = self._palette_cache_valid
         cdef unsigned int [:,:] screen_buffer = self.screen_buffer
 
-        cdef unsigned char [:] _nametables = self.vram._nametables
-        cdef unsigned char [:] palette_ram = self.vram.palette_ram
-
         cdef unsigned char [:] np_ppu_scroll
         cdef unsigned char [:] np_oam
         cdef unsigned char [:] np__oam
@@ -203,73 +197,128 @@ cdef class NESPPU:
         cdef int [:] np__palette_cache_valid
         cdef unsigned int [:,:] np_screen_buffer
 
-        cdef unsigned char [:] np__nametables
-        cdef unsigned char [:] np_palette_ram
+        if False:
+            (
+                # ppu registers
+                self.ppu_ctrl, self.ppu_mask, self.oam_addr, self.oam_data, self._ppu_data_buffer, self._io_latch,
+                np_ppu_scroll,
+                self.ppu_addr, self._ppu_byte_latch,
 
-        self.ppu_ctrl = buffer[0]
-        self.ppu_mask = buffer[1]
-        self.oam_addr = buffer[2]
-        self.oam_data = buffer[3]
-        self._ppu_data_buffer = buffer[4]
-        self._io_latch = buffer[5]
-        np_ppu_scroll = buffer[6]
-        self.ppu_addr = buffer[7]
-        self._ppu_byte_latch = buffer[8]
-        self.line = buffer[9]
-        self.pixel = buffer[10]
-        self.in_vblank = buffer[11]
-        self.sprite_zero_hit = buffer[12]
-        self.sprite_overflow = buffer[13]
-        self.ignore_ppu_ctrl = buffer[14]
+                # ppu current position
+                self.line, self.pixel,  # screen drawing starts at pixel 1 (not 0) and runs to pixel 256.
 
-        self.frames_since_reset = buffer[15]
-        self.time_at_new_frame = buffer[16]
-        self.cycles_since_reset = buffer[17]
+                # status flags
+                self.in_vblank, self.sprite_zero_hit, self.sprite_overflow, self.ignore_ppu_ctrl,
 
-        np_oam = buffer[18]
-        np__oam = buffer[19]
-        np__active_sprite_addrs = buffer[20]
-        np__sprite_bkg_priority = buffer[21]
-        np__sprite_line = buffer[22]
-        np__sprite_pattern = buffer[23]
+                # internal tracking counters
+                self.frames_since_reset, self.time_at_new_frame,
+                self.cycles_since_reset,
 
-        self._num_active_sprites = buffer[24]
-        np_irq_tick_triggers = buffer[25].astype(np.int32)
+                # Sprite rendering
+                np_oam,                     # main internal OAM memory
+                np__oam,                    # a secondary internal OAM array to store sprites active on next scanline
+                np__active_sprite_addrs,    # addresses of the active sprites
+                np__sprite_bkg_priority,    # a buffer to hold whether a given sprite has priority over background
+                np__sprite_line,            # lines of the active sprite that we are on
+                np__sprite_pattern,         # decoded patterns for the active sprites
+                self._num_active_sprites,   # how many sprites are active in this current line
+                np_irq_tick_triggers,       # whether or not an irq tick is triggered on this pixel of sprite fetch
 
-        self._pattern_lo = buffer[26]
-        self._pattern_hi = buffer[27]
-        self._effective_x = buffer[28]
-        self._effective_y = buffer[29]
-        np__palette = buffer[30]
+                # Background rendering
+                self._pattern_lo, self._pattern_hi,     # 16-bit bkg pattern registers (only bottom 16 bits relevant)
+                self._effective_x, self._effective_y,   # current background tile position being fetched
+                np__palette,                            # palettes for next tiles
 
-        np_screen_buffer = buffer[31]
-        np_hex_palette = buffer[32]
-        self.transparent_color = buffer[33]
-        self.bkg_color = buffer[34]
+                # access to other bits of the system - vram and interrupts
+                state_vram,
+                state_interrupt_listener,
 
-        np__palette_cache = buffer[35]
-        np__palette_cache_valid = buffer[36]
-        np__nametables = buffer[37]
-        np_palette_ram = buffer[38]
+                # the screen buffer itself; currently uses a packed 32 bit int with pixel format xRGB
+                np_screen_buffer,
 
+                # palettes for all the colors the NES can display
+                #unsigned int rgb_palette[64][3]    # in standard RGB format
+                np_hex_palette,       # in packed 32 bit xRGB format
+
+                # special colors that are in use
+                self.transparent_color, self.bkg_color,
+
+                # caches for palettes, since decoding them is a bit slow
+                np__palette_cache,
+                np__palette_cache_valid,
+            ) = buffer
+        else:
+            self.ppu_ctrl = buffer[0]
+            self.ppu_mask = buffer[1]
+            self.oam_addr = buffer[2]
+            self.oam_data = buffer[3]
+            self._ppu_data_buffer = buffer[4]
+            self._io_latch = buffer[5]
+            np_ppu_scroll = buffer[6]
+            self.ppu_addr = buffer[7]
+            self._ppu_byte_latch = buffer[8]
+            self.line = buffer[9]
+            self.pixel = buffer[10]
+            self.in_vblank = buffer[11]
+            self.sprite_zero_hit = buffer[12]
+            self.sprite_overflow = buffer[13]
+            self.ignore_ppu_ctrl = buffer[14]
+
+            self.frames_since_reset = buffer[15]
+            self.time_at_new_frame = buffer[16]
+            self.cycles_since_reset = buffer[17]
+
+            np_oam = buffer[18]
+            np__oam = buffer[19]
+            np__active_sprite_addrs = buffer[20]
+            np__sprite_bkg_priority = buffer[21]
+            np__sprite_line = buffer[22]
+            np__sprite_pattern = buffer[23]
+
+            self._num_active_sprites = buffer[24]
+            np_irq_tick_triggers = buffer[25].astype(np.int32)
+
+            self._pattern_lo = buffer[26]
+            self._pattern_hi = buffer[27]
+            self._effective_x = buffer[28]
+            self._effective_y = buffer[29]
+            np__palette = buffer[30]
+
+            state_vram = buffer[31]
+            state_interrupt_listener = buffer[32]
+
+            np_screen_buffer = buffer[33]
+            np_hex_palette = buffer[34]
+            self.transparent_color = buffer[35]
+            self.bkg_color = buffer[36]
+
+            np__palette_cache = buffer[37]
+            np__palette_cache_valid = buffer[38]
+
+        # print("RECEIVED PPU SCROLL: ", np_ppu_scroll)
 
         ppu_scroll[:] = np_ppu_scroll
+
         oam[:] = np_oam
         _oam[:] = np__oam
         _active_sprite_addrs[:] = np__active_sprite_addrs
         _sprite_bkg_priority[:] = np__sprite_bkg_priority
         _sprite_line[:] = np__sprite_line
         _sprite_pattern[:] = np__sprite_pattern
+
         irq_tick_triggers[:] = np_irq_tick_triggers
+
         _palette[:] = np__palette
+
+        self.vram.load(state_vram)
+        self.interrupt_listener.load(state_interrupt_listener)
+
+        screen_buffer[:] = np_screen_buffer
+
         hex_palette[:] = np_hex_palette
+
         _palette_cache[:] = np__palette_cache
         _palette_cache_valid[:] = np__palette_cache_valid
-        screen_buffer[:,:] = np_screen_buffer
-
-        _nametables[:] = np__nametables
-        palette_ram[:] = np_palette_ram
-
 
     def set_hex_palette(self, rgb_palette):
         for i, c in enumerate(rgb_palette):
