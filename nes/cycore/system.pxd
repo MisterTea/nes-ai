@@ -53,6 +53,7 @@ cdef class NES:
         public object controller1, controller2
         public object screen
         public object ai_handler
+        public object keys_pressed
 
         int screen_scale, sync_mode
         bint v_overscan, h_overscan
