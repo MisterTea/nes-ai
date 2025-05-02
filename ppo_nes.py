@@ -26,6 +26,7 @@ from stable_baselines3.common.atari_wrappers import (  # isort:skip
 )
 
 
+from nes_ai.last_and_skip_wrapper import LastAndSkipEnv
 from super_mario_env import SuperMarioEnv
 from super_mario_env_viz import render_mario_pos_value_sweep
 
@@ -159,8 +160,10 @@ def make_env(env_id, idx, capture_video, run_name):
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
         #env = NoopResetEnv(env, noop_max=30)
-        env = MaxAndSkipEnv(env, skip=4)
+        # env = MaxAndSkipEnv(env, skip=4)
+        env = LastAndSkipEnv(env, skip=4)
         env = EpisodicLifeEnv(env)
+
         # if "FIRE" in env.unwrapped.get_action_meanings():
         #     env = FireResetEnv(env)
         env = ClipRewardEnv(env)
