@@ -367,14 +367,16 @@ class Agent(nn.Module):
 
         # print(f"probs1: {probs1.probs}")
 
-        probs2_sample = (have_jump_in_history_but_not_all) + (
-            either_have_no_jump_or_all_jump * probs2.sample()
-        )
+        # This was an idea to encourage more high jumps but it doesn't work well
+        # probs2_sample = (have_jump_in_history_but_not_all) + (
+        #     either_have_no_jump_or_all_jump * probs2.sample()
+        # )
 
-        if probs2_sample.shape[0] == 1:
-            print(
-                f"jump probs: {torch.cat((probs2.probs, probs2_sample, either_have_no_jump_or_all_jump, all_past_history_is_jump, have_jump_in_history_but_not_all), dim=1)}"
-            )
+        # if probs2_sample.shape[0] == 1:
+        #     print(
+        #         f"jump probs: {torch.cat((probs2.probs, probs2_sample, either_have_no_jump_or_all_jump, all_past_history_is_jump, have_jump_in_history_but_not_all), dim=1)}"
+        #     )
+        probs2_sample = probs2.sample()
 
         if action is None:
             action = torch.cat((probs1.sample(), probs2_sample), dim=1)
