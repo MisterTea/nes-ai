@@ -36,7 +36,7 @@ class ActionHistoryWrapper(
         )
 
         def transform(obs):
-            return obs, np.array(list(self.action_history)).reshape(6)
+            return obs, np.array(list(self.action_history)).reshape(history_length * 2)
 
         gym.utils.RecordConstructorArgs.__init__(self, history_length=history_length)
         TransformObservation.__init__(

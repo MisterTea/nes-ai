@@ -175,7 +175,7 @@ def make_env(env_id, idx, capture_video, run_name):
 
         env = gym.wrappers.FrameStackObservation(env, 4)
 
-        env = ActionHistoryWrapper(env, 3)
+        env = ActionHistoryWrapper(env, 60)
 
         env = LastAndSkipEnv(env, skip=4)
         env = EpisodicLifeEnv(env)
@@ -188,6 +188,12 @@ def make_env(env_id, idx, capture_video, run_name):
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
+
+
+def layer_zero(layer):
+    torch.nn.init.constant_(layer.weight, 0)
+    torch.nn.init.constant_(layer.bias, 0)
     return layer
 
 
@@ -255,9 +261,16 @@ class Agent(nn.Module):
         )
         # self.trunk2 = self.trunk
 
-        self.post_trunk = nn.Sequential(
+        self.post_trunk1 = nn.Sequential(
             *[
                 layer_init(nn.Linear(self.num_timm_features * 4, 512)),
+                nn.ReLU(),
+            ]
+        )
+
+        self.post_trunk2 = nn.Sequential(
+            *[
+                layer_zero(nn.Linear(self.num_timm_features * 4, 512)),
                 nn.ReLU(),
             ]
         )
@@ -265,16 +278,20 @@ class Agent(nn.Module):
         self.actor = nn.Sequential(
             *[
                 layer_init(nn.Linear(512 + (3 * 2), 256), std=0.01),
+                nn.ReLU(),
                 layer_init(nn.Linear(256, 128), std=0.01),
+                nn.ReLU(),
                 layer_init(nn.Linear(128, 2), std=0.01),
             ]
         )
 
         self.critic = nn.Sequential(
             *[
-                layer_init(nn.Linear(512 + (3 * 2), 256), std=0.01),
-                layer_init(nn.Linear(256, 128), std=0.01),
-                layer_init(nn.Linear(128, 1), std=1),
+                layer_zero(nn.Linear(512 + (3 * 2), 256)),
+                nn.ReLU(),
+                layer_zero(nn.Linear(256, 128)),
+                nn.ReLU(),
+                layer_zero(nn.Linear(128, 1)),
             ]
         )
 
@@ -291,7 +308,7 @@ class Agent(nn.Module):
         )
         # print(self.trunk(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0).shape)
         # print(hidden.shape, self.num_timm_features)
-        hidden = self.post_trunk(hidden)
+        hidden = self.post_trunk1(hidden)
 
         if self.trunk == self.trunk2:
             hidden2 = hidden
@@ -301,40 +318,79 @@ class Agent(nn.Module):
             ).reshape(batch_size, -1)
             # print(self.trunk(x.reshape(-1, 3, IMAGE_DIM, IMAGE_DIM) / 255.0).shape)
             # print(hidden.shape, self.num_timm_features)
-            hidden2 = self.post_trunk(hidden2)
+            hidden2 = self.post_trunk2(hidden2)
 
         return hidden, hidden2
 
     def get_value(self, x, x_past_actions):
         return self.critic(
-            torch.cat((self.forward_trunk(x / 255.0)[1], x_past_actions), dim=1)
+            torch.cat((self.forward_trunk(x / 255.0)[1], x_past_actions[:, -6:]), dim=1)
         )
 
     def get_action_and_value(self, x, x_past_actions, action=None):
         assert x_past_actions.shape == (
             x.shape[0],
-            3 * 2,
-        ), f"{x_past_actions.shape} != {(x.shape[0], 3 * 2)}"
+            60 * 2,
+        ), f"{x_past_actions.shape} != {(x.shape[0], 60 * 2)}"
+
+        # detect if any even-indexed past action was a jump
+        have_jump_in_history = (x_past_actions[:, 33::2] == 1).any(dim=1, keepdim=True)
+        all_history_is_jump = (x_past_actions[:, 33::2] == 1).all(dim=1, keepdim=True)
+        assert have_jump_in_history.shape[1] == 1
+        assert all_history_is_jump.shape[1] == 1
+
+        all_past_history_is_jump = (x_past_actions[:, 21::2] == 1).all(
+            dim=1, keepdim=True
+        )
+
+        have_jump_in_history_but_not_all = (
+            have_jump_in_history & (~all_history_is_jump)
+        ).float()
+
+        either_have_no_jump_or_all_jump = 1.0 - have_jump_in_history_but_not_all
+
+        # print(
+        #     "past actions:",
+        #     x_past_actions,
+        #     x_past_actions[:, 1::2],
+        #     "either have no jump or all jump:",
+        #     either_have_no_jump_or_all_jump,
+        # )
+
         hidden, hidden2 = self.forward_trunk(x / 255.0)
-        # print(hidden.shape)
-        logits = self.actor(torch.cat((hidden, x_past_actions), dim=1))
+        logits = self.actor(torch.cat((hidden, x_past_actions[:, -6:]), dim=1))
 
         probs1 = Bernoulli(logits=logits[:, 0:1])
+
+        # If you have a jump in history, but not all jumps, then the jump probability is 1.0
         probs2 = Bernoulli(logits=logits[:, 1:2])
 
         # print(f"probs1: {probs1.probs}")
-        # print(f"probs2: {probs2.probs}")
+
+        probs2_sample = (have_jump_in_history_but_not_all) + (
+            either_have_no_jump_or_all_jump * probs2.sample()
+        )
+
+        if probs2_sample.shape[0] == 1:
+            print(
+                f"jump probs: {torch.cat((probs2.probs, probs2_sample, either_have_no_jump_or_all_jump, all_past_history_is_jump, have_jump_in_history_but_not_all), dim=1)}"
+            )
 
         if action is None:
-            action = torch.cat((probs1.sample(), probs2.sample()), dim=1)
+            action = torch.cat((probs1.sample(), probs2_sample), dim=1)
         # print(f"action: {action}, {action.dtype}")
+
+        # print(hidden2.shape)
+        # print(x_past_actions[:, -6:].shape)
 
         return (
             action,
             probs1.log_prob(action[:, 0].float())
-            + probs2.log_prob(action[:, 1].float()),  # log(x*y) = log(x) + log(y)
-            probs1.entropy() + probs2.entropy(),
-            self.critic(torch.cat((hidden2, x_past_actions), dim=1)),
+            + (
+                either_have_no_jump_or_all_jump * probs2.log_prob(action[:, 1].float())
+            ),  # log(x*y) = log(x) + log(y)
+            probs1.entropy() + (either_have_no_jump_or_all_jump * probs2.entropy()),
+            self.critic(torch.cat((hidden2, x_past_actions[:, -6:]), dim=1)),
         )
 
 
@@ -413,7 +469,7 @@ def main():
     obs = torch.zeros(
         (args.num_steps, args.num_envs) + envs.single_observation_space[0].shape
     ).to(device)
-    obs_action = torch.zeros((args.num_steps, args.num_envs, 6)).to(device)
+    obs_action = torch.zeros((args.num_steps, args.num_envs, 120)).to(device)
     actions = torch.zeros(
         (args.num_steps, args.num_envs) + envs.single_action_space.shape
     ).to(device)
@@ -429,7 +485,7 @@ def main():
     next_obs, _ = envs.reset(seed=args.seed)
 
     next_obs = torch.Tensor(next_obs[0]).to(device)
-    next_obs_action = torch.zeros((args.num_envs, 6), dtype=torch.float32).to(device)
+    next_obs_action = torch.zeros((args.num_envs, 120), dtype=torch.float32).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
     next_truncated = torch.zeros(args.num_envs).to(device)
 
@@ -480,6 +536,7 @@ def main():
             next_obs_pair, reward, terminations, truncations, infos = envs.step(
                 action.cpu().numpy()
             )
+            # print("ACTION/REWARD", action, reward)
             assert all(truncations == False), truncations
             next_obs = next_obs_pair[0]
             next_obs_action[0, :] = torch.from_numpy(next_obs_pair[1][0]).to(
@@ -514,6 +571,11 @@ def main():
         if args.train_agent:
             optimize_networks_start = time.time()
 
+            args.gamma = 0.5 + min(
+                0.49, (0.49 * (global_step / (args.total_timesteps / 100)))
+            )
+            print("gamma", args.gamma)
+
             # bootstrap value if not done
             with torch.no_grad():
                 next_value = agent.get_value(next_obs, next_obs_action).reshape(1, -1)
@@ -544,7 +606,7 @@ def main():
 
             # flatten the batch
             b_obs = obs.reshape((-1,) + envs.single_observation_space[0].shape)
-            b_obs_action = obs_action.reshape((-1, 6))
+            b_obs_action = obs_action.reshape((-1, 120))
             b_logprobs = logprobs.reshape(-1)
             b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
             b_advantages = advantages.reshape(-1)

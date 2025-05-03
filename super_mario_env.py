@@ -7,7 +7,7 @@ import torch
 from PIL import Image
 
 from nes import NES, SYNC_NONE, SYNC_PYGAME
-from nes_ai.ai.base import RewardMap, compute_reward_map
+from nes_ai.ai.base import RewardIndex, RewardMap, compute_reward_map
 from super_mario_env_ram_hacks import skip_after_step
 
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
@@ -464,9 +464,13 @@ class SuperMarioEnv(gym.Env):
         # Read off the current reward.  Convert to a single value reward for this timestep.
         reward = RewardMap.combine_reward_vector_single(self.ai_handler.reward_vector)
 
+        if jump_nojump == 1:
+            reward -= 0.01  # Penalty for jumping.
+
         self.ale._lives = self.ai_handler.reward_map.lives
 
-        terminated = self.ale._lives <= 0
+        terminated = int(self.ai_handler.reward_vector[RewardIndex.LIVES].item()) < 0
+        # print("Reward", reward, self.ai_handler.reward_vector)
         truncated = False
         observation = self._get_obs()
         info = self._get_info()
