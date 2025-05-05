@@ -302,16 +302,42 @@ class Agent(nn.Module):
         return action_probs, critic_value
 
 
-def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax: float, screen_size: tuple[float, float], block_size: int = 10, log_scale: bool = False):
+def _loglike_scale(x: float, lower: float, upper: float, s: float = 1.0) -> int:
+    # s = 0.1 -> linear from ~–50 to +50
+    # s = 1 -> linear from ~–5 to +5
+    # s = 10 -> linear from ~–0.5 to +0.5
+
+    half_dim = (upper - lower) / 2.0
+    center = lower + (upper - lower) / 2.0
+    return center + (half_dim * (2 / np.pi) * np.atan(x))
+
+
+def _sigmoid(x: float, k: float = 1.0):
+    return 1 / (1 + np.exp(-k * x))
+
+
+def _sigmoid_scale(x: float, lower: float, upper: float, k: float = 1.0):
+    scale = upper - lower
+    sigmoid = 1 / (1 + np.exp(-k * x))
+    return lower + scale * sigmoid
+
+
+def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax: float, screen_size: tuple[float, float], block_size: int = 10, log_scale: bool = True):
     if not log_scale:
         reward_vis_value = (reward - rmin) / rmax * 255
         reward_vis_value = int(max(0, min(255, reward_vis_value)))
     else:
-        reward_normalized = (reward - rmin) / rmax
-        log_reward = np.log(reward_normalized)
-        log_reward_max = np.log(rmax)
-        reward_vis_value = log_reward / log_reward_max * 255
-        reward_vis_value = int(max(0, min(255, reward_vis_value)))
+        # reward_normalized = (reward - rmin) / rmax
+        # log_reward = np.log(reward_normalized)
+        # log_reward_max = np.log(rmax)
+        # reward_vis_value = log_reward / log_reward_max * 255
+        # reward_vis_value = int(max(0, min(255, reward_vis_value)))
+
+        # reward_vis_value = int(_loglike_scale(reward, lower=0, upper=255))
+        # reward_vis_value = int(_sigmoid_scale(reward, lower=0, upper=255))
+
+        reward_normalized = (reward - rmin / rmax)
+        reward_vis_value = int(_sigmoid(reward_normalized) * 255)
 
     # reward_vis_value = np.random.randint(0, 255)
 
