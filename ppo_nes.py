@@ -102,6 +102,7 @@ class Args:
     # Visualization
     value_sweep_frequency: int | None = 0
     """create a value sweep visualization every N updates"""
+    visualize_reward: bool = True
 
     # Algorithm specific arguments
     env_id: str = "SuperMarioBros-mame-v0"
@@ -301,6 +302,52 @@ class Agent(nn.Module):
         return action_probs, critic_value
 
 
+def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax: float, screen_size: tuple[float, float], block_size: int = 10, log_scale: bool = False):
+    if not log_scale:
+        reward_vis_value = (reward - rmin) / rmax * 255
+        reward_vis_value = int(max(0, min(255, reward_vis_value)))
+    else:
+        reward_normalized = (reward - rmin) / rmax
+        log_reward = np.log(reward_normalized)
+        log_reward_max = np.log(rmax)
+        reward_vis_value = log_reward / log_reward_max * 255
+        reward_vis_value = int(max(0, min(255, reward_vis_value)))
+
+    # reward_vis_value = np.random.randint(0, 255)
+
+    # Draw vertical columns before moving on to a row.  It makes it feel more natural since time
+    # flows left-to-right, like the visualization.
+    w, h = screen_size
+    bw = w // block_size
+
+    bx = (at // bw) % bw
+    by = at % bw
+
+    x = bx * block_size
+    y = by * block_size
+
+    if False:
+        # Directly set the pixel values.
+        surf_np = pygame.surfarray.pixels3d(surf)
+        surf_np[x:x + block_size, y:y+block_size] = reward_vis_value
+    else:
+        # print(f"DRAWING AT: {x},{y}: {reward_vis_value}")
+        # Draw a rectangle.
+        reward_vis_rgb = pygame.Color(reward_vis_value, reward_vis_value, reward_vis_value)
+        pygame.draw.rect(surface=surf, color=reward_vis_rgb, rect=(x, y, block_size, block_size))
+
+    if _DRAW_NEXT := True:
+        bx_next = ((at+1) // bw) % bw
+        by_next = (at+1) % bw
+
+        x_next = bx_next * block_size
+        y_next = by_next * block_size
+
+        # Draw the next block as green, just to follow where it's drawing.
+        reward_vis_rgb = pygame.Color(0, 255, 0)
+        pygame.draw.rect(surface=surf, color=reward_vis_rgb, rect=(x_next, y_next, block_size, block_size))
+
+
 def main():
     args = tyro.cli(Args)
 
@@ -373,6 +420,13 @@ def main():
     agent = Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
+    # Reward visualization.
+    surf_np = pygame.surfarray.pixels3d(screen.surfs[3])
+    surf_np[:] = (128, 128, 128)
+    vis_reward_min = 0
+    vis_reward_max = 1
+    vis_reward_image_i = 0
+
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
     actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
@@ -435,6 +489,14 @@ def main():
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(device, dtype=torch.float32).view(-1)
+
+            if args.visualize_reward:
+                vis_reward_min = min(vis_reward_min, reward)
+                vis_reward_max = max(vis_reward_max, reward)
+
+                _draw_reward(screen.surfs[3], at=vis_reward_image_i, reward=reward, rmin=vis_reward_min, rmax=vis_reward_max, screen_size=screen.screen_size)
+
+                vis_reward_image_i += 1
 
             if pygame.K_v in nes.keys_pressed:
                 start_vis = time.time()
@@ -604,6 +666,7 @@ def main():
             policy_sweep_rgb, values_sweep_rgb = render_mario_pos_policy_value_sweep(envs=envs, device=device, agent=agent)
             screen.blit_image(values_sweep_rgb, screen_index=1)
             screen.blit_image(policy_sweep_rgb, screen_index=2)
+            screen.blit_image(reward_rgb, screen_index=3)
 
     envs.close()
     writer.close()
