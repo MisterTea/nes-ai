@@ -234,22 +234,22 @@ class SimpleAiHandler:
         return True
 
 
-class SimpleScreen2x1:
-    def __init__(self, screen_size: tuple[int, int], scale: int):
+class SimpleScreenNx1:
+    def __init__(self, screen_size: tuple[int, int], scale: int, n: int):
+        self.scale = scale
+
         w, h = screen_size
         self.screen_size = screen_size
         self.screen_size_scaled = (w * scale, h * scale)
-        #self.window_size = (self.screen_size_scaled[0] * 2, self.screen_size_scaled[1])
-
-        self.window_size = (self.screen_size[0] * 2, self.screen_size[1])
+        self.window_size = (self.screen_size[0] * n, self.screen_size[1])
 
         self.window = None
 
-        self.combined_surf = pygame.Surface((w * 2, h))
+        self.combined_surf = pygame.Surface((w * n, h))
         self.surfs = [
             # NOTE: Rect(left, top, width, height)
-            self.combined_surf.subsurface(pygame.Rect(0, 0, w, h)),
-            self.combined_surf.subsurface(pygame.Rect(w, 0, w, h)),
+            self.combined_surf.subsurface(pygame.Rect(w*i, 0, w, h))
+            for i in range(n)
         ]
         self.combined_surf_scaled = pygame.Surface(self.window_size)
 
@@ -277,9 +277,12 @@ class SimpleScreen2x1:
             pygame.display.init()
             self.window = pygame.display.set_mode(self.window_size)
 
-        #pygame.transform.scale(surface=self.combined_surf, size=self.window_size, dest_surface=self.combined_surf_scaled)
-        #self.window.blit(self.combined_surf_scaled, dest=(0, 0))
-        self.window.blit(self.combined_surf, dest=(0, 0))
+        if self.scale != 1:
+            pygame.transform.scale(surface=self.combined_surf, size=self.window_size, dest_surface=self.combined_surf_scaled)
+            self.window.blit(self.combined_surf_scaled, dest=(0, 0))
+        else:
+            pygame.transform.scale(surface=self.combined_surf, size=self.window_size, dest_surface=self.combined_surf_scaled)
+            self.window.blit(self.combined_surf, dest=(0, 0))
 
         pygame.event.pump()
         pygame.display.flip()
@@ -349,7 +352,7 @@ class SuperMarioEnv(gym.Env):
         self.render_fps = render_fps
 
         # Screen setup.  2 Screens, 1 next to the other.
-        self.screen = SimpleScreen2x1((SCREEN_W, SCREEN_H), scale=3)
+        self.screen = SimpleScreenNx1((SCREEN_W, SCREEN_H), scale=3, n=2)
 
         self.clock = None
 
