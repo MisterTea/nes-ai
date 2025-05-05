@@ -182,11 +182,31 @@ def make_env(env_id, idx, capture_video, run_name):
     return thunk
 
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
+# def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+#     torch.nn.init.orthogonal_(layer.weight, std)
+#     torch.nn.init.constant_(layer.bias, bias_const)
+#     return layer
+
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0, weight_const=None):
+    if weight_const is not None:
+        torch.nn.init.constant_(layer.weight, weight_const)
+    else:
+        torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
+class ResidualMlpBlock(nn.Module):
+    def __init__(self, dim, std: float = np.sqrt(2)):
+        super().__init__()
+        self.block = nn.Sequential(
+            layer_init(nn.Linear(dim, dim), std=std),
+            nn.ReLU(),
+            layer_init(nn.Linear(dim, dim), std=std),
+        )
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        return self.relu(x + self.block(x))
 
 class Agent(nn.Module):
     def __init__(self, envs):
@@ -209,22 +229,54 @@ class Agent(nn.Module):
             # Input size for an input observation of size: 224x224
             layers.append(layer_init(nn.Linear(64 * 24 * 24, 512)))
 
+        # Shared linear layers.
+        if False:
+            layers += [
+                layer_init(nn.Linear(512, 512), std=1),
+                nn.ReLU(),
+                layer_init(nn.Linear(512, 512), std=1),
+                nn.ReLU(),
+                layer_init(nn.Linear(512, 512), std=1),
+                nn.ReLU(),
+                layer_init(nn.Linear(512, 512), std=1),
+                nn.ReLU(),
+                layer_init(nn.Linear(512, 512), std=1),
+                nn.ReLU(),
+            ]
+        else:
+            layers += [
+                ResidualMlpBlock(512, std=1),
+                ResidualMlpBlock(512, std=1),
+                ResidualMlpBlock(512, std=1),
+                ResidualMlpBlock(512, std=1),
+                ResidualMlpBlock(512, std=1),
+            ]
+
         self.network = nn.Sequential(*layers)
 
         if SMALL_AGENT := False:
             self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
             self.critic = layer_init(nn.Linear(512, 1), std=1)
         else:
+            if INIT_WEIGHTS_TO_ZERO := False:
+                wc = 0.0
+            else:
+                wc = None
+
             self.actor = nn.Sequential(
-                layer_init(nn.Linear(512, 256), std=0.01),
-                layer_init(nn.Linear(256, 128), std=0.01),
-                layer_init(nn.Linear(128, envs.single_action_space.n), std=0.01),
+                layer_init(nn.Linear(512, 256), weight_const=wc, std=0.01),
+                nn.ReLU(),
+                layer_init(nn.Linear(256, 128), weight_const=wc, std=0.01),
+                nn.ReLU(),
+                layer_init(nn.Linear(128, envs.single_action_space.n), weight_const=wc, std=0.01),
             )
 
             self.critic = nn.Sequential(
-                layer_init(nn.Linear(512, 256), std=0.01),
-                layer_init(nn.Linear(256, 128), std=0.01),
-                layer_init(nn.Linear(128, 1), std=1),
+                layer_init(nn.Linear(512, 256), weight_const=wc, std=0.01),
+                nn.ReLU(),
+                layer_init(nn.Linear(256, 128), weight_const=wc, std=0.01),
+                nn.ReLU(),
+                layer_init(nn.Linear(128, 1), weight_const=wc, std=1),
             )
 
     def get_value(self, x):
