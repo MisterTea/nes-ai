@@ -60,7 +60,12 @@ class RewardMap(BaseModel):
             (100 * reward_vector[RewardIndex.SCORE])
             + (0 * reward_vector[RewardIndex.TIME_LEFT])
             + (100 * reward_vector[RewardIndex.COINS])
-            + (0 * reward_vector[RewardIndex.LIVES])
+
+            # NOTE: This will give a big reward for gaining a life, and a big negative reward for
+            #   losing a life.  The reward_vector is the delta, so when a life is lost, the
+            #   reward_vector will be -1.
+            + (10000 * reward_vector[RewardIndex.LIVES])
+
             + (0 * reward_vector[RewardIndex.WORLD])
             + (0 * reward_vector[RewardIndex.LEVEL])
             + (0.1 * reward_vector[RewardIndex.LEFT_POS])
