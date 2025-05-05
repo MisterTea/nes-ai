@@ -253,7 +253,7 @@ class SimpleScreenNx1:
         ]
         self.combined_surf_scaled = pygame.Surface(self.window_size)
 
-    def get_image(self, screen_index: int) -> Image:
+    def get_as_image(self, screen_index: int) -> Image:
         surf = self.surfs[screen_index]
 
         data = pygame.image.tostring(surf, 'RGB')
@@ -262,11 +262,11 @@ class SimpleScreenNx1:
 
         return image
 
-    def set_image_np(self, image_np: NdArrayRGB8, screen_index: int):
+    def blit_image_np(self, image_np: NdArrayRGB8, screen_index: int):
         # print(f"SURF SIZE: {self.surfs[screen_index].get_size()}  image.shape={image_np.shape}")
         pygame.surfarray.blit_array(self.surfs[screen_index], image_np)
 
-    def set_image(self, image: Image, screen_index: int):
+    def blit_image(self, image: Image, screen_index: int):
         assert image.mode == 'RGB', f"Unexpected image mode: {image.mode} != RGB"
         image_np = np.asarray(image).swapaxes(0, 1)
         pygame.surfarray.blit_array(self.surfs[screen_index], image_np)
@@ -504,7 +504,7 @@ class SuperMarioEnv(gym.Env):
 
         # Show the screen, if requested.
         if self.render_mode == "human":
-            self.screen.set_image_np(observation, screen_index=0)
+            self.screen.blit_image_np(observation, screen_index=0)
             self.screen.show()
 
         # Speed through any prelevel screens, dying animations, etc. that we don't care about.
