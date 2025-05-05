@@ -167,7 +167,7 @@ def make_env(env_id, idx, capture_video, run_name):
 
         # if "FIRE" in env.unwrapped.get_action_meanings():
         #     env = FireResetEnv(env)
-        env = ClipRewardEnv(env)
+        # env = ClipRewardEnv(env)
 
         if not USE_OBSERVATION_224x224:
             env = gym.wrappers.GrayscaleObservation(env)
