@@ -58,21 +58,22 @@ class RewardMap(BaseModel):
         assert (
             reward_vector.shape == expected_shape
         ), f"Unexpected reward_vector.shape: {reward_vector.shape} != {expected_shape}"
+        assert reward_vector[RewardIndex.LEFT_POS] >= -3, f"{reward_vector=}"
         retval = (
             (0 * reward_vector[RewardIndex.SCORE])
             + (0 * reward_vector[RewardIndex.TIME_LEFT])
             + (1 * reward_vector[RewardIndex.COINS])
-            + (1 * reward_vector[RewardIndex.LIVES])
+            + (10 * reward_vector[RewardIndex.LIVES])
             + (100 * reward_vector[RewardIndex.WORLD])
             + (100 * reward_vector[RewardIndex.LEVEL])
             + (
-                0.05 * reward_vector[RewardIndex.LEFT_POS]
+                0.01 * reward_vector[RewardIndex.LEFT_POS]
                 if reward_vector[RewardIndex.LEFT_POS] > 0
-                else -0.1 * reward_vector[RewardIndex.LEFT_POS]
+                else 0.02 * reward_vector[RewardIndex.LEFT_POS]
             )
             + (0 * reward_vector[RewardIndex.TOP_POS])
             + (3 * reward_vector[RewardIndex.POWERUP_LEVEL])
-            - 0.0001  # penalty for spending time.  Use this instead of time_left
+            - 0.001  # penalty for spending time.  Use this instead of time_left
         ).item()
 
         if type(retval) is not float:

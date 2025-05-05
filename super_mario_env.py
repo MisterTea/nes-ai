@@ -1,3 +1,5 @@
+import copy
+from colorsys import hsv_to_rgb
 from typing import Any, Literal, Optional
 
 import gymnasium as gym
@@ -347,6 +349,7 @@ class SuperMarioEnv(gym.Env):
             show_hud=False,
         )
         self.ai_handler = self.nes.ai_handler
+        self.cumulative_reward = 0.0
 
         # NOTE: reset() looks like it's called automatically by the gym environment, before starting.
         # self.reset()
@@ -399,6 +402,7 @@ class SuperMarioEnv(gym.Env):
 
         self.ale._lives = self.ai_handler.reward_map.lives
         self.last_observation = observation
+        self.cumulative_reward = 0.0
 
         return observation, info
 
@@ -407,6 +411,22 @@ class SuperMarioEnv(gym.Env):
             actions = (0, 0)
 
         left_right, jump_nojump = actions
+
+        ram = self.nes.ram()
+        raw_y_velocity = int(ram[0x009F])
+        # Comoute the twos complement of the y velocity.
+        if raw_y_velocity > 127:
+            # Negative value.
+            y_velocity = raw_y_velocity - 256
+        else:
+            y_velocity = raw_y_velocity
+        if y_velocity < 0:
+            # Force mario to do a full jump.
+            jump_nojump = 1
+        elif y_velocity > 0:
+            # Landing, force player to let go of jump
+            jump_nojump = 0
+
         PRINT_CONTROLLER = False
         if PRINT_CONTROLLER:
             print("Action:", actions)
@@ -467,6 +487,8 @@ class SuperMarioEnv(gym.Env):
         if jump_nojump == 1:
             reward -= 0.01  # Penalty for jumping.
 
+        self.cumulative_reward += reward
+
         self.ale._lives = self.ai_handler.reward_map.lives
 
         terminated = int(self.ai_handler.reward_vector[RewardIndex.LIVES].item()) < 0
@@ -479,7 +501,34 @@ class SuperMarioEnv(gym.Env):
 
         # Show the screen, if requested.
         if self.render_mode == "human":
-            self.screen.set_image_np(observation, screen_index=0)
+            obs_display = copy.deepcopy(observation)
+
+            # Create a HSV tuple where the saturation and value are set to 255, and the hue is a linear ramp from red to green, where it's red when the reward is -10 and green when the reward is 10.
+            MAX_RANGE = 100
+            HALF_MAX_RANGE = MAX_RANGE / 2
+            normalized_reward = (
+                max(min(HALF_MAX_RANGE, self.cumulative_reward), -HALF_MAX_RANGE)
+                + HALF_MAX_RANGE
+            ) / MAX_RANGE  # Normalize reward to range [0, 1]
+            hue = normalized_reward * 128  # Scale hue to range [0, 128]
+            hsv_tuple = (hue, 255, 255)
+
+            # print(f"{hue=}")
+
+            # Convert the HSV tuple to an RGB tuple.
+            # Convert HSV tuple (h in [0,128], s/v in [0,255]) to RGB
+            h, s, v = hsv_tuple
+            h_norm = h / 255.0  # normalize hue to [0,0.5]
+            s_norm = s / 255.0  # normalize saturation to [0,1]
+            v_norm = v / 255.0  # normalize value to [0,1]
+            r_norm, g_norm, b_norm = hsv_to_rgb(h_norm, s_norm, v_norm)
+
+            # Scale back to [0,255] and cast to int
+            rgb_tuple = (int(r_norm * 255), int(g_norm * 255), int(b_norm * 255))
+
+            # Paint a small rectangle with the RGB color
+            obs_display[10:20, 40:50, :] = rgb_tuple
+            self.screen.set_image_np(obs_display, screen_index=0)
             self.screen.show()
 
         # Speed through any prelevel screens, dying animations, etc. that we don't care about.

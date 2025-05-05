@@ -313,7 +313,7 @@ cdef class NES:
     def reset(self):
         self.cpu.reset()
 
-    def ram(self):
+    cpdef ram(self):
         return self.memory.ram
 
     cpdef int get_frame_num(self):

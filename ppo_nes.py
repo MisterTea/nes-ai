@@ -109,7 +109,7 @@ class Args:
     """the id of the environment"""
     total_timesteps: int = 10000000
     """total timesteps of the experiments"""
-    learning_rate: float = 2.5e-4
+    learning_rate: float = 1e-3
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
@@ -117,9 +117,9 @@ class Args:
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
-    gamma: float = 0.999
+    gamma: float = 0.0
     """the discount factor gamma"""
-    gae_lambda: float = 0.99
+    gae_lambda: float = 0.95
     """the lambda for the general advantage estimation"""
     num_minibatches: int = 4
     """the number of mini-batches"""
@@ -175,7 +175,7 @@ def make_env(env_id, idx, capture_video, run_name):
 
         env = gym.wrappers.FrameStackObservation(env, 4)
 
-        env = ActionHistoryWrapper(env, 60)
+        env = ActionHistoryWrapper(env, 3)
 
         env = LastAndSkipEnv(env, skip=4)
         env = EpisodicLifeEnv(env)
@@ -253,13 +253,13 @@ class Agent(nn.Module):
         print(o.reshape(1, -1).shape[1])
         self.num_timm_features = o.reshape(1, -1).shape[1]
 
-        self.trunk2 = timm.create_model(
-            IMAGE_MODEL_NAME,
-            pretrained=True,
-            num_classes=0,
-            # global_pool="",
-        )
-        # self.trunk2 = self.trunk
+        # self.trunk2 = timm.create_model(
+        #     IMAGE_MODEL_NAME,
+        #     pretrained=True,
+        #     num_classes=0,
+        #     # global_pool="",
+        # )
+        self.trunk2 = self.trunk
 
         self.post_trunk1 = nn.Sequential(
             *[
@@ -268,12 +268,15 @@ class Agent(nn.Module):
             ]
         )
 
-        self.post_trunk2 = nn.Sequential(
-            *[
-                layer_zero(nn.Linear(self.num_timm_features * 4, 512)),
-                nn.ReLU(),
-            ]
-        )
+        if self.trunk2 == self.trunk:
+            self.post_trunk2 = self.post_trunk1
+        else:
+            self.post_trunk2 = nn.Sequential(
+                *[
+                    layer_zero(nn.Linear(self.num_timm_features * 4, 512)),
+                    nn.ReLU(),
+                ]
+            )
 
         self.actor = nn.Sequential(
             *[
@@ -324,75 +327,36 @@ class Agent(nn.Module):
 
     def get_value(self, x, x_past_actions):
         return self.critic(
-            torch.cat((self.forward_trunk(x / 255.0)[1], x_past_actions[:, -6:]), dim=1)
+            torch.cat((self.forward_trunk(x / 255.0)[1], x_past_actions), dim=1)
         )
 
     def get_action_and_value(self, x, x_past_actions, action=None):
         assert x_past_actions.shape == (
             x.shape[0],
-            60 * 2,
-        ), f"{x_past_actions.shape} != {(x.shape[0], 60 * 2)}"
-
-        # detect if any even-indexed past action was a jump
-        have_jump_in_history = (x_past_actions[:, 33::2] == 1).any(dim=1, keepdim=True)
-        all_history_is_jump = (x_past_actions[:, 33::2] == 1).all(dim=1, keepdim=True)
-        assert have_jump_in_history.shape[1] == 1
-        assert all_history_is_jump.shape[1] == 1
-
-        all_past_history_is_jump = (x_past_actions[:, 21::2] == 1).all(
-            dim=1, keepdim=True
-        )
-
-        have_jump_in_history_but_not_all = (
-            have_jump_in_history & (~all_history_is_jump)
-        ).float()
-
-        either_have_no_jump_or_all_jump = 1.0 - have_jump_in_history_but_not_all
-
-        # print(
-        #     "past actions:",
-        #     x_past_actions,
-        #     x_past_actions[:, 1::2],
-        #     "either have no jump or all jump:",
-        #     either_have_no_jump_or_all_jump,
-        # )
+            3 * 2,
+        ), f"{x_past_actions.shape} != {(x.shape[0], 3 * 2)}"
 
         hidden, hidden2 = self.forward_trunk(x / 255.0)
-        logits = self.actor(torch.cat((hidden, x_past_actions[:, -6:]), dim=1))
+        logits = self.actor(torch.cat((hidden, x_past_actions), dim=1))
 
         probs1 = Bernoulli(logits=logits[:, 0:1])
 
         # If you have a jump in history, but not all jumps, then the jump probability is 1.0
         probs2 = Bernoulli(logits=logits[:, 1:2])
 
-        # print(f"probs1: {probs1.probs}")
-
-        # This was an idea to encourage more high jumps but it doesn't work well
-        # probs2_sample = (have_jump_in_history_but_not_all) + (
-        #     either_have_no_jump_or_all_jump * probs2.sample()
-        # )
-
-        # if probs2_sample.shape[0] == 1:
-        #     print(
-        #         f"jump probs: {torch.cat((probs2.probs, probs2_sample, either_have_no_jump_or_all_jump, all_past_history_is_jump, have_jump_in_history_but_not_all), dim=1)}"
-        #     )
-        probs2_sample = probs2.sample()
-
         if action is None:
-            action = torch.cat((probs1.sample(), probs2_sample), dim=1)
+            action = torch.cat((probs1.sample(), probs2.sample()), dim=1)
         # print(f"action: {action}, {action.dtype}")
 
         # print(hidden2.shape)
-        # print(x_past_actions[:, -6:].shape)
+        # print(x_past_actions.shape)
 
         return (
             action,
             probs1.log_prob(action[:, 0].float())
-            + (
-                either_have_no_jump_or_all_jump * probs2.log_prob(action[:, 1].float())
-            ),  # log(x*y) = log(x) + log(y)
-            probs1.entropy() + (either_have_no_jump_or_all_jump * probs2.entropy()),
-            self.critic(torch.cat((hidden2, x_past_actions[:, -6:]), dim=1)),
+            + probs2.log_prob(action[:, 1].float()),  # log(x*y) = log(x) + log(y)
+            probs1.entropy() + probs2.entropy(),
+            self.critic(torch.cat((hidden2, x_past_actions), dim=1)),
         )
 
 
@@ -471,7 +435,7 @@ def main():
     obs = torch.zeros(
         (args.num_steps, args.num_envs) + envs.single_observation_space[0].shape
     ).to(device)
-    obs_action = torch.zeros((args.num_steps, args.num_envs, 120)).to(device)
+    obs_action = torch.zeros((args.num_steps, args.num_envs, 3 * 2)).to(device)
     actions = torch.zeros(
         (args.num_steps, args.num_envs) + envs.single_action_space.shape
     ).to(device)
@@ -487,7 +451,9 @@ def main():
     next_obs, _ = envs.reset(seed=args.seed)
 
     next_obs = torch.Tensor(next_obs[0]).to(device)
-    next_obs_action = torch.zeros((args.num_envs, 120), dtype=torch.float32).to(device)
+    next_obs_action = torch.zeros((args.num_envs, 3 * 2), dtype=torch.float32).to(
+        device
+    )
     next_done = torch.zeros(args.num_envs).to(device)
     next_truncated = torch.zeros(args.num_envs).to(device)
 
@@ -608,7 +574,7 @@ def main():
 
             # flatten the batch
             b_obs = obs.reshape((-1,) + envs.single_observation_space[0].shape)
-            b_obs_action = obs_action.reshape((-1, 120))
+            b_obs_action = obs_action.reshape((-1, 3 * 2))
             b_logprobs = logprobs.reshape(-1)
             b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
             b_advantages = advantages.reshape(-1)
