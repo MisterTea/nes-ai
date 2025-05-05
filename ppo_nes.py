@@ -440,8 +440,8 @@ def main():
                 start_vis = time.time()
                 print("Generating value sweep...")
                 policy_sweep_rgb, values_sweep_rgb = render_mario_pos_policy_value_sweep(envs=envs, device=device, agent=agent)
-                screen.set_image(values_sweep_rgb, screen_index=1)
-                screen.set_image(policy_sweep_rgb, screen_index=2)
+                screen.blit_image(values_sweep_rgb, screen_index=1)
+                screen.blit_image(policy_sweep_rgb, screen_index=2)
                 print(f"Generated value sweep: {time.time()-start_vis:.4f}s")
 
             if nes.keys_pressed:
@@ -602,8 +602,8 @@ def main():
         # Show value sweep.
         if args.value_sweep_frequency and iteration % args.value_sweep_frequency == 0:
             policy_sweep_rgb, values_sweep_rgb = render_mario_pos_policy_value_sweep(envs=envs, device=device, agent=agent)
-            screen.set_image(values_sweep_rgb, screen_index=1)
-            screen.set_image(policy_sweep_rgb, screen_index=2)
+            screen.blit_image(values_sweep_rgb, screen_index=1)
+            screen.blit_image(policy_sweep_rgb, screen_index=2)
 
     envs.close()
     writer.close()

@@ -318,7 +318,7 @@ def render_mario_pos_policy_value_sweep(envs: Any, device: str, agent: Any):
             for i, x in enumerate(x_steps):
                 print(f"POLICY[{j}][{i}]={policy_grid[j][i]}")
 
-    obs_image = env.screen.get_image(screen_index=0)
+    obs_image = env.screen.get_as_image(screen_index=0)
 
     policy_rgb = _build_policy_arrows_rgb(policy_grid, obs_image)
     values_rgb = _build_values_rgb(values_grid, obs_image)
