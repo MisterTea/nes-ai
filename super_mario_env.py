@@ -9,7 +9,7 @@ from PIL import Image
 from nes import NES, SYNC_NONE, SYNC_PYGAME
 from nes_ai.ai.base import RewardMap, compute_reward_map
 
-from super_mario_env_ram_hacks import skip_after_step
+from super_mario_env_ram_hacks import skip_after_step, life
 
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 NdArrayRGB8 = np.ndarray[tuple[Literal[4]], np.dtype[np.uint8]]
@@ -145,7 +145,7 @@ class SimpleAiHandler:
     def shutdown(self):
         print("Shutting down ai handler")
 
-    def update(self, frame: int, controller1, ram: NdArrayUint8, screen_image: Image):
+    def update(self, frame: int, controller1: NdArrayUint8, ram: NdArrayUint8, screen_image: Image):
         # Update rewards.
         self.last_reward_map = self.reward_map
         self.reward_map, self.reward_vector = compute_reward_map(
@@ -408,6 +408,12 @@ class SuperMarioEnv(gym.Env):
         # Save a snapshot to restore on next calls to reset.
         self.start_state = self.nes.save()
 
+        # NOTE: the ai_handler has not run yet, so we need to pull the number of lives right out
+        #  of memory.
+        self.ale._lives = life(self.nes.ram())
+        self.ai_handler.update(frame=0, controller1=_to_controller_presses([]), ram=self.nes.ram(), screen_image=None)
+        assert self.ai_handler.reward_map.lives == self.ale.lives(), f"Mismatched lives: reward_map={self.ai_handler.reward_map.lives} ram={self._ale.lives()}"
+
     def _get_obs(self) -> NdArrayRGB8:
         screen_view = self.nes.get_screen_view()
         screen_view_np = self._screen_view_to_np(screen_view)
@@ -434,9 +440,6 @@ class SuperMarioEnv(gym.Env):
         # We need the following line to seed self.np_random
         # super().reset(seed=seed)
 
-        # Reset ai handler.
-        self.ai_handler.reset()
-
         # Reset CPU and controller.
         self.nes.reset()
 
@@ -447,7 +450,11 @@ class SuperMarioEnv(gym.Env):
         observation = self._get_obs()
         info = self._get_info()
 
-        self.ale._lives = self.ai_handler.reward_map.lives
+        # Reset ai handler.
+        self.ai_handler.update(frame=0, controller1=_to_controller_presses([]), ram=self.nes.ram(), screen_image=None)
+        self.ale._lives = life(self.nes.ram())
+        assert self.ai_handler.reward_map.lives == self.ale.lives(), f"Mismatched lives: reward_map={self.ai_handler.reward_map.lives} ram={self._ale.lives()}"
+
         self.last_observation = observation
 
         return observation, info
@@ -493,7 +500,8 @@ class SuperMarioEnv(gym.Env):
         # Read off the current reward.  Convert to a single value reward for this timestep.
         reward = RewardMap.combine_reward_vector_single(self.ai_handler.reward_vector)
 
-        self.ale._lives = self.ai_handler.reward_map.lives
+        self.ale._lives = life(self.nes.ram())
+        assert self.ai_handler.reward_map.lives == self.ale.lives(), f"Mismatched lives: reward_map={self.ai_handler.reward_map.lives} ram={self._ale.lives()}"
 
         terminated = self.ale._lives <= 0
         truncated = False
