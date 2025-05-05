@@ -66,6 +66,62 @@ def _to_controller_presses(buttons: list[str]) -> NdArrayUint8:
 CONTROLLER_NOOP = _to_controller_presses([])
 
 
+# Action spaces adapted from:
+# https://github.com/Kautenja/gym-super-mario-bros/blob/master/gym_super_mario_bros/actions.py
+# venv/lib/python3.11/site-packages/gym_super_mario_bros/actions.py
+
+# actions for the simple run right environment
+RIGHT_ONLY = [
+    [],
+    ['right'],
+    ['right', 'a'],
+    ['right', 'b'],
+    ['right', 'a', 'b'],
+]
+
+
+# actions for very simple movement
+SIMPLE_MOVEMENT = [
+    [],
+    ['right'],
+    ['right', 'a'],
+    ['right', 'b'],
+    ['right', 'a', 'b'],
+    ['a'],
+    ['left'],
+]
+
+
+# actions for more complex movement
+COMPLEX_MOVEMENT = [
+    [],
+    ['right'],
+    ['right', 'a'],
+    ['right', 'b'],
+    ['right', 'a', 'b'],
+    ['a'],
+    ['left'],
+    ['left', 'a'],
+    ['left', 'b'],
+    ['left', 'a', 'b'],
+    ['down'],
+    ['up'],
+]
+
+COMPLEX_LEFT_RIGHT = [
+    [],
+    ['right'],
+    ['right', 'a'],
+    ['right', 'b'],
+    ['right', 'a', 'b'],
+    ['a'],
+    ['left'],
+    ['left', 'a'],
+    ['left', 'b'],
+    ['left', 'a', 'b'],
+]
+
+
 SCREEN_W = 240
 SCREEN_H = 224
 
@@ -298,18 +354,8 @@ class SuperMarioEnv(gym.Env):
         self.clock = None
 
         self.action_controller_presses = [
-            _to_controller_presses([]),
-            _to_controller_presses(['a']),
-            _to_controller_presses(['b']),
-            _to_controller_presses(['left']),
-            _to_controller_presses(['right']),
-            _to_controller_presses(['a', 'b']),
-            _to_controller_presses(['a', 'left']),
-            _to_controller_presses(['a', 'right']),
-            _to_controller_presses(['b', 'left']),
-            _to_controller_presses(['b', 'right']),
-            _to_controller_presses(['a', 'b', 'left']),
-            _to_controller_presses(['a', 'b', 'right']),
+            _to_controller_presses(buttons)
+            for buttons in SIMPLE_MOVEMENT
         ]
 
         self.action_space = gym.spaces.Discrete(len(self.action_controller_presses))
