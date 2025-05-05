@@ -125,3 +125,8 @@ def skip_after_step(nes: Any):
     # skip occupied states like the black screen between lives that shows
     # how many lives the player has left
     _skip_occupied_states(nes)
+
+
+def life(ram: NdArrayUint8):
+    """Return the number of remaining lives."""
+    return ram[0x075a]
