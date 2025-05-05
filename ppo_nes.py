@@ -100,7 +100,7 @@ class Args:
     """enable or disable training of the agent"""
 
     # Visualization
-    value_sweep_frequency: int | None = 50
+    value_sweep_frequency: int | None = 0
     """create a value sweep visualization every N updates"""
 
     # Algorithm specific arguments
