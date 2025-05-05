@@ -103,6 +103,7 @@ class Args:
     value_sweep_frequency: int | None = 0
     """create a value sweep visualization every N updates"""
     visualize_reward: bool = True
+    visualize_actions: bool = True
 
     # Algorithm specific arguments
     env_id: str = "SuperMarioBros-mame-v0"
@@ -289,7 +290,7 @@ class Agent(nn.Module):
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
+        return action, probs.log_prob(action), probs.entropy(), probs.probs, self.critic(hidden)
 
     def get_actor_policy_probs_and_critic_value(self, x):
         with torch.no_grad():
@@ -345,8 +346,9 @@ def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax
     # flows left-to-right, like the visualization.
     w, h = screen_size
     bw = w // block_size
+    bh = h // block_size
 
-    bx = (at // bw) % bw
+    bx = (at // bw) % bh
     by = at % bw
 
     x = bx * block_size
@@ -363,7 +365,7 @@ def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax
         pygame.draw.rect(surface=surf, color=reward_vis_rgb, rect=(x, y, block_size, block_size))
 
     if _DRAW_NEXT := True:
-        bx_next = ((at+1) // bw) % bw
+        bx_next = ((at+1) // bw) % bh
         by_next = (at+1) % bw
 
         x_next = bx_next * block_size
@@ -372,6 +374,91 @@ def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax
         # Draw the next block as green, just to follow where it's drawing.
         reward_vis_rgb = pygame.Color(0, 255, 0)
         pygame.draw.rect(surface=surf, color=reward_vis_rgb, rect=(x_next, y_next, block_size, block_size))
+
+
+def _draw_action_probs(surf: pygame.Surface, at: int, action_probs: np.ndarray, screen_size: tuple[float, float], block_width: int = 10, block_height: int = 10):
+    """Draw multiple columns of action probabilities.  Sweep each horizontal block top-to-bottom."""
+
+    num_actions = len(action_probs)
+
+    # Each "cell" is made up of N blocks across, and 1 block down.  Add an extra block as a spacer.
+    cell_width = block_width * (num_actions + 1)
+    cell_height = block_height * 1
+
+    w, h = screen_size
+
+    num_cell_rows = h // cell_height
+    num_cell_cols = w // cell_width
+
+    if _DRAW_CURRENT := True:
+        # Calculate cell x,y position.
+        cell_x = (at // num_cell_rows) % num_cell_cols
+        cell_y = at % num_cell_rows
+
+        x = cell_x * cell_width
+        y = cell_y * cell_height
+
+        # Draw rectangles across.
+        for i, prob in enumerate(action_probs):
+            prob_vis_gray = int(prob * 255)
+            prob_vis_rgb = pygame.Color(prob_vis_gray, prob_vis_gray, prob_vis_gray)
+            pygame.draw.rect(surface=surf, color=prob_vis_rgb, rect=(x + i*block_width, y, block_width, block_height))
+
+    if _DRAW_NEXT := True:
+        cell_x_next = ((at+1) // num_cell_rows) % num_cell_cols
+        cell_y_next = (at+1) % num_cell_rows
+
+        x_next = cell_x_next * cell_width
+        y_next = cell_y_next * cell_height
+
+        # Draw green rectangles across, one block below the current value.
+        for i in range(len(action_probs)):
+            prob_vis_rgb = pygame.Color(0, 255, 0)
+            pygame.draw.rect(surface=surf, color=prob_vis_rgb, rect=(x_next + i*block_width, y_next, block_width, block_height))
+
+
+def _draw_action_probs2(surf: pygame.Surface, at: int, action_probs: np.ndarray, screen_size: tuple[float, float], block_width: int = 4):
+    """Draw a single column of action probabilities.  Sweep left-to-right."""
+
+    num_actions = len(action_probs)
+
+    w, h = screen_size
+
+    block_height = h // num_actions
+
+    # Each "cell" is made up of 1 block across, and N blocks down.
+    cell_width = block_width
+    cell_height = block_height * num_actions
+
+    num_cell_rows = h // cell_height
+    num_cell_cols = w // cell_width
+
+    if _DRAW_CURRENT := True:
+        # Calculate cell x,y position.
+        cell_x = at % num_cell_cols
+        cell_y = (at // num_cell_cols) % num_cell_rows
+
+        x = cell_x * cell_width
+        y = cell_y * cell_height
+
+        # Draw rectangles across.
+        for i, prob in enumerate(action_probs):
+            prob_vis_gray = int(prob * 255)
+            prob_vis_rgb = pygame.Color(prob_vis_gray, prob_vis_gray, prob_vis_gray)
+            pygame.draw.rect(surface=surf, color=prob_vis_rgb, rect=(x, y + i*block_height, block_width, block_height))
+
+    if _DRAW_NEXT := True:
+        cell_x_next = (at+1) % num_cell_cols
+        cell_y_next = ((at+1) // num_cell_cols) % num_cell_rows
+
+        x_next = cell_x_next * cell_width
+        y_next = cell_y_next * cell_height
+
+        # Draw green rectangles across, one block below the current value.
+        for i in range(len(action_probs)):
+            prob_vis_rgb = pygame.Color(0, 255, 0)
+            pygame.draw.rect(surface=surf, color=prob_vis_rgb, rect=(x_next, y_next + i*block_height, block_width, block_height))
+
 
 
 def main():
@@ -453,6 +540,8 @@ def main():
     vis_reward_max = 1
     vis_reward_image_i = 0
 
+    vis_action_probs_i = 0
+
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
     actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
@@ -506,7 +595,7 @@ def main():
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                action, logprob, _, value = agent.get_action_and_value(next_obs)
+                action, logprob, _entropy, action_probs, value = agent.get_action_and_value(next_obs)
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
@@ -523,6 +612,14 @@ def main():
                 _draw_reward(screen.surfs[3], at=vis_reward_image_i, reward=reward, rmin=vis_reward_min, rmax=vis_reward_max, screen_size=screen.screen_size)
 
                 vis_reward_image_i += 1
+
+            if args.visualize_actions:
+                assert action_probs.shape == (1,7), f"Unexpected action_probs shape: {action_probs.shape}"
+                action_probs_single_batch = action_probs.squeeze(0)
+                # _draw_action_probs(screen.surfs[4], at=vis_action_probs_i, action_probs=action_probs_single_batch, screen_size=screen.screen_size)
+                _draw_action_probs2(screen.surfs[4], at=vis_action_probs_i, action_probs=action_probs_single_batch, screen_size=screen.screen_size)
+
+                vis_action_probs_i += 1
 
             if pygame.K_v in nes.keys_pressed:
                 start_vis = time.time()
@@ -589,7 +686,7 @@ def main():
                     end = start + args.minibatch_size
                     mb_inds = b_inds[start:end]
 
-                    _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
+                    _, newlogprob, entropy, _action_probs, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
                     logratio = newlogprob - b_logprobs[mb_inds]
                     ratio = logratio.exp()
 
