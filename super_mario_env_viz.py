@@ -82,7 +82,32 @@ def _set_mario_pos_in_ram(ram: NdArrayUint8, x: int, y: int, xvel: int, yvel: in
     ram[0x0433] = 0
 
 
-def _get_value_at_offset(ram: NdArrayUint8, envs: Any, device: str, agent: Any, x: int, y: int, xvel: int, yvel: int) -> tuple[float, Any]:
+from super_mario_env import _to_controller_presses
+
+_CONTROLLER_PRESS_TO_ARROW = {
+    # Determine press:
+    #   Ignore up/down.
+    #   A -> up
+    #   B -> longer vector
+    #   right/left -> right/left
+    #
+    # Assume x0=0, y0=0, and we're setting x1, y1.
+    tuple(_to_controller_presses([])): (0, 0),
+    tuple(_to_controller_presses(['a'])): (0, 1),
+    tuple(_to_controller_presses(['b'])): (0, 0),
+    tuple(_to_controller_presses(['left'])): (-1, 0),
+    tuple(_to_controller_presses(['right'])): (1, 0),
+    tuple(_to_controller_presses(['a', 'b'])): (0, 2),
+    tuple(_to_controller_presses(['a', 'left'])): (-1, 1),
+    tuple(_to_controller_presses(['a', 'right'])): (1, 1),
+    tuple(_to_controller_presses(['b', 'left'])): (-2, 0),
+    tuple(_to_controller_presses(['b', 'right'])): (2, 0),
+    tuple(_to_controller_presses(['a', 'b', 'left'])): (-2, 2),
+    tuple(_to_controller_presses(['a', 'b', 'right'])): (2, 2),
+}
+
+
+def _get_policy_and_value_at_offset(ram: NdArrayUint8, envs: Any, device: str, agent: Any, x: int, y: int, xvel: int, yvel: int) -> tuple[float, Any]:
     # Put Mario into position and render.
     #   1. Set RAM.
     #   2. Step.
@@ -111,33 +136,107 @@ def _get_value_at_offset(ram: NdArrayUint8, envs: Any, device: str, agent: Any, 
 
     # Retrieve value from reward.
     #   value.shape: torch.Size([1, 1])
-    _action, _logprob, _, value = agent.get_action_and_value(next_obs)
+    policy_action_probs, value = agent.get_actor_policy_probs_and_critic_value(next_obs)
 
     # Restore ram.
     env.nes.load(saved_state)
 
     value_single = value[0][0]
 
-    return value_single, next_obs
+    return policy_action_probs, value_single, next_obs
 
 
-def render_mario_pos_value_sweep(envs: Any, device: str, agent: Any):
+from PIL import ImageDraw
+import math
+
+def _draw_arrow(draw: ImageDraw.Draw, start: tuple[float, float], end: tuple[float, float], head_size=1.0, shaft_length: float=3.0, color="red"):
+    # Calculate direction
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    angle = math.atan2(dy, dx)
+
+    # Compute the adjusted end point for the shaft
+    shaft_length = math.hypot(dx, dy) - head_size
+    shaft_end = (
+        start[0] + shaft_length * math.cos(angle),
+        start[1] + shaft_length * math.sin(angle)
+    )
+
+    # Draw the shaft
+    draw.line([start, shaft_end], fill=color, width=1)
+
+    # Arrowhead points
+    x1 = end[0] - head_size * math.cos(angle - math.pi / 6)
+    y1 = end[1] - head_size * math.sin(angle - math.pi / 6)
+    x2 = end[0] - head_size * math.cos(angle + math.pi / 6)
+    y2 = end[1] - head_size * math.sin(angle + math.pi / 6)
+
+    # Draw the arrowhead
+    draw.polygon([end, (x1, y1), (x2, y2)], fill=color)
+
+
+def _build_policy_arrows_rgb(policy_grid: list[list[tuple[float, float]]], obs_image: NdArrayRGB8):
     w = 240
     h = 224
-    env = envs.envs[0].unwrapped
-    ram = env.nes.ram()
 
-    # Sweep mario positions, get value function.
-    x_steps = list(range(0, w, 15))
-    y_steps = list(range(0, h, 15))
-    num_x = len(x_steps)
-    num_y = len(y_steps)
-    values_grid = np.zeros((num_y, num_x), dtype=np.float64)
+    obs_rgba = obs_image.convert('RGBA')
+    obs_rgba.putalpha(int(0.75 * 256))
 
-    for j, y in enumerate(y_steps):
-        for i, x in enumerate(x_steps):
-            value, obs = _get_value_at_offset(ram=ram, envs=envs, device=device, agent=agent, x=x, y=y, xvel=0, yvel=0)
-            values_grid[j][i] = value
+    # Paste the current observation onto the image.  Take the mask from the alpha values.
+    policy_rgba = Image.new('RGBA', (w, h), 'white')
+    policy_rgba.paste(obs_rgba, (0, 0), mask=obs_rgba)
+
+    # Find the scale from policy grid to pixel in image.
+    scale_y = h / len(policy_grid)
+    scale_x = w / len(policy_grid[0])
+    scale = min(scale_x, scale_y)
+
+    pixel_offset_x = 0.5 * scale
+    pixel_offset_y = 0.5 * scale
+
+    draw = ImageDraw.Draw(policy_rgba)
+
+    # Image y-axis has 0 at the top, 255 at the bottom.
+    flip_y = -1
+
+    # Draw arrows on the image.
+    for j, rows in enumerate(policy_grid):
+        for i, arrow in enumerate(rows):
+            dx, dy = arrow
+
+            # dx, dy = 0.5, 1.0
+
+            if False:
+                r = i % 4
+                if r == 0:
+                    dx, dy = (1.0, 1.0)
+                elif r == 1:
+                    dx, dy = (2.0, 2.0)
+                elif r == 2:
+                    dx, dy = (-1.0, -1.0)
+                elif r == 3:
+                    dx, dy = (-2.0, -2.0)
+
+            px = pixel_offset_x + i*scale
+            py = pixel_offset_y + j*scale
+
+            if arrow == (0, 0):
+                pass
+            else:
+                _draw_arrow(
+                    draw,
+                    start=(px, py),
+                    end=(px + dx * 0.33*scale, py + dy * 0.33*scale * flip_y),
+                    head_size=0.2 * scale * 0.9,
+                    shaft_length=0.8 * scale * 0.9,
+                )
+
+    return policy_rgba.convert('RGB')
+
+
+def _build_values_rgb(values_grid: np.ndarray, obs_image: NdArrayRGB8) -> NdArrayRGB8:
+    w = 240
+    h = 224
 
     # Normalize values to 0-255.
     v_min = values_grid.min()
@@ -164,14 +263,64 @@ def render_mario_pos_value_sweep(envs: Any, device: str, agent: Any):
         obs_rgba = obs_grayscale.convert('RGBA')
         obs_rgba.putalpha(int(0.25 * 256))
     else:
-        obs_image = env.screen.get_image(screen_index=0)
         obs_rgba = obs_image.convert('RGBA')
-        obs_rgba.putalpha(int(0.15 * 256))
+        obs_rgba.putalpha(int(0.25 * 256))
 
     # Paste the current observation onto the image.  Take the mask from the alpha values.
     values_rgba.paste(obs_rgba, (0, 0), mask=obs_rgba)
 
-    # Set screen values.
-    values_rgb = values_rgba.convert('RGB')
+    return values_rgba.convert('RGB')
 
-    return values_rgb
+
+def render_mario_pos_policy_value_sweep(envs: Any, device: str, agent: Any):
+    w = 240
+    h = 224
+    env = envs.envs[0].unwrapped
+    ram = env.nes.ram()
+
+    # Sweep mario positions, get value function.
+    x_steps = list(range(0, w, 15))
+    y_steps = list(range(0, h, 15))
+    num_x = len(x_steps)
+    num_y = len(y_steps)
+    values_grid = np.zeros((num_y, num_x), dtype=np.float64)
+    policy_grid = [
+        [
+            (0, 0)
+            for _ in range(num_x)
+        ]
+        for _ in range(num_y)
+    ]
+
+    # Convert actions into directions.
+    #   shape = (NumActions, 2)
+    action_dirs = torch.tensor([
+        _CONTROLLER_PRESS_TO_ARROW[tuple(controller_press)]
+        for controller_press in env.action_controller_presses
+    ], device=device, dtype=torch.float32).T
+
+    for j, y in enumerate(y_steps):
+        for i, x in enumerate(x_steps):
+            policy_action_probs, value, obs = _get_policy_and_value_at_offset(ram=ram, envs=envs, device=device, agent=agent, x=x, y=y, xvel=0, yvel=0)
+
+            # Convert policy action probabilities into a direction.
+            # Sum all of the direction*probability.
+            policy_dir = (action_dirs * policy_action_probs).sum(axis=1)
+
+            if False:
+                print(f"SETTING POLICY DIR AT {j},{i}: {policy_dir}")
+
+            values_grid[j][i] = value
+            policy_grid[j][i] = policy_dir
+
+    if False:
+        for j, y in enumerate(y_steps):
+            for i, x in enumerate(x_steps):
+                print(f"POLICY[{j}][{i}]={policy_grid[j][i]}")
+
+    obs_image = env.screen.get_image(screen_index=0)
+
+    policy_rgb = _build_policy_arrows_rgb(policy_grid, obs_image)
+    values_rgb = _build_values_rgb(values_grid, obs_image)
+
+    return policy_rgb, values_rgb

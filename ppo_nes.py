@@ -29,7 +29,7 @@ from stable_baselines3.common.atari_wrappers import (  # isort:skip
 
 from nes_ai.last_and_skip_wrapper import LastAndSkipEnv
 from super_mario_env import SuperMarioEnv
-from super_mario_env_viz import render_mario_pos_value_sweep
+from super_mario_env_viz import render_mario_pos_policy_value_sweep
 
 from gymnasium.envs.registration import register
 
@@ -238,6 +238,16 @@ class Agent(nn.Module):
             action = probs.sample()
         return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
 
+    def get_actor_policy_probs_and_critic_value(self, x):
+        with torch.no_grad():
+            hidden = self.network(x / 255.0)
+            logits = self.actor(hidden)
+            probs = Categorical(logits=logits)
+            action_probs = probs.probs
+
+            critic_value = self.critic(hidden)
+        return action_probs, critic_value
+
 
 def main():
     args = tyro.cli(Args)
@@ -370,8 +380,9 @@ def main():
             if pygame.K_v in nes.keys_pressed:
                 start_vis = time.time()
                 print("Generating value sweep...")
-                values_sweep_rgb = render_mario_pos_value_sweep(envs=envs, device=device, agent=agent)
+                policy_sweep_rgb, values_sweep_rgb = render_mario_pos_policy_value_sweep(envs=envs, device=device, agent=agent)
                 screen.set_image(values_sweep_rgb, screen_index=1)
+                screen.set_image(policy_sweep_rgb, screen_index=2)
                 print(f"Generated value sweep: {time.time()-start_vis:.4f}s")
 
             if nes.keys_pressed:
@@ -524,8 +535,9 @@ def main():
 
         # Show value sweep.
         if args.value_sweep_frequency and iteration % args.value_sweep_frequency == 0:
-            values_sweep_rgb = render_mario_pos_value_sweep(envs=envs, device=device, agent=agent)
+            policy_sweep_rgb, values_sweep_rgb = render_mario_pos_policy_value_sweep(envs=envs, device=device, agent=agent)
             screen.set_image(values_sweep_rgb, screen_index=1)
+            screen.set_image(policy_sweep_rgb, screen_index=2)
 
     envs.close()
     writer.close()

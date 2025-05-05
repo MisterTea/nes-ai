@@ -352,7 +352,7 @@ class SuperMarioEnv(gym.Env):
         self.render_fps = render_fps
 
         # Screen setup.  2 Screens, 1 next to the other.
-        self.screen = SimpleScreenNx1((SCREEN_W, SCREEN_H), scale=3, n=2)
+        self.screen = SimpleScreenNx1((SCREEN_W, SCREEN_H), scale=3, n=3)
 
         self.clock = None
 
