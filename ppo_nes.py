@@ -94,8 +94,8 @@ class Args:
     """the id of a wandb run to resume"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
-    checkpoint_frequency: int = 10
-    """create a checkpoint every N updates"""
+    checkpoint_frequency: float = 30
+    """create a checkpoint every N seconds"""
     train_agent: bool = True
     """enable or disable training of the agent"""
 
@@ -335,6 +335,10 @@ def main():
             save_code=True,
             id=run_name,
         )
+        assert run.dir == f"runs/{run_name}"
+        run_dir = run.dir
+    else:
+        run_dir = f"runs/{run_name}"
 
     writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
@@ -400,6 +404,9 @@ def main():
         print(f"Resumed at update {starting_iter}")
     else:
         starting_iter = 1
+
+    # Initialize last checkpoint time.  We don't want to checkpoint again for a bit.
+    last_checkpoint_time = time.time()
 
     for iteration in range(starting_iter, args.num_iterations + 1):
         print(f"Iter: {iteration}")
@@ -570,20 +577,27 @@ def main():
             writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
         # Checkpoint.
-        if args.track:
-            if args.checkpoint_frequency > 0 and iteration % args.checkpoint_frequency == 0:
-                print(f"Checkpoint at iter: {iteration}")
-                start_checkpoint = time.time()
+        seconds_since_last_checkpoint = time.time() - last_checkpoint_time
+        if args.checkpoint_frequency > 0 and seconds_since_last_checkpoint > args.checkpoint_frequency:
+            seconds_since_last_checkpoint = time.time() - last_checkpoint_time
+            print(f"Checkpoint at iter: {iteration}, since last checkpoint: {seconds_since_last_checkpoint:.2f}s")
+            start_checkpoint = time.time()
 
-                # NOTE: The run.dir location includes a 'files/' suffix.
-                #
-                # E.g. 'agent.cpkt' will be saved to:
-                #   /Users/dave/rl/nes-ai/wandb/run-20250418_130130-SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30/files/agent.ckpt
-                #
-                torch.save(agent.state_dict(), f"{run.dir}/agent.ckpt")
-                wandb.save(f"{run.dir}/agent.ckpt", policy="now")
+            # NOTE: The run.dir location includes a 'files/' suffix.
+            #
+            # E.g. 'agent.cpkt' will be saved to:
+            #   /Users/dave/rl/nes-ai/wandb/run-20250418_130130-SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30/files/agent.ckpt
+            #
+            torch.save(agent.state_dict(), f"{run_dir}/agent.ckpt")
 
-                print(f"Checkpoint done: {time.time() - start_checkpoint:.4f}s")
+            if args.track:
+                wandb.save(f"{run_dir}/agent.ckpt", policy="now")
+
+            print(f"Checkpoint done: {time.time() - start_checkpoint:.4f}s")
+
+            # Reset the checkpoint time, so we don't include the amount of time necessary to perform
+            # the checkpoint itself.
+            last_checkpoint_time = time.time()
 
         # Show value sweep.
         if args.value_sweep_frequency and iteration % args.value_sweep_frequency == 0:
