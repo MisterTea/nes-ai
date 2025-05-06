@@ -360,7 +360,7 @@ class SuperMarioEnv(gym.Env):
         # Save state buffer.
         self.save_states_time_buffer = deque(maxlen=5)
         self.save_states_distance_buffer = deque(maxlen=5)
-        self.seconds_between_saves = 5.0
+        self.seconds_between_saves = 10.0
         self.left_pos_between_saves = 100
         self.last_save_time = time.time()
         self.last_save_left_pos = 0
@@ -431,6 +431,10 @@ class SuperMarioEnv(gym.Env):
         self.ai_handler.update(frame=0, controller1=_to_controller_presses([]), ram=self.nes.ram(), screen_image=None)
         assert self.ai_handler.reward_map.lives == self.ale.lives(), f"Mismatched lives: reward_map={self.ai_handler.reward_map.lives} ram={self._ale.lives()}"
 
+        # Reset the save buffer criteria.
+        self.last_save_time = time.time()
+        self.last_save_left_pos = _left_pos(self.nes.ram())
+
     def _get_obs(self) -> NdArrayRGB8:
         screen_view = self.nes.get_screen_view()
         screen_view_np = self._screen_view_to_np(screen_view)
@@ -498,6 +502,10 @@ class SuperMarioEnv(gym.Env):
         self.ai_handler.update(frame=0, controller1=_to_controller_presses([]), ram=self.nes.ram(), screen_image=None)
         self.ale._lives = life(self.nes.ram())
         assert self.ai_handler.reward_map.lives == self.ale.lives(), f"Mismatched lives: reward_map={self.ai_handler.reward_map.lives} ram={self._ale.lives()}"
+
+        # Reset the save buffer criteria.
+        self.last_save_time = time.time()
+        self.last_save_left_pos = _left_pos(self.nes.ram())
 
         self.last_observation = observation
 
