@@ -12,7 +12,7 @@ from PIL import Image
 from nes import NES, SYNC_NONE, SYNC_PYGAME
 from nes_ai.ai.base import RewardIndex, RewardMap, compute_reward_map, get_level, get_time_left, get_world
 
-from super_mario_env_ram_hacks import skip_after_step, life
+from super_mario_env_ram_hacks import _skip_change_area, _skip_occupied_states, skip_after_step, life
 
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 NdArrayRGB8 = np.ndarray[tuple[Literal[4]], np.dtype[np.uint8]]
@@ -320,8 +320,8 @@ def _skip_start_screen(nes: Any):
     # Run frames until start screen.
     # TODO(millman): Not sure why this is 34 frames?  Found by binary searching until this worked.
     # for i in range(34):
-    for i in range(34 * 4):
-        nes.run_frame()
+    for i in range(40):
+       nes.run_frame()
 
     _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="BEFORE START PRESSED")
 
@@ -337,6 +337,10 @@ def _skip_start_screen(nes: Any):
 
     # Set controller back to no-op.
     nes.controller1.set_state(_to_controller_presses([]))
+
+    # Skip pre-level stuff.
+    _skip_change_area(ram)
+    _skip_occupied_states(nes)
 
     _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="AFTER START PRESSED")
 
