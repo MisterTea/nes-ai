@@ -375,7 +375,7 @@ class Agent(nn.Module):
 
         # NOTE: Initialize only the final layer to zero, and only the bias.  If the
         #   weights are zero, then the network can't learn.
-        if INIT_WEIGHTS_TO_ZERO := True:
+        if INIT_WEIGHTS_TO_ZERO := False:
             wc = 0.0
         else:
             wc = None
