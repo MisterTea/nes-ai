@@ -334,8 +334,22 @@ def bcdToInt(bcd_bytes):
     value = 0
     for x in range(0, len(bcd_bytes)):
         value *= 10
-        value += bcd_bytes[x]
+        value += int(bcd_bytes[x])
     return value
+
+
+def get_time_left(ram) -> int:
+    time_left_bytes = ram[0x07F8:0x07FB]
+    time_left = bcdToInt(time_left_bytes)
+    return time_left
+
+
+def get_level(ram) -> int:
+    return ram[0x760]
+
+
+def get_world(ram) -> int:
+    return ram[0x75F]
 
 
 def compute_reward_map(last_reward_map: RewardMap | None, ram):

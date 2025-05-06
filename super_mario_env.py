@@ -10,7 +10,7 @@ import torch
 
 from PIL import Image
 from nes import NES, SYNC_NONE, SYNC_PYGAME
-from nes_ai.ai.base import RewardIndex, RewardMap, compute_reward_map
+from nes_ai.ai.base import RewardIndex, RewardMap, compute_reward_map, get_level, get_time_left, get_world
 
 from super_mario_env_ram_hacks import skip_after_step, life
 
@@ -360,9 +360,9 @@ class SuperMarioEnv(gym.Env):
         # Save state buffer.
         self.save_states_time_buffer = deque(maxlen=5)
         self.save_states_distance_buffer = deque(maxlen=5)
-        self.seconds_between_saves = 10.0
+        self.ticks_between_saves = 30.0
         self.left_pos_between_saves = 100
-        self.last_save_time = time.time()
+        self.last_save_ticks = 0
         self.last_save_left_pos = 0
 
         self.render_mode = render_mode
@@ -431,9 +431,15 @@ class SuperMarioEnv(gym.Env):
         self.ai_handler.update(frame=0, controller1=_to_controller_presses([]), ram=self.nes.ram(), screen_image=None)
         assert self.ai_handler.reward_map.lives == self.ale.lives(), f"Mismatched lives: reward_map={self.ai_handler.reward_map.lives} ram={self._ale.lives()}"
 
+        ram = self.nes.ram()
+        left_pos = _left_pos(ram)
+        ticks_left = get_time_left(ram)
+
         # Reset the save buffer criteria.
-        self.last_save_time = time.time()
-        self.last_save_left_pos = _left_pos(self.nes.ram())
+        self.last_save_ticks = ticks_left
+        self.last_save_left_pos = left_pos
+
+        print(f"Start: left_pos={left_pos} ticks_left={ticks_left} lives={self.ale.lives()}")
 
     def _get_obs(self) -> NdArrayRGB8:
         screen_view = self.nes.get_screen_view()
@@ -461,8 +467,10 @@ class SuperMarioEnv(gym.Env):
         # We need the following line to seed self.np_random
         # super().reset(seed=seed)
 
-        # Get left_pos before resetting.
-        left_pos = _left_pos(self.nes.ram())
+        # Get state before resetting.
+        ram = self.nes.ram()
+        time_left = get_time_left(ram)
+        left_pos = _left_pos(ram)
 
         # Reset CPU and controller.
         self.nes.reset()
@@ -482,7 +490,7 @@ class SuperMarioEnv(gym.Env):
             if state_i < len(self.save_states_time_buffer):
                 state, state_time = self.save_states_time_buffer[state_i]
                 self.nes.load(state)
-                print(f"Reset to state: {time.time() - state_time:.2f}s ago")
+                print(f"Reset to state: {time_left - state_time:.2f} ticks ago")
             elif state_i < len(self.save_states_time_buffer) + len(self.save_states_distance_buffer):
                 i = state_i - len(self.save_states_time_buffer)
                 state, state_left_pos = self.save_states_distance_buffer[i]
@@ -506,8 +514,9 @@ class SuperMarioEnv(gym.Env):
         assert self.ai_handler.reward_map.lives == self.ale.lives(), f"Mismatched lives: reward_map={self.ai_handler.reward_map.lives} ram={self._ale.lives()}"
 
         # Reset the save buffer criteria.
-        self.last_save_time = time.time()
-        self.last_save_left_pos = _left_pos(self.nes.ram())
+        ram = self.nes.ram()
+        self.last_save_ticks = get_time_left(ram)
+        self.last_save_left_pos = _left_pos(ram)
 
         self.last_observation = observation
 
@@ -548,6 +557,9 @@ class SuperMarioEnv(gym.Env):
             controller_desc = _describe_controller_vector(self.nes.controller1.is_pressed)
             print(f"Controller after: {controller_desc}")
 
+        world_before_step = get_world(self.nes.ram())
+        level_before_step = get_level(self.nes.ram())
+
         # Take a step in the emulator.
         self.nes.run_frame()
 
@@ -570,21 +582,69 @@ class SuperMarioEnv(gym.Env):
             self.screen.show()
 
         if self.reset_to_save_state and not terminated:
-            # If it's been a few seconds since we last saved, create a new save state.
-            now = time.time()
-            if now - self.last_save_time > self.seconds_between_saves:
-                self.save_states_time_buffer.append((self.nes.save(), now))
-                self.last_save_time = time.time()
+            ram = self.nes.ram()
+
+            # Reset save criteria at new level.
+            level = get_level(ram)
+            if level != level_before_step:
+                world = get_world(ram)
+                print(f"New level: {world_before_step}-{level_before_step} -> {world}-{level}")
+
+                self.last_save_ticks = 0
+                self.last_save_left_pos = 0
+
+            #  markers at new level.
+
+            # If time left is too short, this creates a bad feedback loop because we can keep
+            # dying due to timer.  That would encourage the agent to finish quick, but it may not
+            # be possible to actually finish.
+            #
+            # We use some domain-specific knowledge here that all levels are about 3000-4000 units.
+            # If we assume that we can clear 4000 units in 400 timer ticks, then that means we need
+            # about 10 units/tick.  If we're too far behind this ratio, avoid saving based on time.
+            #
+            # For example, level 1-1 starts with 401 ticks (approx seconds) and is 3266 position
+            # units long.  The minimum rate at which we can cover ground is 3266 units in 401 ticks,
+            # or 3266/401 (8.1).  If we're under this ratio, we won't be able to finish the level.
+            #
+            # To get the ratio of our advancement, we actually want the number of ticks used, not the
+            # number of ticks left.  We assume that all levels have 401 ticks total.
+            #
+            # Here are some sample numbers:
+            #   3266 units / 401 ticks used ->  8.1 units/tick (min)
+            #   3266 units / 200 ticks used -> 16.3 units/tick (twice normal rate, good)
+            #    100 units /  20 ticks used ->  5.0 units/tick (bad, too slow)
+            #    100 units / 100 ticks used ->  1.0 units/tick (bad, too slow)
+
+            left_pos = _left_pos(ram)
+            ticks_left = get_time_left(ram)
+            ticks_used = max(1, 400 - ticks_left)
+
+            distance = left_pos - self.last_save_left_pos
+            distance_per_tick = left_pos / ticks_used
+            min_distance_per_tick = 3266 / 400 * 0.8
+
+             # If it's been a few seconds since we last saved, create a new save state.
+            ticks_since_last_save = self.last_save_ticks - ticks_left
+            if ticks_since_last_save > self.ticks_between_saves:
+                if distance_per_tick >= min_distance_per_tick:
+                    self.save_states_time_buffer.append((self.nes.save(), ticks_left))
+                    self.last_save_ticks = ticks_left
+                    print(f"Saved time state: left_pos={left_pos} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick}")
+                else:
+                    print(f"Skipping save state: left_pos={left_pos} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick}")
+                    # Don't try again for a little bit.  Pretend we saved a little while ago.
+                    self.last_save_ticks = ticks_left - self.ticks_between_saves / 2
 
             # Reset position if we're in a new level or new world.
             if self.ai_handler.reward_vector[RewardIndex.WORLD] or self.ai_handler.reward_vector[RewardIndex.LEVEL]:
                 self.last_save_left_pos = 0
 
             # If we've moved far enough, create a new save state.
-            left_pos = _left_pos(self.nes.ram())
-            if left_pos - self.last_save_left_pos > self.left_pos_between_saves:
+            if distance > self.left_pos_between_saves:
                 self.save_states_distance_buffer.append((self.nes.save(), int(left_pos)))
                 self.last_save_left_pos = left_pos
+                print(f"Saved distance state: left_pos={left_pos} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick}")
 
         # Speed through any prelevel screens, dying animations, etc. that we don't care about.
         skip_after_step(self.nes)
