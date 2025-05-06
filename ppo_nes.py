@@ -549,7 +549,7 @@ def _draw_action_probs(surf: pygame.Surface, at: int, action_probs: np.ndarray, 
             pygame.draw.rect(surface=surf, color=prob_vis_rgb, rect=(x_next + i*block_width, y_next, block_width, block_height))
 
 
-def _draw_action_probs2(surf: pygame.Surface, at: int, action_probs: np.ndarray, screen_size: tuple[float, float], block_width: int = 4):
+def _draw_action_probs2(surf: pygame.Surface, at: int, action_probs: np.ndarray, action_index: int, screen_size: tuple[float, float], block_width: int = 4):
     """Draw a single column of action probabilities.  Sweep left-to-right."""
 
     num_actions = len(action_probs)
@@ -578,6 +578,15 @@ def _draw_action_probs2(surf: pygame.Surface, at: int, action_probs: np.ndarray,
             prob_vis_gray = int(prob * 255)
             prob_vis_rgb = pygame.Color(prob_vis_gray, prob_vis_gray, prob_vis_gray)
             pygame.draw.rect(surface=surf, color=prob_vis_rgb, rect=(x, y + i*block_height, block_width, block_height))
+
+        # Draw selected action as a small circle inside the cell.
+        selected_rgb = pygame.Color(int(0.67 * 255), 0, 0)
+        center = (
+            int(x + block_width/2),
+            int(y + block_height/2 + action_index*block_height),
+        )
+        radius = int(min(block_width/2, block_height/2))
+        pygame.draw.circle(surface=surf, color=selected_rgb, center=center, radius=radius, width=1)
 
     if _DRAW_NEXT := True:
         cell_x_next = (at+1) % num_cell_cols
@@ -749,7 +758,7 @@ def main():
                 assert action_probs.shape == (1,7), f"Unexpected action_probs shape: {action_probs.shape}"
                 action_probs_single_batch = action_probs.squeeze(0)
                 # _draw_action_probs(screen.surfs[4], at=vis_action_probs_i, action_probs=action_probs_single_batch, screen_size=screen.screen_size)
-                _draw_action_probs2(screen.surfs[4], at=vis_action_probs_i, action_probs=action_probs_single_batch, screen_size=screen.screen_size)
+                _draw_action_probs2(screen.surfs[4], at=vis_action_probs_i, action_probs=action_probs_single_batch, action_index=action, screen_size=screen.screen_size)
 
                 vis_action_probs_i += 1
 
