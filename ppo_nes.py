@@ -198,12 +198,12 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0, weight_const=None):
     return layer
 
 class ResidualMlpBlock(nn.Module):
-    def __init__(self, dim, std: float = np.sqrt(2)):
+    def __init__(self, dim, std: float = np.sqrt(2), weight_const: float | None = None):
         super().__init__()
         self.block = nn.Sequential(
-            layer_init(nn.Linear(dim, dim), std=std),
+            layer_init(nn.Linear(dim, dim), std=std, weight_const=weight_const),
             nn.ReLU(),
-            layer_init(nn.Linear(dim, dim), std=std),
+            layer_init(nn.Linear(dim, dim), std=std, weight_const=weight_const),
         )
         self.relu = nn.ReLU()
 
@@ -256,27 +256,29 @@ class Agent(nn.Module):
 
         self.network = nn.Sequential(*layers)
 
-        if SMALL_AGENT := False:
-            self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
-            self.critic = layer_init(nn.Linear(512, 1), std=1)
+        # NOTE: Initialize only the final layer to zero, and only the bias.  If the
+        #   weights are zero, then the network can't learn.
+        if INIT_WEIGHTS_TO_ZERO := True:
+            wc = 0.0
         else:
-            if INIT_WEIGHTS_TO_ZERO := False:
-                wc = 0.0
-            else:
-                wc = None
+            wc = None
 
+        if SMALL_AGENT := True:
+            self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), weight_const=wc, std=0.1)
+            self.critic = layer_init(nn.Linear(512, 1), weight_const=wc, std=0.1)
+        else:
             self.actor = nn.Sequential(
-                layer_init(nn.Linear(512, 256), weight_const=wc, std=0.01),
+                layer_init(nn.Linear(512, 256), std=0.01),
                 nn.ReLU(),
-                layer_init(nn.Linear(256, 128), weight_const=wc, std=0.01),
+                layer_init(nn.Linear(256, 128), std=0.01),
                 nn.ReLU(),
                 layer_init(nn.Linear(128, envs.single_action_space.n), weight_const=wc, std=0.01),
             )
 
             self.critic = nn.Sequential(
-                layer_init(nn.Linear(512, 256), weight_const=wc, std=0.01),
+                layer_init(nn.Linear(512, 256), std=0.01),
                 nn.ReLU(),
-                layer_init(nn.Linear(256, 128), weight_const=wc, std=0.01),
+                layer_init(nn.Linear(256, 128), std=0.01),
                 nn.ReLU(),
                 layer_init(nn.Linear(128, 1), weight_const=wc, std=1),
             )
