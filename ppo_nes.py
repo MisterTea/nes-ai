@@ -448,12 +448,13 @@ def _sigmoid_scale(x: float, lower: float, upper: float, k: float = 1.0):
 
 def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax: float, screen_size: tuple[float, float], block_size: int = 10, log_scale: bool = False):
     if not log_scale:
+        max_abs_reward = max(abs(rmin), abs(rmax))
         # Use a linear scale from [rmin, 0] and [0, rmax].  Positive and negative rewards each get
         # their own space of 128 values.
         if reward >= 0:
-            reward_vis_value = 128 + reward / rmax * 128
+            reward_vis_value = 128 + abs(reward / max_abs_reward) * 128
         else:
-            reward_vis_value = 128 + reward / rmin * 128
+            reward_vis_value = 128 - abs(reward / max_abs_reward) * 128
         reward_vis_value = int(max(0, min(255, reward_vis_value)))
     else:
         # reward_normalized = (reward - rmin) / rmax
