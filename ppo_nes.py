@@ -323,9 +323,14 @@ def _sigmoid_scale(x: float, lower: float, upper: float, k: float = 1.0):
     return lower + scale * sigmoid
 
 
-def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax: float, screen_size: tuple[float, float], block_size: int = 10, log_scale: bool = True):
+def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax: float, screen_size: tuple[float, float], block_size: int = 10, log_scale: bool = False):
     if not log_scale:
-        reward_vis_value = (reward - rmin) / rmax * 255
+        # Use a linear scale from [rmin, 0] and [0, rmax].  Positive and negative rewards each get
+        # their own space of 128 values.
+        if reward >= 0:
+            reward_vis_value = 128 + reward / rmax * 128
+        else:
+            reward_vis_value = 128 + reward / rmin * 128
         reward_vis_value = int(max(0, min(255, reward_vis_value)))
     else:
         # reward_normalized = (reward - rmin) / rmax
@@ -340,29 +345,29 @@ def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax
         reward_normalized = (reward - rmin / rmax)
         reward_vis_value = int(_sigmoid(reward_normalized) * 255)
 
-    # reward_vis_value = np.random.randint(0, 255)
+        # reward_vis_value = np.random.randint(0, 255)
 
-    # Draw vertical columns before moving on to a row.  It makes it feel more natural since time
-    # flows left-to-right, like the visualization.
     w, h = screen_size
     bw = w // block_size
     bh = h // block_size
 
-    bx = (at // bw) % bh
-    by = at % bw
+    if _DRAW_CURRENT := True:
+        # Draw vertical columns before moving on to the next column.  This feels natural since time
+        # flows left-to-right, like the visualization.
+        bx = (at // bw) % bh
+        by = at % bw
 
-    x = bx * block_size
-    y = by * block_size
+        x = bx * block_size
+        y = by * block_size
 
-    if False:
-        # Directly set the pixel values.
-        surf_np = pygame.surfarray.pixels3d(surf)
-        surf_np[x:x + block_size, y:y+block_size] = reward_vis_value
-    else:
-        # print(f"DRAWING AT: {x},{y}: {reward_vis_value}")
-        # Draw a rectangle.
-        reward_vis_rgb = pygame.Color(reward_vis_value, reward_vis_value, reward_vis_value)
-        pygame.draw.rect(surface=surf, color=reward_vis_rgb, rect=(x, y, block_size, block_size))
+        if False:
+            # Directly set the pixel values.
+            surf_np = pygame.surfarray.pixels3d(surf)
+            surf_np[x:x + block_size, y:y+block_size] = reward_vis_value
+        else:
+            # Draw a rectangle.
+            reward_vis_rgb = pygame.Color(reward_vis_value, reward_vis_value, reward_vis_value)
+            pygame.draw.rect(surface=surf, color=reward_vis_rgb, rect=(x, y, block_size, block_size))
 
     if _DRAW_NEXT := True:
         bx_next = ((at+1) // bw) % bh
