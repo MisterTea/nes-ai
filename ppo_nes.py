@@ -8,6 +8,7 @@ import random
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 import gymnasium as gym
 import numpy as np
@@ -43,9 +44,10 @@ register(
 
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 
-
-USE_PRETRAINED_VISION_MODEL = True
-USE_OBSERVATION_224x224 = False
+class VisionModel(Enum):
+    CONV_GRAYSCALE = 'conv_grayscale'
+    CONV_GRAYSCALE_224 = 'conv_grayscale_224'
+    PRETRAINED = 'pretrained'
 
 
 @dataclass
@@ -109,6 +111,9 @@ class Args:
     # Specific experiments
     reset_to_save_state: bool = False
 
+    # Vision model
+    vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224
+
     # Algorithm specific arguments
     env_id: str = "SuperMarioBros-mame-v0"
     """the id of the environment"""
@@ -154,7 +159,7 @@ class Args:
     """the number of iterations (computed in runtime)"""
 
 
-def make_env(env_id, idx, capture_video, run_name):
+def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, vision_model: VisionModel):
     def thunk():
         if capture_video and idx == 0:
             env = gym.make(env_id, render_mode="rgb_array")
@@ -175,11 +180,16 @@ def make_env(env_id, idx, capture_video, run_name):
         #     env = FireResetEnv(env)
         # env = ClipRewardEnv(env)
 
-        if USE_PRETRAINED_VISION_MODEL or USE_OBSERVATION_224x224:
-            env = gym.wrappers.ResizeObservation(env, (224, 224))
-        else:
+        if vision_model == VisionModel.CONV_GRAYSCALE:
             env = gym.wrappers.GrayscaleObservation(env)
             env = gym.wrappers.ResizeObservation(env, (84, 84))
+        elif vision_model == VisionModel.CONV_GRAYSCALE_224:
+            env = gym.wrappers.GrayscaleObservation(env)
+            env = gym.wrappers.ResizeObservation(env, (224, 224))
+        elif vision_model == VisionModel.PRETRAINED:
+            env = gym.wrappers.ResizeObservation(env, (224, 224))
+        else:
+            raise AssertionError(f"Unexpected vision model type: {VISION_MODEL}")
 
         env = gym.wrappers.FrameStackObservation(env, 4)
 
@@ -219,9 +229,11 @@ class ResidualMlpBlock(nn.Module):
 IMAGE_MODEL_NAME = "mobilenetv3_small_050.lamb_in1k"
 
 
-class ConvTrunk(nn.Module):
+class ConvTrunkGrayscale(nn.Module):
     def __init__(self):
         super().__init__()
+
+        # (E, 4, 84, 84) -> (1, 3136)
         self.trunk = nn.Sequential(
             layer_init(nn.Conv2d(4, 32, 8, stride=4)),
             nn.ReLU(),
@@ -232,24 +244,40 @@ class ConvTrunk(nn.Module):
             nn.Flatten(),
         )
 
-        if not USE_OBSERVATION_224x224:
-            # Input size for an input observation of size: 84x84
-            layers = [
-                layer_init(nn.Linear(64 * 7 * 7, 512)),
-            ]
-        else:
-            # Input size for an input observation of size: 224x224
-            layers = [
-                layer_init(nn.Linear(64 * 24 * 24, 512)),
-            ]
-
-        self.post_trunk = nn.Sequential(*layers)
+        # Input size for a grayscale observation of size: 84x84
+        # (1, 3136) -> (1, 512)
+        self.post_trunk = nn.Sequential(
+            layer_init(nn.Linear(64 * 7 * 7, 512)),
+        )
 
     def forward(self, x):
-        # For grayscale
-        # -> (1, 3136)
         trunk_output = self.trunk(x)
+        return self.post_trunk(trunk_output)
 
+
+class ConvTrunkGrayscale224(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        # (E, 4, 224, 224) -> (1, 36864)
+        self.trunk = nn.Sequential(
+            layer_init(nn.Conv2d(4, 32, 8, stride=4)),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+
+        # Input size for a grayscale observation of size: 224x224
+        # (1, 36864) -> (1, 512)
+        self.post_trunk = nn.Sequential(
+            layer_init(nn.Linear(64 * 24 * 24, 512)),
+        )
+
+    def forward(self, x):
+        trunk_output = self.trunk(x)
         return self.post_trunk(trunk_output)
 
 
@@ -342,13 +370,17 @@ class PretrainedMobilenetTrunk(nn.Module):
 
 
 class Agent(nn.Module):
-    def __init__(self, envs):
+    def __init__(self, envs, vision_model: VisionModel):
         super().__init__()
 
-        if USE_PRETRAINED_VISION_MODEL:
+        if vision_model == VisionModel.PRETRAINED:
             self.trunk = PretrainedMobilenetTrunk()
+        elif vision_model == VisionModel.CONV_GRAYSCALE:
+            self.trunk = ConvTrunkGrayscale()
+        elif vision_model == VisionModel.CONV_GRAYSCALE_224:
+            self.trunk = ConvTrunkGrayscale224()
         else:
-            self.trunk = ConvTrunk()
+            raise AssertionError(f"Unexpected vision model: {vision_model}")
 
         # Shared linear layers.
         layers = []
@@ -664,14 +696,14 @@ def main():
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)],
+        [make_env(args.env_id, i, args.capture_video, run_name, args.vision_model) for i in range(args.num_envs)],
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
     screen = envs.envs[0].unwrapped.screen
     nes = envs.envs[0].unwrapped.nes
 
-    agent = Agent(envs).to(device)
+    agent = Agent(envs, args.vision_model).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # Reward visualization.
