@@ -442,6 +442,7 @@ class SuperMarioEnv(gym.Env):
 
         # Reset CPU and controller.
         self.nes.reset()
+        self.nes.controller1.set_state(_to_controller_presses([]))
 
         # Load from saved state, after start screen.
         self.nes.load(self.start_state)
