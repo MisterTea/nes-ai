@@ -106,6 +106,9 @@ class Args:
     visualize_reward: bool = True
     visualize_actions: bool = True
 
+    # Specific experiments
+    reset_to_save_state: bool = False
+
     # Algorithm specific arguments
     env_id: str = "SuperMarioBros-mame-v0"
     """the id of the environment"""
@@ -158,7 +161,7 @@ def make_env(env_id, idx, capture_video, run_name):
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
             raise RuntimeError("STOP")
         else:
-            env = gym.make(env_id, render_mode="human")
+            env = gym.make(env_id, render_mode="human", reset_to_save_state=True)
 
         print(f"RENDER MODE: {env.render_mode}")
 

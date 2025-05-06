@@ -1,3 +1,6 @@
+import random
+import time
+from collections import deque
 from typing import Any, Literal, Optional
 
 import gymnasium as gym
@@ -7,7 +10,7 @@ import torch
 
 from PIL import Image
 from nes import NES, SYNC_NONE, SYNC_PYGAME
-from nes_ai.ai.base import RewardMap, compute_reward_map
+from nes_ai.ai.base import RewardIndex, RewardMap, compute_reward_map
 
 from super_mario_env_ram_hacks import skip_after_step, life
 
@@ -341,12 +344,26 @@ def _skip_start_screen(nes: Any):
     _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="READY TO PLAY")
 
 
+def _left_pos(ram: NdArrayUint8) -> int:
+    return (int(ram[0x006D]) * 256) + int(ram[0x0086])
+
+
 # Reference: https://gymnasium.farama.org/introduction/create_custom_env/
 class SuperMarioEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 120}
 
-    def __init__(self, render_mode: str | None = None, render_fps: int | None = None):
+    def __init__(self, render_mode: str | None = None, render_fps: int | None = None, reset_to_save_state: bool = False):
         self.resets = 0
+
+        self.reset_to_save_state = reset_to_save_state
+
+        # Save state buffer.
+        self.save_states_time_buffer = deque(maxlen=5)
+        self.save_states_distance_buffer = deque(maxlen=5)
+        self.seconds_between_saves = 5.0
+        self.left_pos_between_saves = 100
+        self.last_save_time = time.time()
+        self.last_save_left_pos = 0
 
         self.render_mode = render_mode
         self.render_fps = render_fps
@@ -440,12 +457,38 @@ class SuperMarioEnv(gym.Env):
         # We need the following line to seed self.np_random
         # super().reset(seed=seed)
 
+        # Get left_pos before resetting.
+        left_pos = _left_pos(self.nes.ram())
+
         # Reset CPU and controller.
         self.nes.reset()
         self.nes.controller1.set_state(_to_controller_presses([]))
 
-        # Load from saved state, after start screen.
-        self.nes.load(self.start_state)
+        if self.reset_to_save_state and (self.save_states_time_buffer or self.save_states_distance_buffer):
+            num_states = len(self.save_states_time_buffer) + len(self.save_states_distance_buffer)
+
+            if _ALWAYS_INCLUDE_START_STATE := False:
+                # Always include some chance of doing a regular reset.
+                num_states += 1
+
+            state_i = random.randint(0, num_states)
+
+            if state_i < len(self.save_states_time_buffer):
+                state, state_time = self.save_states_time_buffer[state_i]
+                self.nes.load(state)
+                print(f"Reset to state: {time.time() - state_time:.2f}s ago")
+            elif state_i < len(self.save_states_time_buffer) + len(self.save_states_distance_buffer):
+                i = state_i - len(self.save_states_time_buffer)
+                state, state_left_pos = self.save_states_distance_buffer[i]
+                self.nes.load(state)
+                print(f"Reset to state: {int(left_pos) - state_left_pos} distance to the left")
+            else:
+                self.nes.load(self.start_state)
+                print("Reset to starting state")
+
+        else:
+            # Load from saved state, after start screen.
+            self.nes.load(self.start_state)
 
         # Get initial values.
         observation = self._get_obs()
@@ -515,6 +558,23 @@ class SuperMarioEnv(gym.Env):
         if self.render_mode == "human":
             self.screen.blit_image_np(observation, screen_index=0)
             self.screen.show()
+
+        if self.reset_to_save_state and not terminated:
+            # If it's been a few seconds since we last saved, create a new save state.
+            now = time.time()
+            if now - self.last_save_time > self.seconds_between_saves:
+                self.save_states_time_buffer.append((self.nes.save(), now))
+                self.last_save_time = time.time()
+
+            # Reset position if we're in a new level or new world.
+            if self.ai_handler.reward_vector[RewardIndex.WORLD] or self.ai_handler.reward_vector[RewardIndex.LEVEL]:
+                self.last_save_left_pos = 0
+
+            # If we've moved far enough, create a new save state.
+            left_pos = _left_pos(self.nes.ram())
+            if left_pos - self.last_save_left_pos > self.left_pos_between_saves:
+                self.save_states_distance_buffer.append((self.nes.save(), int(left_pos)))
+                self.last_save_left_pos = left_pos
 
         # Speed through any prelevel screens, dying animations, etc. that we don't care about.
         skip_after_step(self.nes)
