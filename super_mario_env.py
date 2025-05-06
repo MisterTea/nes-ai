@@ -475,7 +475,9 @@ class SuperMarioEnv(gym.Env):
                 # Always include some chance of doing a regular reset.
                 num_states += 1
 
-            state_i = random.randint(0, num_states)
+            # NOTE: random.randint() is inclusive of both endpoints, but np.random.randint()
+            #   is exclusive of the right endpoint.
+            state_i = random.randint(0, num_states - 1)
 
             if state_i < len(self.save_states_time_buffer):
                 state, state_time = self.save_states_time_buffer[state_i]
