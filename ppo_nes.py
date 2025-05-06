@@ -12,6 +12,7 @@ from datetime import datetime
 import gymnasium as gym
 import numpy as np
 import pygame
+import timm
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -43,7 +44,7 @@ register(
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 
 
-
+USE_PRETRAINED_VISION_MODEL = True
 USE_OBSERVATION_224x224 = False
 
 
@@ -171,11 +172,11 @@ def make_env(env_id, idx, capture_video, run_name):
         #     env = FireResetEnv(env)
         # env = ClipRewardEnv(env)
 
-        if not USE_OBSERVATION_224x224:
+        if USE_PRETRAINED_VISION_MODEL or USE_OBSERVATION_224x224:
+            env = gym.wrappers.ResizeObservation(env, (224, 224))
+        else:
             env = gym.wrappers.GrayscaleObservation(env)
             env = gym.wrappers.ResizeObservation(env, (84, 84))
-        else:
-            env = gym.wrappers.ResizeObservation(env, (224, 224))
 
         env = gym.wrappers.FrameStackObservation(env, 4)
 
@@ -210,11 +211,15 @@ class ResidualMlpBlock(nn.Module):
     def forward(self, x):
         return self.relu(x + self.block(x))
 
-class Agent(nn.Module):
-    def __init__(self, envs):
-        super().__init__()
 
-        layers = [
+# Smallest mobilenet
+IMAGE_MODEL_NAME = "mobilenetv3_small_050.lamb_in1k"
+
+
+class ConvTrunk(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.trunk = nn.Sequential(
             layer_init(nn.Conv2d(4, 32, 8, stride=4)),
             nn.ReLU(),
             layer_init(nn.Conv2d(32, 64, 4, stride=2)),
@@ -222,16 +227,128 @@ class Agent(nn.Module):
             layer_init(nn.Conv2d(64, 64, 3, stride=1)),
             nn.ReLU(),
             nn.Flatten(),
-        ]
+        )
 
         if not USE_OBSERVATION_224x224:
             # Input size for an input observation of size: 84x84
-            layers.append(layer_init(nn.Linear(64 * 7 * 7, 512)))
+            layers = [
+                layer_init(nn.Linear(64 * 7 * 7, 512)),
+            ]
         else:
             # Input size for an input observation of size: 224x224
-            layers.append(layer_init(nn.Linear(64 * 24 * 24, 512)))
+            layers = [
+                layer_init(nn.Linear(64 * 24 * 24, 512)),
+            ]
+
+        self.post_trunk = nn.Sequential(*layers)
+
+    def forward(self, x):
+        # For grayscale
+        # -> (1, 3136)
+        trunk_output = self.trunk(x)
+
+        return self.post_trunk(trunk_output)
+
+
+class PretrainedMobilenetTrunk(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.trunk = timm.create_model(
+            IMAGE_MODEL_NAME,
+            pretrained=True,
+            num_classes=0,
+        )
+
+        # Freeze the model.
+        for param in self.trunk.parameters():
+            param.requires_grad = False
+
+        # Push a random input through the model to figure out the shape of the output, at runtime.
+        random_input = torch.randn(1, 3, 224, 224)
+        trunk_output = self.trunk(random_input)
+        self.num_timm_features = trunk_output.reshape(1, -1).shape[1]
+        print(f"PretrainedMobilenetTrunk output shape: {trunk_output.shape}, num_features={self.num_timm_features}")
+
+        self.conv_layers = nn.Sequential(
+            nn.Conv1d(in_channels=1024, out_channels=512, kernel_size=4),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        # Flatten the environment and batch dimensions together for the trunk feature extractor.
+        # Each element is an image that should be processed by the feature extractor independently.
+
+        # X: [envs, frames, height, width, channels]
+        env_size = x.shape[0]
+        batch_size = x.shape[1]
+        assert len(x.shape) == 5, f"Expected a 5D tensor, but got {x.shape}"
+
+        # (E, 4, 224, 224, 3)
+        expected_shape = (4, 224, 224, 3)
+        assert x.shape[1:] == expected_shape, f"Unexpected input shape: {x.shape[1:]} != {expected_shape}"
+
+        # Flatten the environment and frames dimensions together into one dimension for processing.
+        # (E*B, 224, 224, 3)
+        x_bhwc = x.flatten(start_dim=0, end_dim=1)
+        expected_shape = (224, 224, 3)
+        assert x_bhwc.shape[1:] == expected_shape, f"Unexpected BHWC shape: {x_bhwc.shape[1:]} != {expected_shape}"
+
+        # Reorder into (B, C, H, W) for mobilenet expected input.
+        # (E*B, 3, 224, 224)
+        x_bchw = x_bhwc.permute(0, 3, 1, 2)
+        expected_shape = (3, 224, 224)
+        assert x_bchw.shape[1:] == expected_shape, f"Unexpected BCHW shape: {x_bchw.shape[1:]} != {expected_shape}"
+
+        # Process each environment independently with the trunk.
+        # This assumes self.trunk is designed to handle input of shape [batch_size, channels, height, width].
+        # -> (E*B, 1024)
+        trunk_output = self.trunk(x_bchw)
+
+        # Reshape from (E*B, 1024) back into (E, B, 1024).
+        # -> (E, B, 1024)
+        x_ebn = trunk_output.view(env_size, batch_size, self.num_timm_features)
+        expected_shape = (env_size, batch_size, self.num_timm_features)
+        assert x_ebn.shape == expected_shape, f"Unexpected EBN shape: {x_ebn.shape} != {expected_shape}"
+
+        # Reshape for convolution.
+        # -> (E, 1024, B)
+        x_enb = x_ebn.permute(0, 2, 1)
+        expected_shape = (env_size, self.num_timm_features, batch_size)
+        assert x_enb.shape == expected_shape, f"Unexpected ENB shape: {x_enb.shape} != {expected_shape}"
+
+        # Apply convolution to 4-frame-stacks
+        # -> (E, 512, 1)
+        conv_output = self.conv_layers(x_enb)
+        expected_shape = (env_size, 512, 1)
+        assert conv_output.shape == expected_shape, f"Unexpected conv output shape: {conv_output.shape} != {expected_shape}"
+
+        # Reshape into (E, 1, 512)
+        result = conv_output.permute(0, 2, 1)
+        expected_shape = (env_size, 1, 512)
+        assert result.shape == expected_shape, f"Unexpected result shape: {result.shape} != {expected_shape}"
+
+        # Remove extra dimension.
+        # -> (E, 512)
+        result_en = result.squeeze(1)
+        expected_shape = (env_size, 512)
+        assert result_en.shape == expected_shape, f"Unexpected EN output shape: {result_en.shape} != {expected_shape}"
+
+        # Return the processed result
+        return result_en
+
+
+class Agent(nn.Module):
+    def __init__(self, envs):
+        super().__init__()
+
+        if USE_PRETRAINED_VISION_MODEL:
+            self.trunk = PretrainedMobilenetTrunk()
+        else:
+            self.trunk = ConvTrunk()
 
         # Shared linear layers.
+        layers = []
         if False:
             layers += [
                 layer_init(nn.Linear(512, 512), std=1),
@@ -284,10 +401,13 @@ class Agent(nn.Module):
             )
 
     def get_value(self, x):
-        return self.critic(self.network(x / 255.0))
+        trunk_output = self.trunk(x / 255.0)
+        hidden = self.network(trunk_output)
+        return self.critic(hidden)
 
     def get_action_and_value(self, x, action=None):
-        hidden = self.network(x / 255.0)
+        trunk_output = self.trunk(x / 255.0)
+        hidden = self.network(trunk_output)
         logits = self.actor(hidden)
         probs = Categorical(logits=logits)
         if action is None:
@@ -296,7 +416,8 @@ class Agent(nn.Module):
 
     def get_actor_policy_probs_and_critic_value(self, x):
         with torch.no_grad():
-            hidden = self.network(x / 255.0)
+            trunk_output = self.trunk(x / 255.0)
+            hidden = self.network(trunk_output)
             logits = self.actor(hidden)
             probs = Categorical(logits=logits)
             action_probs = probs.probs
