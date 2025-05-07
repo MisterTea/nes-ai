@@ -362,10 +362,10 @@ class SuperMarioEnv(gym.Env):
         self.reset_to_save_state = reset_to_save_state
 
         # Save state buffer.
-        self.save_states_time_buffer = deque(maxlen=5)
-        self.save_states_distance_buffer = deque(maxlen=5)
-        self.ticks_between_saves = 30.0
-        self.left_pos_between_saves = 100
+        self.save_states_time_buffer = deque(maxlen=10)
+        self.save_states_distance_buffer = deque(maxlen=10)
+        self.ticks_between_saves = 40.0
+        self.left_pos_between_saves = 200
         self.last_save_ticks = 0
         self.last_save_left_pos = 0
 
@@ -585,6 +585,9 @@ class SuperMarioEnv(gym.Env):
             self.screen.blit_image_np(observation, screen_index=0)
             self.screen.show()
 
+        # Speed through any prelevel screens, dying animations, etc. that we don't care about.
+        skip_after_step(self.nes)
+
         if self.reset_to_save_state and not terminated:
             ram = self.nes.ram()
 
@@ -596,8 +599,6 @@ class SuperMarioEnv(gym.Env):
 
                 self.last_save_ticks = 0
                 self.last_save_left_pos = 0
-
-            #  markers at new level.
 
             # If time left is too short, this creates a bad feedback loop because we can keep
             # dying due to timer.  That would encourage the agent to finish quick, but it may not
@@ -626,11 +627,11 @@ class SuperMarioEnv(gym.Env):
 
             distance = left_pos - self.last_save_left_pos
             distance_per_tick = left_pos / ticks_used
-            min_distance_per_tick = 3266 / 400 * 0.8
+            min_distance_per_tick = 3266 / 400 * 1.1
 
              # If it's been a few seconds since we last saved, create a new save state.
             ticks_since_last_save = self.last_save_ticks - ticks_left
-            if ticks_since_last_save > self.ticks_between_saves:
+            if ticks_since_last_save > self.ticks_between_saves and ticks_left > 50:
                 if distance_per_tick >= min_distance_per_tick:
                     self.save_states_time_buffer.append((self.nes.save(), ticks_left))
                     self.last_save_ticks = ticks_left
@@ -638,7 +639,7 @@ class SuperMarioEnv(gym.Env):
                 else:
                     print(f"Skipping save state: left_pos={left_pos} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick}")
                     # Don't try again for a little bit.  Pretend we saved a little while ago.
-                    self.last_save_ticks = ticks_left - self.ticks_between_saves / 2
+                    self.last_save_ticks = ticks_left
 
             # Reset position if we're in a new level or new world.
             if self.ai_handler.reward_vector[RewardIndex.WORLD] or self.ai_handler.reward_vector[RewardIndex.LEVEL]:
@@ -646,12 +647,14 @@ class SuperMarioEnv(gym.Env):
 
             # If we've moved far enough, create a new save state.
             if distance > self.left_pos_between_saves:
-                self.save_states_distance_buffer.append((self.nes.save(), int(left_pos)))
-                self.last_save_left_pos = left_pos
-                print(f"Saved distance state: left_pos={left_pos} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick}")
-
-        # Speed through any prelevel screens, dying animations, etc. that we don't care about.
-        skip_after_step(self.nes)
+                if distance_per_tick >= min_distance_per_tick:
+                    self.save_states_distance_buffer.append((self.nes.save(), int(left_pos)))
+                    self.last_save_left_pos = left_pos
+                    print(f"Saved distance state: left_pos={left_pos} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick}")
+                else:
+                    print(f"Skipping save state: left_pos={left_pos} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick}")
+                    # Don't try again for a little bit.  Pretend we saved a little while ago.
+                    self.last_save_left_pos = left_pos
 
         return observation, reward, terminated, truncated, info
 
