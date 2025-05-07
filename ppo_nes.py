@@ -401,9 +401,9 @@ class Agent(nn.Module):
             layers += [
                 ResidualMlpBlock(512, std=1),
                 ResidualMlpBlock(512, std=1),
-                ResidualMlpBlock(512, std=1),
-                ResidualMlpBlock(512, std=1),
-                ResidualMlpBlock(512, std=1),
+                # ResidualMlpBlock(512, std=1),
+                # ResidualMlpBlock(512, std=1),
+                # ResidualMlpBlock(512, std=1),
             ]
 
         self.network = nn.Sequential(*layers)
@@ -416,8 +416,8 @@ class Agent(nn.Module):
             wc = None
 
         if SMALL_AGENT := True:
-            self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), weight_const=wc, std=0.1)
-            self.critic = layer_init(nn.Linear(512, 1), weight_const=wc, std=0.1)
+            self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), weight_const=wc, std=0.01)
+            self.critic = layer_init(nn.Linear(512, 1), weight_const=wc, std=1)
         else:
             self.actor = nn.Sequential(
                 layer_init(nn.Linear(512, 256), std=0.01),
