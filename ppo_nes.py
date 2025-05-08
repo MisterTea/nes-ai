@@ -155,7 +155,7 @@ class Args:
     """the maximum norm for the gradient clipping"""
     target_kl: float = None
     """the target KL divergence threshold"""
-    intrinsic_reward_coef: float = 0.01
+    intrinsic_reward_coef: float = 0.001
     """coefficient of the intrinsic reward when combining with extrinsic reward"""
 
     # to be filled in runtime
@@ -491,7 +491,8 @@ def _sigmoid_scale(x: float, lower: float, upper: float, k: float = 1.0):
 
 def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax: float, screen_size: tuple[float, float], block_size: int = 10, log_scale: bool = False):
     if not log_scale:
-        max_abs_reward = max(abs(rmin), abs(rmax))
+        max_abs_reward = max(abs(reward), max(abs(rmin), abs(rmax)))
+
         # Use a linear scale from [rmin, 0] and [0, rmax].  Positive and negative rewards each get
         # their own space of 128 values.
         if reward >= 0:
@@ -830,11 +831,11 @@ def main():
     surf_np = pygame.surfarray.pixels3d(screen.surfs[3])
     surf_np[:] = (128, 128, 128)
     vis_reward_min = 0
-    vis_reward_max = 1
+    vis_reward_max = 0
     vis_reward_image_i = 0
 
     vis_rint_min = 0
-    vis_rint_max = 1
+    vis_rint_max = 0
     vis_rint_image_i = 0
 
     vis_action_probs_i = 0
@@ -937,7 +938,7 @@ def main():
                     # (1, 4, 224, 224)
                     decode_obs = decoder(phi_next).cpu().numpy()
 
-                print(f"DECODED SHAPE: {decode_obs.shape}")
+                # print(f"DECODED SHAPE: {decode_obs.shape}")
                 decode_grayscale = decode_obs[0, -1]
 
                 img_gray = Image.fromarray(decode_grayscale, mode='L')
