@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
@@ -16,8 +17,10 @@ import pygame
 import timm
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import tyro
+from PIL import Image
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 from stable_baselines3.common.atari_wrappers import (  # isort:skip
@@ -107,8 +110,11 @@ class Args:
     """create a value sweep visualization every N updates"""
     visualize_reward: bool = True
     visualize_actions: bool = True
+    visualize_intrinsic_decoder: bool = True
+    visualize_intrinsic_reward: bool = True
 
     # Specific experiments
+    dump_trajectories: bool = False
     reset_to_save_state: bool = False
 
     # Vision model
@@ -149,6 +155,8 @@ class Args:
     """the maximum norm for the gradient clipping"""
     target_kl: float = None
     """the target KL divergence threshold"""
+    intrinsic_reward_coef: float = 0.01
+    """coefficient of the intrinsic reward when combining with extrinsic reward"""
 
     # to be filled in runtime
     batch_size: int = 0
@@ -189,7 +197,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, vision_m
         elif vision_model == VisionModel.PRETRAINED:
             env = gym.wrappers.ResizeObservation(env, (224, 224))
         else:
-            raise AssertionError(f"Unexpected vision model type: {VISION_MODEL}")
+            raise AssertionError(f"Unexpected vision model type: {vision_model}")
 
         env = gym.wrappers.FrameStackObservation(env, 4)
 
@@ -633,6 +641,102 @@ def _draw_action_probs2(surf: pygame.Surface, at: int, action_probs: np.ndarray,
             pygame.draw.rect(surface=surf, color=prob_vis_rgb, rect=(x_next, y_next + i*block_height, block_width, block_height))
 
 
+# -------- Feature Encoder --------
+class ICMEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(4, 32, kernel_size=8, stride=4),   # (B, 4, 224, 224) -> (B, 32, 55, 55)
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),  # -> (B, 64, 26, 26)
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1), # -> (B, 128, 24, 24)
+            nn.ReLU(),
+            nn.Flatten()  # -> (B, 73728)
+        )
+        self.output_dim = 128 * 24 * 24
+
+        print(f"ICMEncoder.conv: device={next(self.parameters()).device}")
+
+    def forward(self, x):  # x: (B, 4, 224, 224)
+        return self.conv(x)  # (B, output_dim)
+
+# -------- Inverse Model --------
+class InverseModel(nn.Module):
+    def __init__(self, feature_dim, action_dim):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(feature_dim * 2, 256),
+            nn.ReLU(),
+            nn.Linear(256, action_dim)
+        )
+
+    def forward(self, phi, phi_next):
+        x = torch.cat([phi, phi_next], dim=1)
+        return self.fc(x)
+
+# -------- Forward Model --------
+class ForwardModel(nn.Module):
+    def __init__(self, feature_dim, action_dim):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(feature_dim + action_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, feature_dim)
+        )
+
+    def forward(self, phi, action_onehot):
+        # print("ForwardModel: phi={phi.shape} action_onehot={action_onehot.shape}")
+        x = torch.cat([phi, action_onehot], dim=1)
+        return self.fc(x)
+
+# -------- ICM Decoder --------
+class ICMDecoder(nn.Module):
+    def __init__(self, feature_dim):
+        super().__init__()
+        self.unflatten = nn.Unflatten(1, (128, 24, 24))  # inverse of flatten
+        self.deconv = nn.Sequential(
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=1),  # -> (64, 26, 26)
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2),   # -> (32, 54, 54)
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4, output_padding=4),    # -> (4, 224, 224)
+            nn.Sigmoid()  # assume input in [0, 1]
+        )
+
+    def forward(self, features):  # (B, feature_dim)
+        x = self.unflatten(features)  # -> (B, 128, 24, 24)
+        return self.deconv(x)         # -> (B, 4, 224, 224)
+
+# -------- Full ICM Wrapper --------
+class ICM(nn.Module):
+    def __init__(self, action_dim, shared_encoder: nn.Module | None = None):
+        super().__init__()
+        self.encoder = ICMEncoder()
+        self.inverse_model = InverseModel(self.encoder.output_dim, action_dim)
+        self.forward_model = ForwardModel(self.encoder.output_dim, action_dim)
+
+    def forward(self, obs, next_obs, action_onehot):
+        #print(f"ICM forward() inputs: obs.device={obs.device} next_obs.device={next_obs.device} action_onehot.device={action_onehot.device}")
+
+        #print(f"ICM obs.shape={obs.shape} next_obs.shape={next_obs.shape}")
+
+        phi = self.encoder(obs)              # (B, feature_dim)
+        phi_next = self.encoder(next_obs)    # (B, feature_dim)
+        pred_action_logits = self.inverse_model(phi, phi_next)
+        pred_phi_next = self.forward_model(phi, action_onehot)
+        return phi, phi_next, pred_action_logits, pred_phi_next
+
+
+def icm_loss(phi, phi_next, pred_action_logits, pred_phi_next, true_action):
+    inverse_loss = F.cross_entropy(pred_action_logits, true_action)
+    forward_loss = F.mse_loss(pred_phi_next, phi_next.detach())
+    return inverse_loss, forward_loss
+
+
+def compute_intrinsic_reward(phi_next, pred_phi_next):
+    return 0.5 * (pred_phi_next - phi_next.detach()).pow(2).sum(1)
+
 
 def main():
     args = tyro.cli(Args)
@@ -700,11 +804,27 @@ def main():
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    screen = envs.envs[0].unwrapped.screen
-    nes = envs.envs[0].unwrapped.nes
+    first_env = envs.envs[0].unwrapped
+    screen = first_env.screen
+    nes = first_env.unwrapped.nes
+    action_dim = envs.single_action_space.n
 
+    print(f"ACTION DIM: {action_dim}")
+
+    # ActorCritic
     agent = Agent(envs, args.vision_model).to(device)
-    optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+
+    # ICM
+    icm = ICM(action_dim=action_dim).to(device)
+    decoder = ICMDecoder(feature_dim=icm.encoder.output_dim).to(device)
+
+    optimizer = torch.optim.Adam(
+        list(agent.parameters()) +
+        list(icm.parameters()) +
+        list(decoder.parameters()),
+        lr=args.learning_rate,
+        eps=1e-5
+    )
 
     # Reward visualization.
     surf_np = pygame.surfarray.pixels3d(screen.surfs[3])
@@ -712,6 +832,10 @@ def main():
     vis_reward_min = 0
     vis_reward_max = 1
     vis_reward_image_i = 0
+
+    vis_rint_min = 0
+    vis_rint_max = 1
+    vis_rint_image_i = 0
 
     vis_action_probs_i = 0
 
@@ -776,7 +900,58 @@ def main():
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
-            rewards[step] = torch.tensor(reward).to(device, dtype=torch.float32).view(-1)
+
+            # NOTE: Silent conversion to float32 for Tensor.
+            next_obs = torch.Tensor(next_obs).to(device)
+            next_done = torch.Tensor(next_done).to(device)
+
+            # Convert action to one-hot
+            action_onehot = F.one_hot(action, num_classes=envs.single_action_space.n).float().to(device)
+
+            # Forward ICM
+            with torch.no_grad():
+                phi, phi_next, pred_action_logits, pred_phi_next = icm(obs[step], next_obs, action_onehot)
+                #inv_loss, fwd_loss = icm_loss(phi, phi_next, pred_action_logits, pred_phi_next, action)
+                # inv_loss = F.cross_entropy(pred_action_logits, action_onehot)
+                # fwd_loss = F.mse_loss(pred_phi_next, phi_next.detach())
+
+                # r_int = compute_intrinsic_reward(phi_next, pred_phi_next)  # shape (num_envs,)
+                r_int = 0.5 * (pred_phi_next - phi_next.detach()).pow(2).sum(1)
+
+            # Combine rewards
+            intrinsic_reward_coef = args.intrinsic_reward_coef  # e.g., 0.01
+            r_total = torch.tensor(reward).to(device, dtype=torch.float32).view(-1) + intrinsic_reward_coef * r_int
+
+            # Save reward
+            rewards[step] = r_total
+
+            # rewards[step] = torch.tensor(reward).to(device, dtype=torch.float32).view(-1)
+
+            if False:
+                next_obs = torch.Tensor(next_obs).to(device)
+                next_done = torch.Tensor(next_done).to(device)
+
+            print(f"Rewards: {reward.item()} + {intrinsic_reward_coef} * {r_int.item()} = {r_total.item()}")
+            if args.visualize_intrinsic_decoder:
+                with torch.no_grad():
+                    # (1, 4, 224, 224)
+                    decode_obs = decoder(phi_next).cpu().numpy()
+
+                print(f"DECODED SHAPE: {decode_obs.shape}")
+                decode_grayscale = decode_obs[0, -1]
+
+                img_gray = Image.fromarray(decode_grayscale, mode='L')
+                img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
+
+                screen.blit_image(img_rgb_240, screen_index=6)
+
+            if args.visualize_intrinsic_reward:
+                vis_rint_min = min(vis_rint_min, r_int)
+                vis_rint_max = max(vis_rint_max, r_int)
+
+                _draw_reward(screen.surfs[5], at=vis_rint_image_i, reward=reward.item(), rmin=vis_rint_min, rmax=vis_rint_max, screen_size=screen.screen_size)
+
+                vis_rint_image_i += 1
 
             if args.visualize_reward:
                 vis_reward_min = min(vis_reward_min, reward)
@@ -805,10 +980,6 @@ def main():
             if nes.keys_pressed:
                 nes.keys_pressed = []
 
-            # NOTE: Silent conversion to float32 for Tensor.
-            next_obs = torch.Tensor(next_obs).to(device)
-            next_done = torch.Tensor(next_done).to(device)
-
             if "final_info" in infos:
                 for info in infos["final_info"]:
                     if info and "episode" in info:
@@ -817,6 +988,22 @@ def main():
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
 
         steps_end = time.time()
+
+        if args.dump_trajectories:
+            traj_dir = Path(run_dir) / "traj"
+            traj_dir.mkdir(parents=True, exist_ok=True)
+
+            traj_filename = traj_dir / f'iter_{iteration}.npz'
+
+            np.savez_compressed(
+                traj_filename,
+                obs=obs.cpu().numpy(),
+                actions=actions.cpu().numpy(),
+                logprobs=logprobs.cpu().numpy(),
+                rewards=rewards.cpu().numpy(),
+                dones=dones.cpu().numpy(),
+                values=values.cpu().numpy(),
+            )
 
         if args.train_agent:
             optimize_networks_start = time.time()
@@ -893,8 +1080,42 @@ def main():
                     else:
                         v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
+                    # ICM forward
+                    # Use same reshaped obs/actions for ICM
+                    obs_tensor = b_obs[mb_inds].detach()
+                    next_obs_tensor = b_obs[mb_inds+1].detach() # .reshape((-1,) + envs.single_observation_space.shape).detach()
+                    action_tensor = b_actions[mb_inds].detach()
+
+                    #print(f"ACTION TENSOR SHAPE: {b_actions.shape}")
+                    action_onehot = F.one_hot(action_tensor.long(), num_classes=envs.single_action_space.n).float().detach()
+
+                    phi, phi_next, pred_action_logits, pred_phi_next = icm(obs_tensor, next_obs_tensor, action_onehot)
+                    inv_loss, fwd_loss = icm_loss(phi, phi_next, pred_action_logits, pred_phi_next, action_tensor)
+                    r_int = compute_intrinsic_reward(phi_next, pred_phi_next)  # shape (B,)
+
+                    recon_obs = decoder(phi)  # predict (B, 4, 224, 224)
+
+                    #print(f"obs_tensor={obs_tensor.shape} phi={phi.shape} recon_obs={recon_obs.shape}")
+                    recon_loss = F.mse_loss(recon_obs, obs_tensor)
+
+                    beta = 0.5
+                    gamma = 1e-3
+
+                    # Use total_reward for PPO GAE and returns
+                    # Compute advantages, value loss, policy loss here as usual
+                    # Then optimize:
+                    # total_icm_loss = beta * inv_loss + (1 - beta) * fwd_loss
+                    total_icm_loss = (
+                        beta * inv_loss +
+                        (1 - beta) * fwd_loss +
+                        gamma * recon_loss   # gamma is a small constant like 1e-3
+                    )
+
+                    # Entropy loss
                     entropy_loss = entropy.mean()
-                    loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+
+                    # Total loss
+                    loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef + total_icm_loss
 
                     optimizer.zero_grad()
                     loss.backward()
@@ -962,7 +1183,6 @@ def main():
             policy_sweep_rgb, values_sweep_rgb = render_mario_pos_policy_value_sweep(envs=envs, device=device, agent=agent)
             screen.blit_image(values_sweep_rgb, screen_index=1)
             screen.blit_image(policy_sweep_rgb, screen_index=2)
-            screen.blit_image(reward_rgb, screen_index=3)
 
     envs.close()
     writer.close()

@@ -266,7 +266,7 @@ class SimpleScreenNx1:
         return image
 
     def blit_image_np(self, image_np: NdArrayRGB8, screen_index: int):
-        # print(f"SURF SIZE: {self.surfs[screen_index].get_size()}  image.shape={image_np.shape}")
+        print(f"SURF SIZE: {self.surfs[screen_index].get_size()}  image.shape={image_np.shape}")
         pygame.surfarray.blit_array(self.surfs[screen_index], image_np)
 
     def blit_image(self, image: Image, screen_index: int):
@@ -373,7 +373,7 @@ class SuperMarioEnv(gym.Env):
         self.render_fps = render_fps
 
         # Screen setup.  2 Screens, 1 next to the other.
-        self.screen = SimpleScreenNx1((SCREEN_W, SCREEN_H), scale=3, n=5)
+        self.screen = SimpleScreenNx1((SCREEN_W, SCREEN_H), scale=3, n=7)
 
         self.clock = None
 
