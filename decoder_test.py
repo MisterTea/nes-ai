@@ -47,9 +47,13 @@ register(
 
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 
+
+USE_VAE = False
+
 class VisionModel(Enum):
     CONV_GRAYSCALE = 'conv_grayscale'
     CONV_GRAYSCALE_224 = 'conv_grayscale_224'
+    VAE_GRAYSCALE_224 = 'vae_grayscale_224'
     PRETRAINED = 'pretrained'
 
 
@@ -203,74 +207,22 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0, weight_const=None):
 IMAGE_MODEL_NAME = "mobilenetv3_small_050.lamb_in1k"
 
 
-class ConvTrunkGrayscale(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        # (E, 4, 84, 84) -> (1, 3136)
-        self.trunk = nn.Sequential(
-            layer_init(nn.Conv2d(4, 32, 8, stride=4)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
-            nn.ReLU(),
-            nn.Flatten(),
-
-            # Input size for a grayscale observation of size: 84x84
-            # (1, 3136) -> (1, 512)
-            layer_init(nn.Linear(64 * 7 * 7, 512)),
-        )
-
-    def forward(self, x):
-        return self.trunk(x)
-
-
-class ConvTrunkGrayscaleDecoder(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        self.deconv = nn.Sequential(
-            nn.Linear(512, 64 * 7 * 7),  # Match encoder's flatten
-            nn.ReLU(),
-
-            nn.Unflatten(1, (64, 7, 7)),  # inverse of flatten
-            nn.ConvTranspose2d(64, 64, kernel_size=3, stride=1),  # -> (64, 26, 26)
-            nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2),   # -> (32, 54, 54)
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4, output_padding=4),    # -> (4, 224, 224)
-            nn.Sigmoid()  # assume input in [0, 1]
-        )
-
-    def forward(self, x):
-        return self.deconv(x)   # -> (B, 4, 224, 224)
-
-
 class ConvTrunkGrayscale224(nn.Module):
     def __init__(self):
         super().__init__()
 
         # (E, 4, 224, 224) -> (1, 36864)
         self.trunk = nn.Sequential(
-            # nn.Conv2d(4, 32, 8, stride=4),     # (B, 32, 55, 55)
-            # nn.ReLU(),
-            # nn.Conv2d(32, 64, 4, stride=2),    # (B, 64, 26, 26)
-            # nn.ReLU(),
-            # nn.Conv2d(64, 128, 3, stride=2),   # (B, 128, 12, 12)
-            # nn.ReLU(),
-            # nn.Conv2d(128, 256, 3, stride=2),  # (B, 256, 5, 5)
-            # nn.ReLU(),
-
-            # nn.Flatten(),                      # (B, 6400)
-
+            # THIS BLOCK WORKS, NO LINEAR"
             layer_init(nn.Conv2d(4, 32, 8, stride=4)),
             nn.ReLU(),
             layer_init(nn.Conv2d(32, 64, 4, stride=2)),
             nn.ReLU(),
             layer_init(nn.Conv2d(64, 64, 3, stride=1)),
             nn.ReLU(),
-            nn.Flatten(),
+
+
+            #nn.Flatten(),
 
             # Input size for a grayscale observation of size: 224x224
             # (1, 36864) -> (1, 512)
@@ -280,7 +232,6 @@ class ConvTrunkGrayscale224(nn.Module):
     def forward(self, x):
         return self.trunk(x)
 
-
 class ConvTrunkGrayscale224Decoder(nn.Module):
     def __init__(self):
         super().__init__()
@@ -289,38 +240,63 @@ class ConvTrunkGrayscale224Decoder(nn.Module):
             #nn.Linear(512, 64 * 24 * 24),  # Match encoder's flatten
             #nn.ReLU(),
 
-            nn.Unflatten(1, (64, 24, 24)),  # inverse of flatten
+            # THIS BLOCK WORKS, NO LINEAR
+            #nn.Unflatten(1, (64, 24, 24)),  # inverse of flatten
             nn.ConvTranspose2d(64, 64, kernel_size=3, stride=1),  # -> (64, 26, 26)
             nn.ReLU(),
             nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2),   # -> (32, 54, 54)
             nn.ReLU(),
             nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4, output_padding=4),    # -> (4, 224, 224)
             nn.Sigmoid()  # assume input in [0, 1]
+        )
+
+    def forward(self, x):
+        return self.deconv(x)   # -> (B, 4, 224, 224)
 
 
-            # nn.Linear(512 * 10, 64 * 24 * 24),  # Match encoder's flatten
-            # nn.ReLU(),
+class VaeGrayscale224(nn.Module):
+    def __init__(self):
+        super().__init__()
 
-            # nn.Unflatten(1, (256, 5, 5)),                         # (B, 256, 5, 5)
-            # nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2),  # -> (B, 128, 11, 11)
-            # nn.ReLU(),
-            # nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2),   # -> (B, 64, 23, 23)
-            # nn.ReLU(),
-            # nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2),    # -> (B, 32, 48, 48)
-            # nn.ReLU(),
-            # nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4),     # -> (B, 4, 200, 200)
-            # # nn.ReLU(),
-            # # nn.Conv2d(4, 4, kernel_size=5, padding=2),              # -> (B, 4, 224, 224)
-            # nn.Sigmoid()  # Assumes pixel values normalized to [0, 1]
+        # (E, 4, 224, 224) -> (1, 36864)
+        self.trunk = nn.Sequential(
+            nn.Conv2d(4, 32, 8, stride=4),     # (B, 32, 55, 55)
+            nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2),    # (B, 64, 26, 26)
+            nn.ReLU(),
+            nn.Conv2d(64, 128, 3, stride=2),   # (B, 128, 12, 12)
+            nn.ReLU(),
+            nn.Conv2d(128, 256, 3, stride=2),  # (B, 256, 5, 5)
+            nn.ReLU(),
+        )
 
-            # nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, output_padding=1),  # -> (B, 128, 11, 11)
-            # nn.ReLU(),
-            # nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, output_padding=1),   # -> (B, 64, 23, 23)
-            # nn.ReLU(),
-            # nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, output_padding=1),    # -> (B, 32, 48, 48)
-            # nn.ReLU(),
-            # nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4, output_padding=0),     # -> (B, 4, 224, 224)
-            # nn.Sigmoid()
+        # For VAE
+        self.mu = nn.Conv2d(256, 256, kernel_size=1)
+        self.logvar = nn.Conv2d(256, 256, kernel_size=1)
+
+    def forward(self, x):
+        h = self.trunk(x)           # (B, 256, 5, 5)
+        mu = self.mu(h)             # (B, 256, 5, 5)
+        logvar = self.logvar(h)
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        z = mu + eps * std          # Reparameterization trick
+        return z, mu, logvar
+
+
+class VaeGrayscale224Decoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.deconv = nn.Sequential(
+            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, output_padding=1),  # -> (B, 128, 11, 11)
+            nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, output_padding=1),   # -> (B, 64, 23, 23)
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, output_padding=1),    # -> (B, 32, 48, 48)
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4, output_padding=0),     # -> (B, 4, 224, 224)
+            nn.Sigmoid(),
         )
 
     def forward(self, x):
@@ -328,13 +304,14 @@ class ConvTrunkGrayscale224Decoder(nn.Module):
 
 
 
+
 class Agent(nn.Module):
     def __init__(self, envs, vision_model: VisionModel):
         super().__init__()
 
-        if vision_model == VisionModel.CONV_GRAYSCALE:
-            self.trunk = ConvTrunkGrayscale()
-            self.decoder = ConvTrunkGrayscaleDecoder()
+        if vision_model == VisionModel.VAE_GRAYSCALE_224:
+            self.trunk = VaeGrayscale224()
+            self.decoder = VaeGrayscale224Decoder()
         elif vision_model == VisionModel.CONV_GRAYSCALE_224:
             self.trunk = ConvTrunkGrayscale224()
             self.decoder = ConvTrunkGrayscale224Decoder()
@@ -458,7 +435,11 @@ def main():
 
             # Check that the encoding matches the trunk, like we think.
             if True:
-                encoded_output2 = agent.trunk(next_obs / 255)
+                if USE_VAE:
+                    encoded_output2, mu, logvar = agent.trunk(next_obs / 255)
+                else:
+                    encoded_output2 = agent.trunk(next_obs / 255)
+
                 if (encoded_output2 != next_encoded_obs).all():
                     print(f"ENCODED {encoded_output2=} OBS {next_obs=}")
                     raise AssertionError("NOT MATCHING")
@@ -548,7 +529,16 @@ def main():
                     mb_inds = b_inds[start:end]
 
                     obs_tensor = b_obs_tensor[mb_inds]
-                    encoded_tensor = agent.trunk(obs_tensor)
+
+                    if USE_VAE:
+                        x = obs_tensor
+                        z, mu, logvar = agent.trunk(obs_tensor)
+                    else:
+                        encoded_tensor = agent.trunk(obs_tensor)
+                        z = encoded_tensor
+
+                    if True:
+                        print(f"Encoded std across batch (shape={z.shape}): {z.std(dim=0).mean()}")  # low std across batch => collapse
 
                     if start < 4:
                         _draw_obs(obs_tensor[0, -1].cpu().numpy(), screen, 4)
@@ -556,9 +546,21 @@ def main():
                         _draw_obs(obs_tensor[2, -1].cpu().numpy(), screen, 6)
                         _draw_obs(obs_tensor[3, -1].cpu().numpy(), screen, 7)
 
-                    # Agent image decoder
-                    decoded_tensor = decoder(encoded_tensor.detach())
-                    decoder_loss = F.mse_loss(decoded_tensor, obs_tensor)
+                    if USE_VAE:
+                        # Agent image decoder
+                        x_hat = decoder(z.detach())
+                        decoded_tensor = x_hat
+
+                        recon_loss = F.mse_loss(x_hat, x, reduction='mean')
+
+                        # KL divergence per pixel
+                        kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / x.size(0)
+
+                        decoder_loss = recon_loss + kl
+                    else:
+                        decoded_tensor = decoder(encoded_tensor.detach())
+                        decoder_loss = F.mse_loss(decoded_tensor, obs_tensor)
+
 
                     # print(f"obs_tensor.shape={obs_tensor.shape} encoded_tensor.shape={encoded_tensor.shape} decoded_tensor.shape={decoded_tensor.shape}")
 
@@ -575,7 +577,11 @@ def main():
 
                 # ----- Validation -----
                 with torch.no_grad():
-                    val_encoded = agent.trunk(b_val_obs)
+                    if USE_VAE:
+                        val_encoded, mu, logvar = agent.trunk(b_val_obs)
+                    else:
+                        val_encoded = agent.trunk(b_val_obs)
+
                     val_recon = decoder(val_encoded)
 
                     val_loss = F.mse_loss(val_recon, b_val_obs)
