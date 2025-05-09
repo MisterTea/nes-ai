@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
@@ -89,8 +90,7 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
-    """if toggled, this experiment will be tracked with Weights and Biases"""
+
     wandb_project_name: str = "MarioRL"
     """the wandb's project name"""
     wandb_entity: str | None = None
@@ -99,21 +99,12 @@ class Args:
     """the id of a wandb run to resume"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
-    checkpoint_frequency: float = 30
-    """create a checkpoint every N seconds"""
+
     train_agent: bool = True
     """enable or disable training of the agent"""
 
     # Visualization
-    value_sweep_frequency: int | None = 0
-
     visualize_decoder: bool = True
-
-    """create a value sweep visualization every N updates"""
-    visualize_reward: bool = True
-    visualize_actions: bool = True
-    visualize_intrinsic_decoder: bool = True
-    visualize_intrinsic_reward: bool = True
 
     # Specific experiments
     dump_trajectories: bool = False
@@ -128,8 +119,7 @@ class Args:
     total_timesteps: int = 10000000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
-    """the learning rate of the optimizer"""
-    learning_rate_decoder: float = 2.5e-4
+
     """the learning rate of the decoder optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
@@ -137,30 +127,15 @@ class Args:
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
-    gamma: float = 0.99
-    """the discount factor gamma"""
-    gae_lambda: float = 0.95
-    """the lambda for the general advantage estimation"""
+
+
     num_minibatches: int = 4
     """the number of mini-batches"""
     update_epochs: int = 40
     """the K epochs to update the policy"""
-    norm_adv: bool = True
-    """Toggles advantages normalization"""
-    clip_coef: float = 0.1
-    """the surrogate clipping coefficient"""
-    clip_vloss: bool = True
-    """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.01
-    """coefficient of the entropy"""
-    vf_coef: float = 0.5
-    """coefficient of the value function"""
+
     max_grad_norm: float = 0.5
     """the maximum norm for the gradient clipping"""
-    target_kl: float = None
-    """the target KL divergence threshold"""
-    intrinsic_reward_coef: float = 1e-3
-    """coefficient of the intrinsic reward when combining with extrinsic reward"""
 
     # to be filled in runtime
     batch_size: int = 0
@@ -278,6 +253,17 @@ class ConvTrunkGrayscale224(nn.Module):
 
         # (E, 4, 224, 224) -> (1, 36864)
         self.trunk = nn.Sequential(
+            # nn.Conv2d(4, 32, 8, stride=4),     # (B, 32, 55, 55)
+            # nn.ReLU(),
+            # nn.Conv2d(32, 64, 4, stride=2),    # (B, 64, 26, 26)
+            # nn.ReLU(),
+            # nn.Conv2d(64, 128, 3, stride=2),   # (B, 128, 12, 12)
+            # nn.ReLU(),
+            # nn.Conv2d(128, 256, 3, stride=2),  # (B, 256, 5, 5)
+            # nn.ReLU(),
+
+            # nn.Flatten(),                      # (B, 6400)
+
             layer_init(nn.Conv2d(4, 32, 8, stride=4)),
             nn.ReLU(),
             layer_init(nn.Conv2d(32, 64, 4, stride=2)),
@@ -288,7 +274,7 @@ class ConvTrunkGrayscale224(nn.Module):
 
             # Input size for a grayscale observation of size: 224x224
             # (1, 36864) -> (1, 512)
-            layer_init(nn.Linear(64 * 24 * 24, 512)),
+            #layer_init(nn.Linear(64 * 24 * 24, 512)),
         )
 
     def forward(self, x):
@@ -300,8 +286,8 @@ class ConvTrunkGrayscale224Decoder(nn.Module):
         super().__init__()
 
         self.deconv = nn.Sequential(
-            nn.Linear(512, 64 * 24 * 24),  # Match encoder's flatten
-            nn.ReLU(),
+            #nn.Linear(512, 64 * 24 * 24),  # Match encoder's flatten
+            #nn.ReLU(),
 
             nn.Unflatten(1, (64, 24, 24)),  # inverse of flatten
             nn.ConvTranspose2d(64, 64, kernel_size=3, stride=1),  # -> (64, 26, 26)
@@ -310,6 +296,31 @@ class ConvTrunkGrayscale224Decoder(nn.Module):
             nn.ReLU(),
             nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4, output_padding=4),    # -> (4, 224, 224)
             nn.Sigmoid()  # assume input in [0, 1]
+
+
+            # nn.Linear(512 * 10, 64 * 24 * 24),  # Match encoder's flatten
+            # nn.ReLU(),
+
+            # nn.Unflatten(1, (256, 5, 5)),                         # (B, 256, 5, 5)
+            # nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2),  # -> (B, 128, 11, 11)
+            # nn.ReLU(),
+            # nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2),   # -> (B, 64, 23, 23)
+            # nn.ReLU(),
+            # nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2),    # -> (B, 32, 48, 48)
+            # nn.ReLU(),
+            # nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4),     # -> (B, 4, 200, 200)
+            # # nn.ReLU(),
+            # # nn.Conv2d(4, 4, kernel_size=5, padding=2),              # -> (B, 4, 224, 224)
+            # nn.Sigmoid()  # Assumes pixel values normalized to [0, 1]
+
+            # nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, output_padding=1),  # -> (B, 128, 11, 11)
+            # nn.ReLU(),
+            # nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, output_padding=1),   # -> (B, 64, 23, 23)
+            # nn.ReLU(),
+            # nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, output_padding=1),    # -> (B, 32, 48, 48)
+            # nn.ReLU(),
+            # nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4, output_padding=0),     # -> (B, 4, 224, 224)
+            # nn.Sigmoid()
         )
 
     def forward(self, x):
@@ -339,6 +350,17 @@ class Agent(nn.Module):
         return action, trunk_output
 
 
+def _draw_obs(obs_np, screen: Any, screen_index: int):
+    assert obs_np.shape == (224, 224), f"Unexpected observation shape: {obs_np.shape} != (224, 224)"
+    assert obs_np.max() < 1.0, f"Unexpected observation values: min={obs_np.min()} max={obs_np.max()}"
+
+    obs_grayscale = (obs_np * 255).astype(np.uint8)
+    img_gray = Image.fromarray(obs_grayscale.T, mode='L')
+    img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
+
+    screen.blit_image(img_rgb_240, screen_index=screen_index)
+
+
 def main():
     args = tyro.cli(Args)
 
@@ -360,23 +382,7 @@ def main():
 
     run_name = args.wandb_run_id
 
-    if args.track:
-        import wandb
-
-        run = wandb.init(
-            project=args.wandb_project_name,
-            entity=args.wandb_entity,
-            sync_tensorboard=True,
-            config=vars(args),
-            #name=run_name,
-            monitor_gym=True,
-            save_code=True,
-            id=run_name,
-        )
-        assert run.dir == f"runs/{run_name}"
-        run_dir = run.dir
-    else:
-        run_dir = f"runs/{run_name}"
+    run_dir = f"runs/{run_name}"
 
     writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
@@ -448,27 +454,37 @@ def main():
             with torch.no_grad():
                 action, next_encoded_obs = agent.get_action_and_value(next_obs)
 
+            next_obs_np = next_obs.cpu().numpy()
+
+            # Check that the encoding matches the trunk, like we think.
+            if True:
+                encoded_output2 = agent.trunk(next_obs / 255)
+                if (encoded_output2 != next_encoded_obs).all():
+                    print(f"ENCODED {encoded_output2=} OBS {next_obs=}")
+                    raise AssertionError("NOT MATCHING")
+
+            # Visualize latest observation.
+            if True:
+                _draw_obs(next_obs_np[0, -1] / 255, screen, 1)
+
+            if args.visualize_decoder:
+                with torch.no_grad():
+                    # (1, 4, 224, 224)
+                    decoded_obs_np = decoder(next_encoded_obs).cpu().numpy()
+
+                # Use random image.
+                if False:
+                    decoded_grayscale = np.random.random((224, 240))
+                else:
+                    decoded_grayscale_f = decoded_obs_np[0, -1]
+
+                _draw_obs(decoded_grayscale_f, screen, 2)
+
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
 
             # NOTE: Silent conversion to float32 for Tensor.
             next_obs = torch.Tensor(next_obs).to(device)
-
-            if args.visualize_decoder:
-                with torch.no_grad():
-                    # (1, 4, 224, 224)
-                    decode_obs = decoder(next_encoded_obs).cpu().numpy()
-
-                decode_grayscale = (decode_obs[0, -1] * 255).astype(np.uint8)
-
-                # Use random image.
-                if False:
-                    decode_grayscale = np.random.random((224, 240))
-
-                img_gray = Image.fromarray(decode_grayscale.T, mode='L')
-                img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
-
-                screen.blit_image(img_rgb_240, screen_index=1)
 
             if nes.keys_pressed:
                 nes.keys_pressed = []
@@ -503,11 +519,15 @@ def main():
             epochs_start = time.time()
 
             # Select 80% as training set, remainder as test set.
-            train_end_index = int(args.batch_size) * 0.8
+            train_end_index = int(args.batch_size * 0.8)
             b_inds = np.arange(train_end_index)
             b_val_inds = train_end_index + np.arange(args.batch_size - train_end_index)
 
             b_val_obs = b_obs_tensor[b_val_inds]
+
+            # Display 4 random observations
+            print(f"INIT BATCH INDICES: {b_inds}")
+            print(f"INIT VAL INDICES: {b_val_inds}")
 
             # Validation
             best_val_loss = float('inf')
@@ -520,16 +540,33 @@ def main():
                 # Shuffle all observations.
                 np.random.shuffle(b_inds)
 
+                # OK: These look random
+                # print(f"RANDOM BATCH INDICES: {b_inds}")
+
                 for start in range(0, args.batch_size, args.minibatch_size):
                     end = start + args.minibatch_size
                     mb_inds = b_inds[start:end]
 
                     obs_tensor = b_obs_tensor[mb_inds]
-                    encoded_obs = agent.trunk(obs_tensor)
+                    encoded_tensor = agent.trunk(obs_tensor)
+
+                    if start < 4:
+                        _draw_obs(obs_tensor[0, -1].cpu().numpy(), screen, 4)
+                        _draw_obs(obs_tensor[1, -1].cpu().numpy(), screen, 5)
+                        _draw_obs(obs_tensor[2, -1].cpu().numpy(), screen, 6)
+                        _draw_obs(obs_tensor[3, -1].cpu().numpy(), screen, 7)
 
                     # Agent image decoder
-                    decoder_obs = decoder(encoded_obs)
-                    decoder_loss = F.mse_loss(decoder_obs, obs_tensor)
+                    decoded_tensor = decoder(encoded_tensor.detach())
+                    decoder_loss = F.mse_loss(decoded_tensor, obs_tensor)
+
+                    # print(f"obs_tensor.shape={obs_tensor.shape} encoded_tensor.shape={encoded_tensor.shape} decoded_tensor.shape={decoded_tensor.shape}")
+
+                    if start < 4:
+                        _draw_obs(decoded_tensor[0, -1].detach().cpu().numpy(), screen, 8)
+                        _draw_obs(decoded_tensor[1, -1].detach().cpu().numpy(), screen, 9)
+                        _draw_obs(decoded_tensor[2, -1].detach().cpu().numpy(), screen, 10)
+                        _draw_obs(decoded_tensor[3, -1].detach().cpu().numpy(), screen, 11)
 
                     # Total loss
                     optimizer.zero_grad()
@@ -540,8 +577,6 @@ def main():
                 with torch.no_grad():
                     val_encoded = agent.trunk(b_val_obs)
                     val_recon = decoder(val_encoded)
-
-                    print(f"RANGE OF b_val_obs: b_val_obs={b_val_obs[0].min()},{b_val_obs[0].max()} val_recon={val_recon.min()},{val_recon.max()}")
 
                     val_loss = F.mse_loss(val_recon, b_val_obs)
 
