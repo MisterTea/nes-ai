@@ -115,7 +115,7 @@ class Args:
     reset_to_save_state: bool = False
 
     # Vision model
-    vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224
+    vision_model: VisionModel = VisionModel.VAE_GRAYSCALE_224
 
     # Algorithm specific arguments
     env_id: str = "SuperMarioBros-mame-v0"
@@ -178,6 +178,9 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, vision_m
             env = gym.wrappers.GrayscaleObservation(env)
             env = gym.wrappers.ResizeObservation(env, (224, 224))
         elif vision_model == VisionModel.PRETRAINED:
+            env = gym.wrappers.ResizeObservation(env, (224, 224))
+        elif vision_model == VisionModel.VAE_GRAYSCALE_224:
+            env = gym.wrappers.GrayscaleObservation(env)
             env = gym.wrappers.ResizeObservation(env, (224, 224))
         else:
             raise AssertionError(f"Unexpected vision model type: {vision_model}")
@@ -309,6 +312,7 @@ class Agent(nn.Module):
     def __init__(self, envs, vision_model: VisionModel):
         super().__init__()
 
+        print(f"USING VISION MODEL IN AGENT: {vision_model}")
         if vision_model == VisionModel.VAE_GRAYSCALE_224:
             self.trunk = VaeGrayscale224()
             self.decoder = VaeGrayscale224Decoder()
@@ -382,6 +386,10 @@ def main():
         else:
             print("No GPU available, using CPU.")
 
+    global USE_VAE
+    if args.vision_model == VisionModel.VAE_GRAYSCALE_224:
+        USE_VAE = True
+
     # env setup
     envs = gym.vector.SyncVectorEnv(
         [make_env(args.env_id, i, args.capture_video, run_name, args.vision_model) for i in range(args.num_envs)],
@@ -429,20 +437,25 @@ def main():
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                action, next_encoded_obs = agent.get_action_and_value(next_obs)
+                if USE_VAE:
+                    action, (next_encoded_obs, mu, logvar) = agent.get_action_and_value(next_obs)
+                else:
+                    action, next_encoded_obs = agent.get_action_and_value(next_obs)
 
             next_obs_np = next_obs.cpu().numpy()
 
             # Check that the encoding matches the trunk, like we think.
             if True:
                 if USE_VAE:
-                    encoded_output2, mu, logvar = agent.trunk(next_obs / 255)
+                    encoded_output2, mu2, logvar2 = agent.trunk(next_obs / 255)
                 else:
                     encoded_output2 = agent.trunk(next_obs / 255)
 
-                if (encoded_output2 != next_encoded_obs).all():
-                    print(f"ENCODED {encoded_output2=} OBS {next_obs=}")
-                    raise AssertionError("NOT MATCHING")
+                    print(f"SHAPE OF ENCODED2: {len(encoded_output2)} NEXT={len(next_encoded_obs)}")
+                    print(f"SHAPE OF ENCODED2: {encoded_output2.shape} NEXT={next_encoded_obs.shape}")
+                    if (encoded_output2 != next_encoded_obs).all():
+                        print(f"ENCODED {encoded_output2=} OBS {next_obs=}")
+                        raise AssertionError("NOT MATCHING")
 
             # Visualize latest observation.
             if True:
@@ -533,6 +546,7 @@ def main():
                     if USE_VAE:
                         x = obs_tensor
                         z, mu, logvar = agent.trunk(obs_tensor)
+                        encoded_tensor = z
                     else:
                         encoded_tensor = agent.trunk(obs_tensor)
                         z = encoded_tensor
@@ -548,6 +562,7 @@ def main():
 
                     if USE_VAE:
                         # Agent image decoder
+                        # TODO(millman): SHOULD USE DETACH OR NOT?
                         x_hat = decoder(z.detach())
                         decoded_tensor = x_hat
 
@@ -578,13 +593,23 @@ def main():
                 # ----- Validation -----
                 with torch.no_grad():
                     if USE_VAE:
-                        val_encoded, mu, logvar = agent.trunk(b_val_obs)
+                        z, mu, logvar = agent.trunk(b_val_obs)
+                        x = b_val_obs
+                        x_hat = decoder(z)
+
+                        recon_loss = F.mse_loss(x_hat, x, reduction='mean')
+
+                        # KL divergence per pixel
+                        kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / x.size(0)
+
+                        val_loss = recon_loss + kl
+
                     else:
                         val_encoded = agent.trunk(b_val_obs)
 
-                    val_recon = decoder(val_encoded)
+                        val_recon = decoder(val_encoded)
 
-                    val_loss = F.mse_loss(val_recon, b_val_obs)
+                        val_loss = F.mse_loss(val_recon, b_val_obs)
 
                 print(f"Epoch {epoch+1}: train_loss={decoder_loss:.4f} val_loss={val_loss:.4f}")
 
