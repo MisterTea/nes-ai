@@ -32,9 +32,11 @@ from stable_baselines3.common.atari_wrappers import (  # isort:skip
     NoopResetEnv,
 )
 
-
+from decoder_vis import draw_histogram_with_axes
 from nes_ai.last_and_skip_wrapper import LastAndSkipEnv
 from super_mario_env import SuperMarioEnv
+
+
 
 from gymnasium.envs.registration import register
 
@@ -115,7 +117,7 @@ class Args:
     reset_to_save_state: bool = False
 
     # Vision model
-    vision_model: VisionModel = VisionModel.VAE_GRAYSCALE_224
+    vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224
 
     # Algorithm specific arguments
     env_id: str = "SuperMarioBros-mame-v0"
@@ -223,7 +225,6 @@ class ConvTrunkGrayscale224(nn.Module):
             nn.ReLU(),
             layer_init(nn.Conv2d(64, 64, 3, stride=1)),
             nn.ReLU(),
-
 
             #nn.Flatten(),
 
@@ -401,6 +402,8 @@ def main():
     nes = first_env.unwrapped.nes
     action_dim = envs.single_action_space.n
 
+    font = pygame.font.SysFont("Arial", 14)
+
     print(f"ACTION DIM: {action_dim}")
 
     # ActorCritic
@@ -451,8 +454,8 @@ def main():
                 else:
                     encoded_output2 = agent.trunk(next_obs / 255)
 
-                    print(f"SHAPE OF ENCODED2: {len(encoded_output2)} NEXT={len(next_encoded_obs)}")
-                    print(f"SHAPE OF ENCODED2: {encoded_output2.shape} NEXT={next_encoded_obs.shape}")
+                    #print(f"SHAPE OF ENCODED2: {len(encoded_output2)} NEXT={len(next_encoded_obs)}")
+                    #print(f"SHAPE OF ENCODED2: {encoded_output2.shape} NEXT={next_encoded_obs.shape}")
                     if (encoded_output2 != next_encoded_obs).all():
                         print(f"ENCODED {encoded_output2=} OBS {next_obs=}")
                         raise AssertionError("NOT MATCHING")
@@ -554,16 +557,10 @@ def main():
                     if True:
                         print(f"Encoded std across batch (shape={z.shape}): {z.std(dim=0).mean()}")  # low std across batch => collapse
 
-                    if start < 4:
-                        _draw_obs(obs_tensor[0, -1].cpu().numpy(), screen, 4)
-                        _draw_obs(obs_tensor[1, -1].cpu().numpy(), screen, 5)
-                        _draw_obs(obs_tensor[2, -1].cpu().numpy(), screen, 6)
-                        _draw_obs(obs_tensor[3, -1].cpu().numpy(), screen, 7)
-
                     if USE_VAE:
                         # Agent image decoder
                         # TODO(millman): SHOULD USE DETACH OR NOT?
-                        x_hat = decoder(z.detach())
+                        x_hat = decoder(z)
                         decoded_tensor = x_hat
 
                         recon_loss = F.mse_loss(x_hat, x, reduction='mean')
@@ -573,17 +570,8 @@ def main():
 
                         decoder_loss = recon_loss + kl
                     else:
-                        decoded_tensor = decoder(encoded_tensor.detach())
+                        decoded_tensor = decoder(encoded_tensor)
                         decoder_loss = F.mse_loss(decoded_tensor, obs_tensor)
-
-
-                    # print(f"obs_tensor.shape={obs_tensor.shape} encoded_tensor.shape={encoded_tensor.shape} decoded_tensor.shape={decoded_tensor.shape}")
-
-                    if start < 4:
-                        _draw_obs(decoded_tensor[0, -1].detach().cpu().numpy(), screen, 8)
-                        _draw_obs(decoded_tensor[1, -1].detach().cpu().numpy(), screen, 9)
-                        _draw_obs(decoded_tensor[2, -1].detach().cpu().numpy(), screen, 10)
-                        _draw_obs(decoded_tensor[3, -1].detach().cpu().numpy(), screen, 11)
 
                     # Total loss
                     optimizer.zero_grad()
@@ -612,6 +600,57 @@ def main():
                         val_loss = F.mse_loss(val_recon, b_val_obs)
 
                 print(f"Epoch {epoch+1}: train_loss={decoder_loss:.4f} val_loss={val_loss:.4f}")
+
+                # --- Visualization ---
+                with torch.no_grad():
+
+                    # Draw the first 4 random items
+                    for i, b_ind in enumerate(b_inds[:4]):
+                        obs_vis = b_obs_tensor[b_ind]
+
+                        encoded_obs = agent.trunk(obs_vis)
+                        decoded_obs = decoder(encoded_obs)
+
+                        _draw_obs(obs_vis[-1].cpu().numpy(), screen, 4 + i)
+                        _draw_obs(decoded_obs[-1].detach().cpu().numpy(), screen, 8 + i)
+
+
+                        surf = screen.surfs[12 + i]
+
+                        surf.fill((25, 25, 25))
+
+                        x, y = 0, 0
+                        hist_width = 240
+                        spacing = 2
+
+                        named_params = list(agent.trunk.named_parameters())
+                        num_params = len(named_params)
+
+                        # Total height is: hist_height*4 + spacing*3 = 224
+                        hist_height = (224 - spacing * (num_params-1)) / num_params
+                        # spacing = 224 - (hist_height * 4) / 3
+
+                        for name, param in named_params:
+                            # E.g.:
+                            #  agent.trunk param: trunk.0.weight
+                            #  agent.trunk param: trunk.0.bias
+                            #  agent.trunk param: trunk.2.weight
+                            #  agent.trunk param: trunk.2.bias
+
+                            # print(f"agent.trunk param: {name}")
+                            if param.grad is None:
+                                continue
+                            grad_data = param.grad.detach().cpu().flatten().numpy()
+                            rect = (x, y, hist_width, hist_height)
+                            draw_histogram_with_axes(surf, grad_data, rect, label=name, font=font)
+                            y += hist_height + spacing
+
+                        # Show loss
+                        if font is None:
+                            font = pygame.font.SysFont("Arial", 14)
+                        loss_text = font.render(f"Epoch {epoch+1} | Loss: {decoder_loss.item():.4f}", True, (255, 255, 255))
+                        surf.blit(loss_text, (x, y + 10))
+
 
                 # ----- Early stopping logic -----
                 if val_loss < best_val_loss - 1e-4:  # Small threshold to avoid noise
