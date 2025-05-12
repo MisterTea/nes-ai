@@ -237,22 +237,26 @@ class SimpleAiHandler:
         return True
 
 
-class SimpleScreenNx1:
-    def __init__(self, screen_size: tuple[int, int], scale: int, n: int):
+class SimpleScreenRxC:
+    def __init__(self, screen_size: tuple[int, int], scale: int, rows: int, cols: int):
+        r, c = rows, cols
+        self.r = rows
+        self.c = cols
         self.scale = scale
 
         w, h = screen_size
         self.screen_size = screen_size
         self.screen_size_scaled = (w * scale, h * scale)
-        self.window_size = (self.screen_size[0] * n, self.screen_size[1])
+        self.window_size = (self.screen_size[0] * c, self.screen_size[1] * r)
 
         self.window = None
 
-        self.combined_surf = pygame.Surface((w * n, h))
+        self.combined_surf = pygame.Surface((w * c, h * r))
         self.surfs = [
             # NOTE: Rect(left, top, width, height)
-            self.combined_surf.subsurface(pygame.Rect(w*i, 0, w, h))
-            for i in range(n)
+            self.combined_surf.subsurface(pygame.Rect(w*ci, h*ri, w, h))
+            for ri in range(rows)
+            for ci in range(cols)
         ]
         self.combined_surf_scaled = pygame.Surface(self.window_size)
 
@@ -277,6 +281,7 @@ class SimpleScreenNx1:
     def show(self):
         if self.window is None:
             pygame.init()
+
             pygame.display.init()
             self.window = pygame.display.set_mode(self.window_size)
 
@@ -373,7 +378,7 @@ class SuperMarioEnv(gym.Env):
         self.render_fps = render_fps
 
         # Screen setup.  2 Screens, 1 next to the other.
-        self.screen = SimpleScreenNx1((SCREEN_W, SCREEN_H), scale=3, n=7)
+        self.screen = SimpleScreenRxC((SCREEN_W, SCREEN_H), scale=3, rows=4, cols=4)
 
         self.clock = None
 
