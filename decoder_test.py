@@ -55,6 +55,10 @@ USE_VAE = False
 class VisionModel(Enum):
     CONV_GRAYSCALE = 'conv_grayscale'
     CONV_GRAYSCALE_224 = 'conv_grayscale_224'
+    CONV_GRAYSCALE_224_extra_reduction = 'conv_grayscale_224_extra_reduction'
+    CONV_GRAYSCALE_224_small_stride = 'conv_grayscale_224_small_stride'
+    CONV_GRAYSCALE_224_with_linear = 'conv_grayscale_224_with_linear'
+    RESNET_GRAYSCALE_224 = 'resnet_grayscale_224'
     VAE_GRAYSCALE_224 = 'vae_grayscale_224'
     PRETRAINED = 'pretrained'
 
@@ -117,14 +121,20 @@ class Args:
     reset_to_save_state: bool = False
 
     # Vision model
-    vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224
+    vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_with_linear
+    #vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_with_linear
+    #vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_extra_reduction
+    #vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_small_stride
+    #vision_model: VisionModel = VisionModel.RESNET_GRAYSCALE_224
+    #vision_model: VisionModel = VisionModel.VAE_GRAYSCALE_224
 
     # Algorithm specific arguments
     env_id: str = "SuperMarioBros-mame-v0"
     """the id of the environment"""
     total_timesteps: int = 10000000
     """total timesteps of the experiments"""
-    learning_rate: float = 2.5e-4
+    #learning_rate: float = 2.5e-4
+    learning_rate: float = 2.5e-3
 
     """the learning rate of the decoder optimizer"""
     num_envs: int = 1
@@ -137,7 +147,8 @@ class Args:
 
     num_minibatches: int = 4
     """the number of mini-batches"""
-    update_epochs: int = 40
+    #update_epochs: int = 100
+    update_epochs: int = 20
     """the K epochs to update the policy"""
 
     max_grad_norm: float = 0.5
@@ -176,13 +187,17 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, vision_m
         if vision_model == VisionModel.CONV_GRAYSCALE:
             env = gym.wrappers.GrayscaleObservation(env)
             env = gym.wrappers.ResizeObservation(env, (84, 84))
-        elif vision_model == VisionModel.CONV_GRAYSCALE_224:
+        elif vision_model in (
+            VisionModel.CONV_GRAYSCALE_224,
+            VisionModel.CONV_GRAYSCALE_224_extra_reduction,
+            VisionModel.CONV_GRAYSCALE_224_small_stride,
+            VisionModel.CONV_GRAYSCALE_224_with_linear,
+            VisionModel.RESNET_GRAYSCALE_224,
+            VisionModel.VAE_GRAYSCALE_224,
+        ):
             env = gym.wrappers.GrayscaleObservation(env)
             env = gym.wrappers.ResizeObservation(env, (224, 224))
         elif vision_model == VisionModel.PRETRAINED:
-            env = gym.wrappers.ResizeObservation(env, (224, 224))
-        elif vision_model == VisionModel.VAE_GRAYSCALE_224:
-            env = gym.wrappers.GrayscaleObservation(env)
             env = gym.wrappers.ResizeObservation(env, (224, 224))
         else:
             raise AssertionError(f"Unexpected vision model type: {vision_model}")
@@ -216,21 +231,16 @@ class ConvTrunkGrayscale224(nn.Module):
     def __init__(self):
         super().__init__()
 
-        # (E, 4, 224, 224) -> (1, 36864)
         self.trunk = nn.Sequential(
-            # THIS BLOCK WORKS, NO LINEAR"
-            layer_init(nn.Conv2d(4, 32, 8, stride=4)),
+            nn.Conv2d(4, 32, kernel_size=8, stride=4),     # -> (B, 32, 55, 55)
+            nn.BatchNorm2d(32),
             nn.ReLU(),
-            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),    # -> (B, 64, 26, 26)
+            nn.BatchNorm2d(64),
             nn.ReLU(),
-            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1),   # -> (B, 128, 24, 24)
+            nn.BatchNorm2d(128),
             nn.ReLU(),
-
-            #nn.Flatten(),
-
-            # Input size for a grayscale observation of size: 224x224
-            # (1, 36864) -> (1, 512)
-            #layer_init(nn.Linear(64 * 24 * 24, 512)),
         )
 
     def forward(self, x):
@@ -241,21 +251,189 @@ class ConvTrunkGrayscale224Decoder(nn.Module):
         super().__init__()
 
         self.deconv = nn.Sequential(
-            #nn.Linear(512, 64 * 24 * 24),  # Match encoder's flatten
-            #nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=1),       # 24 → 26
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
 
-            # THIS BLOCK WORKS, NO LINEAR
-            #nn.Unflatten(1, (64, 24, 24)),  # inverse of flatten
-            nn.ConvTranspose2d(64, 64, kernel_size=3, stride=1),  # -> (64, 26, 26)
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2),        # 26 → 54
+            nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2),   # -> (32, 54, 54)
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4, output_padding=4),    # -> (4, 224, 224)
-            nn.Sigmoid()  # assume input in [0, 1]
+
+            nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4),
+            nn.Tanh(),
+
+            nn.Upsample(size=(224, 224), mode='nearest'),
         )
 
     def forward(self, x):
-        return self.deconv(x)   # -> (B, 4, 224, 224)
+        return (self.deconv(x) + 1) / 2.0   # -> (B, 4, 224, 224)
+
+
+class ConvTrunkGrayscale224_small_stride(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.trunk = nn.Sequential(
+            nn.Conv2d(4, 32, kernel_size=7, stride=1, padding=3),     # (B, 32, 224, 224)
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+
+            nn.Conv2d(32, 64, kernel_size=5, stride=1, padding=2),    # (B, 64, 224, 224)
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+
+            nn.Conv2d(64, 128, kernel_size=5, stride=1, padding=2),   # (B, 128, 224, 224)
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return self.trunk(x)  # -> (B, 128, 224, 224)
+
+
+class ConvTrunkGrayscale224Decoder_small_stride(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.deconv = nn.Sequential(
+            nn.ConvTranspose2d(128, 64, kernel_size=5, stride=1, padding=2),  # -> (64, 224, 224)
+            #nn.BatchNorm2d(64),
+            nn.ReLU(),
+
+            nn.ConvTranspose2d(64, 32, kernel_size=5, stride=1, padding=2),   # -> (32, 224, 224)
+            #nn.BatchNorm2d(32),
+            nn.ReLU(),
+
+            nn.ConvTranspose2d(32, 4, kernel_size=7, stride=1, padding=3),    # -> (4, 224, 224)
+            nn.Tanh()
+        )
+
+    def forward(self, x):
+        return (self.deconv(x) + 1) / 2.0  # Scale output to [0, 1]
+
+
+class ConvTrunkGrayscale224_extra_reduction(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.trunk = nn.Sequential(
+            nn.Conv2d(4, 32, kernel_size=16, stride=4),     # -> (B, 32, 55, 55)
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=8, stride=2),    # -> (B, 64, 26, 26)
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1),   # -> (B, 128, 24, 24)
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return self.trunk(x)  # -> (B, 128, 224, 224)
+
+
+class ConvTrunkGrayscale224Decoder_extra_reduction(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.deconv = nn.Sequential(
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=1),       # 24 → 26
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+
+            nn.ConvTranspose2d(64, 32, kernel_size=8, stride=2),        # 26 → 54
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+
+            nn.ConvTranspose2d(32, 4, kernel_size=16, stride=4),
+            nn.Tanh(),
+
+            nn.Upsample(size=(224, 224), mode='nearest'),
+        )
+
+    def forward(self, x):
+        return (self.deconv(x) + 1) / 2.0  # Scale output to [0, 1]
+
+
+class ConvTrunkGrayscale224_with_linear(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.trunk = nn.Sequential(
+            layer_init(nn.Conv2d(4, 32, kernel_size=8, stride=4)),     # -> (B, 32, 55, 55)
+            #nn.BatchNorm2d(32),
+            nn.GroupNorm(4, 32),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),    # -> (B, 64, 26, 26)
+            #nn.BatchNorm2d(64),
+            nn.GroupNorm(8, 64),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),   # -> (B, 64, 24, 24)
+            #nn.BatchNorm2d(64),
+            nn.GroupNorm(8, 64),
+            nn.ReLU(),
+
+            nn.Flatten(),
+            nn.LayerNorm(64 * 24 * 24),
+            layer_init(nn.Linear(64 * 24 * 24, 512)),        # (B, 36864) → (B, 512)
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return self.trunk(x)  # -> (B, 128, 224, 224)
+
+
+class ConvTrunkGrayscale224Decoder_with_linear(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        if False:
+            self.deconv = nn.Sequential(
+                layer_init(nn.Linear(512, 64 * 24 * 24)),
+                nn.ReLU(),
+
+                nn.Unflatten(1, (64, 24, 24)),  # (B, 512) → (B, 64, 7, 7)
+                layer_init(nn.ConvTranspose2d(64, 64, kernel_size=3, stride=1)),      # 7 → 9
+                #nn.LayerNorm([64, 26, 26]),
+                #nn.BatchNorm2d(64),
+                nn.GroupNorm(8, 64),
+
+                nn.ReLU(),
+
+                layer_init(nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2)),      # 9 → 20
+                #nn.BatchNorm2d(32),
+                nn.GroupNorm(4, 32),
+
+                nn.ReLU(),
+
+                layer_init(nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4)),       # 20 → 84
+                #nn.Tanh(),
+                nn.Sigmoid(),
+
+                nn.Upsample(size=(224, 224), mode='nearest')             # 84 → 224
+            )
+
+        self.deconv = nn.Sequential(
+            layer_init(nn.Linear(512, 32 * 12 * 12)),   # Fewer channels, smaller spatial size
+            nn.ReLU(),
+
+            nn.Unflatten(1, (32, 12, 12)),
+
+            layer_init(nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2, padding=1)),   # 12 → 24
+            nn.GroupNorm(4, 16),
+            nn.ReLU(),
+
+            layer_init(nn.ConvTranspose2d(16, 4, kernel_size=4, stride=2, padding=1)),    # 24 → 48
+            nn.Sigmoid(),
+
+            nn.Upsample(size=(224, 224), mode='nearest')  # Final upscale to full image
+        )
+
+    def forward(self, x):
+        return self.deconv(x)   # Scale output to [0, 1]
+        #return (self.deconv(x) + 1) / 2.0  # Scale output to [0, 1]
+
+
 
 
 class VaeGrayscale224(nn.Module):
@@ -265,18 +443,23 @@ class VaeGrayscale224(nn.Module):
         # (E, 4, 224, 224) -> (1, 36864)
         self.trunk = nn.Sequential(
             nn.Conv2d(4, 32, 8, stride=4),     # (B, 32, 55, 55)
+            nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.Conv2d(32, 64, 4, stride=2),    # (B, 64, 26, 26)
+            nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.Conv2d(64, 128, 3, stride=2),   # (B, 128, 12, 12)
+            #nn.Conv2d(64, 128, 3, stride=2),   # (B, 128, 12, 12)
+            nn.Conv2d(64, 128, 3, stride=1),   # (B, 128, 12, 12)
+            nn.BatchNorm2d(128),
             nn.ReLU(),
-            nn.Conv2d(128, 256, 3, stride=2),  # (B, 256, 5, 5)
-            nn.ReLU(),
+            # nn.Conv2d(128, 256, 3, stride=2),  # (B, 256, 5, 5)
+            # nn.BatchNorm2d(256),
+            # nn.ReLU(),
         )
 
         # For VAE
-        self.mu = nn.Conv2d(256, 256, kernel_size=1)
-        self.logvar = nn.Conv2d(256, 256, kernel_size=1)
+        self.mu = nn.Conv2d(128, 128, kernel_size=1)
+        self.logvar = nn.Conv2d(128, 128, kernel_size=1)
 
     def forward(self, x):
         h = self.trunk(x)           # (B, 256, 5, 5)
@@ -293,20 +476,117 @@ class VaeGrayscale224Decoder(nn.Module):
         super().__init__()
 
         self.deconv = nn.Sequential(
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, output_padding=1),  # -> (B, 128, 11, 11)
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=1),   # -> (B, 64, 23, 23)
+            nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, output_padding=1),   # -> (B, 64, 23, 23)
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2),    # -> (B, 32, 48, 48)
+            nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, output_padding=1),    # -> (B, 32, 48, 48)
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4, output_padding=0),     # -> (B, 4, 224, 224)
+            nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4),     # -> (B, 4, 224, 224)
+            nn.BatchNorm2d(4),
+            nn.Upsample(size=(224, 224), mode='nearest'),
             nn.Sigmoid(),
+
+            # nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, output_padding=1),  # -> (B, 128, 11, 11)
+            # nn.BatchNorm2d(128),
+            # nn.ReLU(),
+            # nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, output_padding=1),   # -> (B, 64, 23, 23)
+            # nn.BatchNorm2d(64),
+            # nn.ReLU(),
+            # nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, output_padding=1),    # -> (B, 32, 48, 48)
+            # nn.BatchNorm2d(32),
+            # nn.ReLU(),
+            # nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4, output_padding=0),     # -> (B, 4, 224, 224)
+            # nn.BatchNorm2d(4),
+            # nn.Sigmoid(),
         )
 
     def forward(self, x):
         return self.deconv(x)   # -> (B, 4, 224, 224)
 
 
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1, transposed=False):
+        super().__init__()
+
+        # Choose Conv type
+        Conv = nn.ConvTranspose2d if transposed else nn.Conv2d
+
+        # First conv kwargs
+        conv1_kwargs = {'stride': stride, 'padding': 1}
+        if transposed and stride > 1:
+            conv1_kwargs['output_padding'] = 1
+
+        # Shortcut kwargs
+        shortcut_kwargs = {'stride': stride}
+        if transposed and stride > 1:
+            shortcut_kwargs['output_padding'] = 1
+
+        # Residual path
+        self.block = nn.Sequential(
+            Conv(in_channels, out_channels, kernel_size=3, **conv1_kwargs),
+            #nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            Conv(out_channels, out_channels, kernel_size=3, padding=1),
+            #nn.BatchNorm2d(out_channels)
+        )
+
+        # Shortcut (identity or matching conv)
+        self.shortcut = nn.Identity()
+        if in_channels != out_channels or stride != 1:
+            self.shortcut = nn.Sequential(
+                Conv(in_channels, out_channels, kernel_size=1, **shortcut_kwargs),
+                # nn.BatchNorm2d(out_channels)
+            )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        residual = self.shortcut(x)
+        out = self.block(x)
+        return self.relu(out + residual)
+
+
+class ResNetEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.initial = nn.Sequential(
+            nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3),  # → (B, 64, 112, 112)
+            # nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2)  # → (B, 64, 56, 56)
+        )
+
+        self.layers = nn.Sequential(
+            ResidualBlock(64, 128, stride=2),   # → (B, 128, 28, 28)
+            ResidualBlock(128, 128),
+            ResidualBlock(128, 256, stride=2),  # → (B, 256, 14, 14)
+            # ResidualBlock(256, 256, stride=2),  # → (B, 256, 7, 7)
+        )
+
+    def forward(self, x):
+        x = self.initial(x)
+        return self.layers(x)
+
+
+class ResNetDecoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layers = nn.Sequential(
+            # ResidualBlock(256, 256, stride=2, transposed=True),  # → (B, 256, 14, 14)
+            ResidualBlock(256, 128, stride=2, transposed=True),  # → (B, 128, 28, 28)
+            ResidualBlock(128, 64, stride=2, transposed=True),   # → (B, 64, 56, 56)
+            ResidualBlock(64, 64, transposed=True),              # → (B, 64, 56, 56)
+        )
+
+        self.final = nn.Sequential(
+            nn.ConvTranspose2d(64, 4, kernel_size=4, stride=4),  # → (B, 4, 224, 224)
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.layers(x)
+        return self.final(x)
 
 
 class Agent(nn.Module):
@@ -314,12 +594,24 @@ class Agent(nn.Module):
         super().__init__()
 
         print(f"USING VISION MODEL IN AGENT: {vision_model}")
-        if vision_model == VisionModel.VAE_GRAYSCALE_224:
-            self.trunk = VaeGrayscale224()
-            self.decoder = VaeGrayscale224Decoder()
-        elif vision_model == VisionModel.CONV_GRAYSCALE_224:
+        if vision_model == VisionModel.CONV_GRAYSCALE_224:
             self.trunk = ConvTrunkGrayscale224()
             self.decoder = ConvTrunkGrayscale224Decoder()
+        elif vision_model == VisionModel.CONV_GRAYSCALE_224_small_stride:
+            self.trunk = ConvTrunkGrayscale224_small_stride()
+            self.decoder = ConvTrunkGrayscale224Decoder_small_stride()
+        elif vision_model == VisionModel.CONV_GRAYSCALE_224_extra_reduction:
+            self.trunk = ConvTrunkGrayscale224_extra_reduction()
+            self.decoder = ConvTrunkGrayscale224Decoder_extra_reduction()
+        elif vision_model == VisionModel.CONV_GRAYSCALE_224_with_linear:
+            self.trunk = ConvTrunkGrayscale224_with_linear()
+            self.decoder = ConvTrunkGrayscale224Decoder_with_linear()
+        elif vision_model == VisionModel.RESNET_GRAYSCALE_224:
+            self.trunk = ResNetEncoder()
+            self.decoder = ResNetDecoder()
+        elif vision_model == VisionModel.VAE_GRAYSCALE_224:
+            self.trunk = VaeGrayscale224()
+            self.decoder = VaeGrayscale224Decoder()
         else:
             raise AssertionError(f"Unexpected vision model: {vision_model}")
 
@@ -333,14 +625,64 @@ class Agent(nn.Module):
 
 
 def _draw_obs(obs_np, screen: Any, screen_index: int):
-    assert obs_np.shape == (224, 224), f"Unexpected observation shape: {obs_np.shape} != (224, 224)"
-    assert obs_np.max() < 1.0, f"Unexpected observation values: min={obs_np.min()} max={obs_np.max()}"
+    # assert obs_np.shape == (224, 224), f"Unexpected observation shape: {obs_np.shape} != (224, 224)"
+    assert obs_np.max() <= 1.0, f"Unexpected observation values: min={obs_np.min()} max={obs_np.max()}"
 
     obs_grayscale = (obs_np * 255).astype(np.uint8)
     img_gray = Image.fromarray(obs_grayscale.T, mode='L')
     img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
 
     screen.blit_image(img_rgb_240, screen_index=screen_index)
+
+
+def contrastive_loss(z1, z2, temperature=0.1):
+    """
+    Contrastive loss for 4D input tensors (B, C, H, W).
+    z1, z2: two augmented views of shape (B, 4, 224, 224)
+    """
+    B = z1.size(0)
+
+    # Flatten spatial dimensions: (B, 4, 224, 224) -> (B, 200704)
+    z1 = z1.view(B, -1)
+    z2 = z2.view(B, -1)
+
+    # Normalize embeddings
+    z1 = F.normalize(z1, dim=1)
+    z2 = F.normalize(z2, dim=1)
+
+    # Combine for all pairs: (2B, D)
+    z = torch.cat([z1, z2], dim=0)
+
+    # Compute cosine similarity matrix: (2B, 2B)
+    sim = F.cosine_similarity(z.unsqueeze(1), z.unsqueeze(0), dim=2)  # (2B, 2B)
+
+    # Create labels: positives are at (i, i+B) and (i+B, i)
+    labels = torch.arange(B, device=z.device)
+    labels = torch.cat([labels + B, labels])  # shape (2B,)
+
+    # Mask out self-similarity
+    self_mask = torch.eye(2 * B, dtype=torch.bool, device=z.device)
+    sim = sim.masked_fill(self_mask, -9e15)
+
+    # Scale by temperature
+    sim = sim / temperature
+
+    # Cross entropy loss, where each example should match its positive pair
+    loss = F.cross_entropy(sim, labels)
+    return loss
+
+
+def contractive_loss(x, x_hat, z, lam=1e-4):
+    recon_loss = F.mse_loss(x_hat, x, reduction='mean')
+
+    # Approximate the contractive penalty
+    z_flat = z.view(z.size(0), -1)         # (B, D)
+    ones = torch.ones_like(z_flat)
+    z_flat.backward(ones, retain_graph=True)
+    # x.grad will be populated
+    frob_norm = torch.norm(x.grad.view(x.size(0), -1), p='fro') ** 2
+    return recon_loss + lam * frob_norm
+
 
 
 def main():
@@ -529,10 +871,11 @@ def main():
             # Validation
             best_val_loss = float('inf')
             epochs_without_improvement = 0
-            patience = 5  # Stop if no improvement for this many epochs
+            patience = 20  # Stop if no improvement for this many epochs
 
-            for epoch in range(args.update_epochs):
+            while executed_epochs < args.update_epochs or args.update_epochs <= 0:
                 executed_epochs += 1
+                epoch = executed_epochs
 
                 # Shuffle all observations.
                 np.random.shuffle(b_inds)
@@ -546,6 +889,9 @@ def main():
 
                     obs_tensor = b_obs_tensor[mb_inds]
 
+                    obs_tensor.requires_grad = True
+
+
                     if USE_VAE:
                         x = obs_tensor
                         z, mu, logvar = agent.trunk(obs_tensor)
@@ -554,29 +900,111 @@ def main():
                         encoded_tensor = agent.trunk(obs_tensor)
                         z = encoded_tensor
 
-                    if True:
+                    if False:
                         print(f"Encoded std across batch (shape={z.shape}): {z.std(dim=0).mean()}")  # low std across batch => collapse
 
                     if USE_VAE:
                         # Agent image decoder
-                        # TODO(millman): SHOULD USE DETACH OR NOT?
                         x_hat = decoder(z)
-                        decoded_tensor = x_hat
 
                         recon_loss = F.mse_loss(x_hat, x, reduction='mean')
 
                         # KL divergence per pixel
                         kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / x.size(0)
 
-                        decoder_loss = recon_loss + kl
+                        loss = recon_loss + kl
+
+                        decoded_tensor = x_hat
                     else:
                         decoded_tensor = decoder(encoded_tensor)
-                        decoder_loss = F.mse_loss(decoded_tensor, obs_tensor)
+
+                        # print(f"DECODED SHAPE: {decoded_tensor.shape} obs={obs_tensor.shape}")
+
+                        # loss = F.mse_loss(decoded_tensor, obs_tensor)
+                        # loss = contrastive_loss(decoded_tensor, obs_tensor)
+                        x = obs_tensor
+                        z = encoded_tensor
+                        x_hat = decoded_tensor
+                        loss = contractive_loss(x, x_hat, z)
 
                     # Total loss
                     optimizer.zero_grad()
-                    decoder_loss.backward()
+                    loss.backward()
                     optimizer.step()
+
+                if False:
+                    # TODO(millman): TSNE
+                    with torch.no_grad():
+                        from sklearn.manifold import TSNE
+
+                        # Encode the entire
+                        z = next_encoded_obs.cpu().numpy()
+
+                        print(f"SIZE OF Z: {z.shape}")
+
+                        z_2d = TSNE().fit_transform(z.swapaxes(0, 1))
+
+                        img = Image.asarray(z_2d).resize((240, 224))
+
+                        screen.surfs[3].set_image(img)
+
+
+                # --- Visualization ---
+                #with torch.no_grad():
+                if False:
+                    # Draw the first 4 random items
+                    b_obs_vis = b_obs_tensor[b_inds[:1]].detach()
+                    if USE_VAE:
+                        b_encoded_obs, mu, logvar = agent.trunk(b_obs_vis)
+                    else:
+                        b_encoded_obs = agent.trunk(b_obs_vis)
+
+                    b_decoded_obs = decoder(b_encoded_obs)
+
+                    for i in range(4):
+                        _draw_obs(b_obs_vis[0, i].cpu().numpy(), screen, 4 + i)
+                        _draw_obs(b_decoded_obs[0, i].detach().cpu().numpy(), screen, 8 + i)
+
+                        surf = screen.surfs[12 + i]
+
+                        surf.fill((25, 25, 25))
+
+                        x, y = 0, 0
+                        hist_width = 240
+                        spacing = 2
+
+                        if False:
+                            named_params = list(agent.trunk.named_parameters())
+                            num_params = len(named_params)
+
+                            # Total height is: hist_height*N + spacing*(N-1) + 18 = 224
+                            hist_height = (224 - 18 - 10 - spacing * (num_params-1)) / num_params
+
+                            # print(f"NUM_PARAMS: {num_params} HIST HEIGHT: {hist_height} y={y}")
+
+                            for name, param in named_params:
+                                # E.g.:
+                                #  agent.trunk param: trunk.0.weight
+                                #  agent.trunk param: trunk.0.bias
+                                #  agent.trunk param: trunk.2.weight
+                                #  agent.trunk param: trunk.2.bias
+
+                                # print(f"agent.trunk param: {name}")
+                                if param.grad is None:
+                                    continue
+                                grad_data = param.grad.detach().cpu().flatten().numpy()
+                                rect = (x, y, hist_width, hist_height)
+                                draw_histogram_with_axes(surf, grad_data, rect, label=name, font=font)
+                                y += hist_height + spacing
+
+                                # print(f"Y={y} += {hist_height} + {spacing}")
+
+                        # Show loss
+                        if font is None:
+                            font = pygame.font.SysFont("Arial", 14)
+                        loss_text = font.render(f"Epoch {epoch+1} | Loss: {loss.item():.4f}", True, (255, 255, 255))
+                        surf.blit(loss_text, (x, y + 10))
+
 
                 # ----- Validation -----
                 with torch.no_grad():
@@ -599,58 +1027,7 @@ def main():
 
                         val_loss = F.mse_loss(val_recon, b_val_obs)
 
-                print(f"Epoch {epoch+1}: train_loss={decoder_loss:.4f} val_loss={val_loss:.4f}")
-
-                # --- Visualization ---
-                with torch.no_grad():
-
-                    # Draw the first 4 random items
-                    for i, b_ind in enumerate(b_inds[:4]):
-                        obs_vis = b_obs_tensor[b_ind]
-
-                        encoded_obs = agent.trunk(obs_vis)
-                        decoded_obs = decoder(encoded_obs)
-
-                        _draw_obs(obs_vis[-1].cpu().numpy(), screen, 4 + i)
-                        _draw_obs(decoded_obs[-1].detach().cpu().numpy(), screen, 8 + i)
-
-
-                        surf = screen.surfs[12 + i]
-
-                        surf.fill((25, 25, 25))
-
-                        x, y = 0, 0
-                        hist_width = 240
-                        spacing = 2
-
-                        named_params = list(agent.trunk.named_parameters())
-                        num_params = len(named_params)
-
-                        # Total height is: hist_height*4 + spacing*3 = 224
-                        hist_height = (224 - spacing * (num_params-1)) / num_params
-                        # spacing = 224 - (hist_height * 4) / 3
-
-                        for name, param in named_params:
-                            # E.g.:
-                            #  agent.trunk param: trunk.0.weight
-                            #  agent.trunk param: trunk.0.bias
-                            #  agent.trunk param: trunk.2.weight
-                            #  agent.trunk param: trunk.2.bias
-
-                            # print(f"agent.trunk param: {name}")
-                            if param.grad is None:
-                                continue
-                            grad_data = param.grad.detach().cpu().flatten().numpy()
-                            rect = (x, y, hist_width, hist_height)
-                            draw_histogram_with_axes(surf, grad_data, rect, label=name, font=font)
-                            y += hist_height + spacing
-
-                        # Show loss
-                        if font is None:
-                            font = pygame.font.SysFont("Arial", 14)
-                        loss_text = font.render(f"Epoch {epoch+1} | Loss: {decoder_loss.item():.4f}", True, (255, 255, 255))
-                        surf.blit(loss_text, (x, y + 10))
-
+                print(f"Epoch {epoch+1}: train_loss={loss:.4f} val_loss={val_loss:.4f}")
 
                 # ----- Early stopping logic -----
                 if val_loss < best_val_loss - 1e-4:  # Small threshold to avoid noise
