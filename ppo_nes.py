@@ -107,6 +107,9 @@ class Args:
 
     # Visualization
     value_sweep_frequency: int | None = 0
+
+    visualize_decoder: bool = True
+
     """create a value sweep visualization every N updates"""
     visualize_reward: bool = True
     visualize_actions: bool = True
@@ -127,6 +130,8 @@ class Args:
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
+    learning_rate_decoder: float = 2.5e-4
+    """the learning rate of the decoder optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
     num_steps: int = 128
@@ -155,7 +160,7 @@ class Args:
     """the maximum norm for the gradient clipping"""
     target_kl: float = None
     """the target KL divergence threshold"""
-    intrinsic_reward_coef: float = 0.001
+    intrinsic_reward_coef: float = 1e-3
     """coefficient of the intrinsic reward when combining with extrinsic reward"""
 
     # to be filled in runtime
@@ -250,17 +255,14 @@ class ConvTrunkGrayscale(nn.Module):
             layer_init(nn.Conv2d(64, 64, 3, stride=1)),
             nn.ReLU(),
             nn.Flatten(),
-        )
 
-        # Input size for a grayscale observation of size: 84x84
-        # (1, 3136) -> (1, 512)
-        self.post_trunk = nn.Sequential(
+            # Input size for a grayscale observation of size: 84x84
+            # (1, 3136) -> (1, 512)
             layer_init(nn.Linear(64 * 7 * 7, 512)),
         )
 
     def forward(self, x):
-        trunk_output = self.trunk(x)
-        return self.post_trunk(trunk_output)
+        return self.trunk(x)
 
 
 class ConvTrunkGrayscale224(nn.Module):
@@ -276,17 +278,36 @@ class ConvTrunkGrayscale224(nn.Module):
             layer_init(nn.Conv2d(64, 64, 3, stride=1)),
             nn.ReLU(),
             nn.Flatten(),
-        )
 
-        # Input size for a grayscale observation of size: 224x224
-        # (1, 36864) -> (1, 512)
-        self.post_trunk = nn.Sequential(
+            # Input size for a grayscale observation of size: 224x224
+            # (1, 36864) -> (1, 512)
             layer_init(nn.Linear(64 * 24 * 24, 512)),
         )
 
     def forward(self, x):
-        trunk_output = self.trunk(x)
-        return self.post_trunk(trunk_output)
+        return self.trunk(x)
+
+
+class ConvTrunkGrayscale224Decoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.deconv = nn.Sequential(
+            nn.Linear(512, 64 * 24 * 24),  # Match encoder's flatten
+            nn.ReLU(),
+
+            nn.Unflatten(1, (64, 24, 24)),  # inverse of flatten
+            nn.ConvTranspose2d(64, 64, kernel_size=3, stride=1),  # -> (64, 26, 26)
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2),   # -> (32, 54, 54)
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4, output_padding=4),    # -> (4, 224, 224)
+            nn.Sigmoid()  # assume input in [0, 1]
+        )
+
+    def forward(self, x):
+        return self.deconv(x)   # -> (B, 4, 224, 224)
+
 
 
 class PretrainedMobilenetTrunk(nn.Module):
@@ -455,7 +476,7 @@ class Agent(nn.Module):
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), probs.probs, self.critic(hidden)
+        return action, probs.log_prob(action), probs.entropy(), probs.probs, self.critic(hidden), trunk_output
 
     def get_actor_policy_probs_and_critic_value(self, x):
         with torch.no_grad():
@@ -490,6 +511,7 @@ def _sigmoid_scale(x: float, lower: float, upper: float, k: float = 1.0):
 
 
 def _draw_reward(surf: pygame.Surface, at: int, reward: float, rmin: float, rmax: float, screen_size: tuple[float, float], block_size: int = 10, log_scale: bool = False):
+    assert type(reward) in [int, float], f"Unexpected type: {reward=}"
     if not log_scale:
         max_abs_reward = max(abs(reward), max(abs(rmin), abs(rmax)))
 
@@ -644,18 +666,23 @@ def _draw_action_probs2(surf: pygame.Surface, at: int, action_probs: np.ndarray,
 
 # -------- Feature Encoder --------
 class ICMEncoder(nn.Module):
-    def __init__(self):
+    def __init__(self, shared_conv: nn.Module | None):
         super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(4, 32, kernel_size=8, stride=4),   # (B, 4, 224, 224) -> (B, 32, 55, 55)
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),  # -> (B, 64, 26, 26)
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=1), # -> (B, 128, 24, 24)
-            nn.ReLU(),
-            nn.Flatten()  # -> (B, 73728)
-        )
-        self.output_dim = 128 * 24 * 24
+
+        if shared_conv:
+            self.conv = shared_conv
+        else:
+            self.conv = nn.Sequential(
+                nn.Conv2d(4, 32, kernel_size=8, stride=4),   # (B, 4, 224, 224) -> (B, 32, 55, 55)
+                nn.ReLU(),
+                nn.Conv2d(32, 64, kernel_size=4, stride=2),  # -> (B, 64, 26, 26)
+                nn.ReLU(),
+                nn.Conv2d(64, 64, kernel_size=3, stride=1), # -> (B, 64, 24, 24)
+                nn.ReLU(),
+                nn.Flatten()  # -> (B, 73728)
+            )
+
+        self.output_dim = 64 * 24 * 24
 
         print(f"ICMEncoder.conv: device={next(self.parameters()).device}")
 
@@ -695,9 +722,11 @@ class ForwardModel(nn.Module):
 class ICMDecoder(nn.Module):
     def __init__(self, feature_dim):
         super().__init__()
-        self.unflatten = nn.Unflatten(1, (128, 24, 24))  # inverse of flatten
+
+        input_dim = 64
+        self.unflatten = nn.Unflatten(1, (input_dim, 24, 24))  # inverse of flatten
         self.deconv = nn.Sequential(
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=1),  # -> (64, 26, 26)
+            nn.ConvTranspose2d(input_dim, 64, kernel_size=3, stride=1),  # -> (64, 26, 26)
             nn.ReLU(),
             nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2),   # -> (32, 54, 54)
             nn.ReLU(),
@@ -706,14 +735,14 @@ class ICMDecoder(nn.Module):
         )
 
     def forward(self, features):  # (B, feature_dim)
-        x = self.unflatten(features)  # -> (B, 128, 24, 24)
+        x = self.unflatten(features)  # -> (B, 64, 24, 24)
         return self.deconv(x)         # -> (B, 4, 224, 224)
 
 # -------- Full ICM Wrapper --------
 class ICM(nn.Module):
-    def __init__(self, action_dim, shared_encoder: nn.Module | None = None):
+    def __init__(self, action_dim, shared_encoder: nn.Module | None):
         super().__init__()
-        self.encoder = ICMEncoder()
+        self.encoder = ICMEncoder(shared_encoder)
         self.inverse_model = InverseModel(self.encoder.output_dim, action_dim)
         self.forward_model = ForwardModel(self.encoder.output_dim, action_dim)
 
@@ -814,18 +843,22 @@ def main():
 
     # ActorCritic
     agent = Agent(envs, args.vision_model).to(device)
+    decoder = ConvTrunkGrayscale224Decoder().to(device)
 
     # ICM
-    icm = ICM(action_dim=action_dim).to(device)
-    decoder = ICMDecoder(feature_dim=icm.encoder.output_dim).to(device)
+    #icm = ICM(action_dim=action_dim, shared_encoder=agent.trunk.trunk).to(device)
+    icm = ICM(action_dim=action_dim, shared_encoder=None).to(device)
+    icm_decoder = ICMDecoder(feature_dim=icm.encoder.output_dim).to(device)
 
     optimizer = torch.optim.Adam(
         list(agent.parameters()) +
         list(icm.parameters()) +
-        list(decoder.parameters()),
+        list(icm_decoder.parameters()),
         lr=args.learning_rate,
         eps=1e-5
     )
+
+    optimizer_decoder = torch.optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # Reward visualization.
     surf_np = pygame.surfarray.pixels3d(screen.surfs[3])
@@ -893,7 +926,7 @@ def main():
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                action, logprob, _entropy, action_probs, value = agent.get_action_and_value(next_obs)
+                action, logprob, _entropy, action_probs, value, next_encoded_obs = agent.get_action_and_value(next_obs)
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
@@ -911,7 +944,7 @@ def main():
 
             # Forward ICM
             with torch.no_grad():
-                phi, phi_next, pred_action_logits, pred_phi_next = icm(obs[step], next_obs, action_onehot)
+                phi, phi_next, pred_action_logits, pred_phi_next = icm(obs[step] / 255, next_obs / 255, action_onehot)
                 #inv_loss, fwd_loss = icm_loss(phi, phi_next, pred_action_logits, pred_phi_next, action)
                 # inv_loss = F.cross_entropy(pred_action_logits, action_onehot)
                 # fwd_loss = F.mse_loss(pred_phi_next, phi_next.detach())
@@ -919,9 +952,10 @@ def main():
                 # r_int = compute_intrinsic_reward(phi_next, pred_phi_next)  # shape (num_envs,)
                 r_int = 0.5 * (pred_phi_next - phi_next.detach()).pow(2).sum(1)
 
-            # Combine rewards
-            intrinsic_reward_coef = args.intrinsic_reward_coef  # e.g., 0.01
-            r_total = torch.tensor(reward).to(device, dtype=torch.float32).view(-1) + intrinsic_reward_coef * r_int
+                # TODO(millman): does this need to be in a no_grad block?
+                # Combine rewards
+                intrinsic_reward_coef = args.intrinsic_reward_coef  # e.g., 0.01
+                r_total = torch.tensor(reward).to(device, dtype=torch.float32).view(-1) + intrinsic_reward_coef * r_int
 
             # Save reward
             rewards[step] = r_total
@@ -932,25 +966,44 @@ def main():
                 next_obs = torch.Tensor(next_obs).to(device)
                 next_done = torch.Tensor(next_done).to(device)
 
-            print(f"Rewards: {reward.item()} + {intrinsic_reward_coef} * {r_int.item()} = {r_total.item()}")
+            print(f"Rewards: {reward.item():.4f} + {intrinsic_reward_coef} * {r_int.item():.4f} = {r_total.item():.4f}")
+
+            if args.visualize_decoder:
+                with torch.no_grad():
+                    # (1, 4, 224, 224)
+                    decode_obs = decoder(next_encoded_obs).cpu().numpy()
+
+                decode_grayscale = (decode_obs[0, -1] * 255).astype(np.uint8)
+                img_gray = Image.fromarray(decode_grayscale, mode='L')
+                img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
+
+                screen.blit_image(img_rgb_240, screen_index=1)
+
             if args.visualize_intrinsic_decoder:
                 with torch.no_grad():
                     # (1, 4, 224, 224)
-                    decode_obs = decoder(phi_next).cpu().numpy()
+                    decode_obs = icm_decoder(phi_next).cpu().numpy()
+                    decode_next_obs = icm_decoder(pred_phi_next).cpu().numpy()
 
-                # print(f"DECODED SHAPE: {decode_obs.shape}")
-                decode_grayscale = decode_obs[0, -1]
-
+                decode_grayscale = (decode_obs[0, -1] * 255).astype(np.uint8)
                 img_gray = Image.fromarray(decode_grayscale, mode='L')
                 img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
 
                 screen.blit_image(img_rgb_240, screen_index=6)
 
+                # print(f"DECODED SHAPE: {decode_obs.shape}")
+
+                decode_next_grayscale = (decode_next_obs[0, -1] * 255).astype(np.uint8)
+                img_next_gray = Image.fromarray(decode_next_grayscale, mode='L')
+                img_next_rgb_240 = img_next_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
+
+                screen.blit_image(img_next_rgb_240, screen_index=7)
+
             if args.visualize_intrinsic_reward:
                 vis_rint_min = min(vis_rint_min, r_int)
                 vis_rint_max = max(vis_rint_max, r_int)
 
-                _draw_reward(screen.surfs[5], at=vis_rint_image_i, reward=reward.item(), rmin=vis_rint_min, rmax=vis_rint_max, screen_size=screen.screen_size)
+                _draw_reward(screen.surfs[5], at=vis_rint_image_i, reward=r_int.item(), rmin=vis_rint_min, rmax=vis_rint_max, screen_size=screen.screen_size)
 
                 vis_rint_image_i += 1
 
@@ -958,7 +1011,7 @@ def main():
                 vis_reward_min = min(vis_reward_min, reward)
                 vis_reward_max = max(vis_reward_max, reward)
 
-                _draw_reward(screen.surfs[3], at=vis_reward_image_i, reward=reward, rmin=vis_reward_min, rmax=vis_reward_max, screen_size=screen.screen_size)
+                _draw_reward(screen.surfs[3], at=vis_reward_image_i, reward=reward.item(), rmin=vis_reward_min, rmax=vis_reward_max, screen_size=screen.screen_size)
 
                 vis_reward_image_i += 1
 
@@ -1047,7 +1100,7 @@ def main():
                     end = start + args.minibatch_size
                     mb_inds = b_inds[start:end]
 
-                    _, newlogprob, entropy, _action_probs, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
+                    _, newlogprob, entropy, _action_probs, newvalue, encoded_obs = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
                     logratio = newlogprob - b_logprobs[mb_inds]
                     ratio = logratio.exp()
 
@@ -1081,6 +1134,11 @@ def main():
                     else:
                         v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
+                    # Agent image decoder
+                    obs_tensor = b_obs[mb_inds].detach()
+                    decoder_obs = decoder(encoded_obs.detach())
+                    decoder_loss = F.mse_loss(decoder_obs, obs_tensor / 255)
+
                     # ICM forward
                     # Use same reshaped obs/actions for ICM
                     obs_tensor = b_obs[mb_inds].detach()
@@ -1090,14 +1148,15 @@ def main():
                     #print(f"ACTION TENSOR SHAPE: {b_actions.shape}")
                     action_onehot = F.one_hot(action_tensor.long(), num_classes=envs.single_action_space.n).float().detach()
 
-                    phi, phi_next, pred_action_logits, pred_phi_next = icm(obs_tensor, next_obs_tensor, action_onehot)
+                    phi, phi_next, pred_action_logits, pred_phi_next = icm(obs_tensor / 255, next_obs_tensor / 255, action_onehot)
                     inv_loss, fwd_loss = icm_loss(phi, phi_next, pred_action_logits, pred_phi_next, action_tensor)
-                    r_int = compute_intrinsic_reward(phi_next, pred_phi_next)  # shape (B,)
+                    # r_int = compute_intrinsic_reward(phi_next, pred_phi_next)  # shape (B,)
 
-                    recon_obs = decoder(phi)  # predict (B, 4, 224, 224)
+                    # ICM Decoding
+                    recon_obs = icm_decoder(phi)  # predict (B, 4, 224, 224)
 
                     #print(f"obs_tensor={obs_tensor.shape} phi={phi.shape} recon_obs={recon_obs.shape}")
-                    recon_loss = F.mse_loss(recon_obs, obs_tensor)
+                    recon_loss = F.mse_loss(recon_obs, obs_tensor / 255)
 
                     beta = 0.5
                     gamma = 1e-3
@@ -1118,10 +1177,15 @@ def main():
                     # Total loss
                     loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef + total_icm_loss
 
+                    print(f"loss: {loss:.4f} pg={pg_loss:.4f} - {args.ent_coef} * entr={entropy_loss:.4f} +  {args.vf_coef} * v={v_loss:.4f} inv={inv_loss:.4f} fwd={fwd_loss:.4f} recon={recon_loss:.4f}")
+
                     optimizer.zero_grad()
+                    optimizer_decoder.zero_grad()
+                    decoder_loss.backward()
                     loss.backward()
                     nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                     optimizer.step()
+                    optimizer_decoder.step()
 
                 if args.target_kl is not None and approx_kl > args.target_kl:
                     break
@@ -1146,6 +1210,7 @@ def main():
 
             # TRY NOT TO MODIFY: record rewards for plotting purposes
             writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
+            writer.add_scalar("charts/learning_rate_decoder", optimizer_decoder.param_groups[0]["lr"], global_step)
             writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
             writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
             writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
