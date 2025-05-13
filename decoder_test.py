@@ -1256,7 +1256,11 @@ def main():
     agent = Agent(envs, args.vision_model).to(device)
     decoder = agent.decoder
 
-    optimizer = torch.optim.Adam(decoder.parameters(), lr=args.learning_rate, eps=1e-5)
+    optimizer = torch.optim.Adam(
+        list(agent.trunk.parameters()) + list(decoder.parameters()),
+        lr=args.learning_rate,
+        eps=1e-5,
+    )
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
