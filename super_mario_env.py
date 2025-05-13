@@ -361,7 +361,12 @@ def _left_pos(ram: NdArrayUint8) -> int:
 class SuperMarioEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 120}
 
-    def __init__(self, render_mode: str | None = None, render_fps: int | None = None, reset_to_save_state: bool = False):
+    def __init__(self,
+        render_mode: str | None = None,
+        render_fps: int | None = None,
+        reset_to_save_state: bool = False,
+        screen_rc: tuple[int, int] = (1, 1),
+    ):
         self.resets = 0
 
         self.reset_to_save_state = reset_to_save_state
@@ -378,7 +383,7 @@ class SuperMarioEnv(gym.Env):
         self.render_fps = render_fps
 
         # Screen setup.  2 Screens, 1 next to the other.
-        self.screen = SimpleScreenRxC((SCREEN_W, SCREEN_H), scale=3, rows=4, cols=4)
+        self.screen = SimpleScreenRxC((SCREEN_W, SCREEN_H), scale=3, rows=screen_rc[0], cols=screen_rc[1])
 
         self.clock = None
 

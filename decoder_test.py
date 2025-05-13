@@ -121,7 +121,8 @@ class Args:
     reset_to_save_state: bool = False
 
     # Vision model
-    vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_with_linear
+    vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224
+    #vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_with_linear
     #vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_with_linear
     #vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_extra_reduction
     #vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_small_stride
@@ -170,7 +171,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, vision_m
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
             raise RuntimeError("STOP")
         else:
-            env = gym.make(env_id, render_mode="human", reset_to_save_state=False)
+            env = gym.make(env_id, render_mode="human", reset_to_save_state=False, screen_rc=(4,4))
 
         print(f"RENDER MODE: {env.render_mode}")
 
@@ -233,13 +234,13 @@ class ConvTrunkGrayscale224(nn.Module):
 
         self.trunk = nn.Sequential(
             nn.Conv2d(4, 32, kernel_size=8, stride=4),     # -> (B, 32, 55, 55)
-            nn.BatchNorm2d(32),
+            #nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2),    # -> (B, 64, 26, 26)
-            nn.BatchNorm2d(64),
+            #nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.Conv2d(64, 128, kernel_size=3, stride=1),   # -> (B, 128, 24, 24)
-            nn.BatchNorm2d(128),
+            #nn.BatchNorm2d(128),
             nn.ReLU(),
         )
 
@@ -252,21 +253,22 @@ class ConvTrunkGrayscale224Decoder(nn.Module):
 
         self.deconv = nn.Sequential(
             nn.ConvTranspose2d(128, 64, kernel_size=3, stride=1),       # 24 → 26
-            nn.BatchNorm2d(64),
+            #nn.BatchNorm2d(64),
             nn.ReLU(),
 
             nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2),        # 26 → 54
-            nn.BatchNorm2d(32),
+            #nn.BatchNorm2d(32),
             nn.ReLU(),
 
             nn.ConvTranspose2d(32, 4, kernel_size=8, stride=4),
-            nn.Tanh(),
+            nn.Sigmoid(),
 
             nn.Upsample(size=(224, 224), mode='nearest'),
         )
 
     def forward(self, x):
-        return (self.deconv(x) + 1) / 2.0   # -> (B, 4, 224, 224)
+        #return (self.deconv(x) + 1) / 2.0   # -> (B, 4, 224, 224)
+        return self.deconv(x)
 
 
 class ConvTrunkGrayscale224_small_stride(nn.Module):
@@ -684,6 +686,505 @@ def contractive_loss(x, x_hat, z, lam=1e-4):
     return recon_loss + lam * frob_norm
 
 
+def generate_activation_map(encoder, device: str) -> NdArrayUint8:
+    # x = observation
+
+    # Target latent feature index
+    i = 0  # Choose the feature dimension you want to visualize
+
+    # Initialize input image (e.g., 4-channel NES frame)
+    x = torch.randn(1, 4, 224, 224, requires_grad=True, device=device)
+
+    # Use Adam optimizer on the image tensor
+    optimizer = torch.optim.Adam([x], lr=0.05)
+
+    # Main optimization loop
+    for step in range(100):
+        optimizer.zero_grad()
+
+        # Optionally normalize input to [0, 1] range for stability
+        #x_clamped = torch.clamp(x, 0, 1)
+
+        # Forward pass through encoder
+        #z = encoder(x_clamped)
+        z = encoder(x)
+
+        print(f"SHAPE OF X: {x.shape}")
+        print(f"SHAPE OF Z: {z.shape}")
+
+        # Maximize the i-th feature (can use abs() if you want activation)
+        loss = -z[0, -1].norm()
+
+        print(f"SHAPE OF LOSS: {loss.shape}")
+
+        loss.backward()
+
+        optimizer.step()
+
+        if step % 10 == 0:
+            print(f"Step {step} | Feature {i} | Activation: {z[0, -1].norm():.4f}")
+
+    # Visualize the last optimized image (one channel or more)
+    with torch.no_grad():
+        result_obs = torch.clamp(x[0], 0, 1).cpu()
+
+    return result_obs
+
+
+def total_variation_loss(x):
+    return torch.mean(torch.abs(x[:, :, :-1, :] - x[:, :, 1:, :])) + \
+           torch.mean(torch.abs(x[:, :, :, :-1] - x[:, :, :, 1:]))
+
+
+def l2_loss(x):
+    return torch.mean(x ** 2)
+
+
+def get_activation_hook(container):
+    def hook(module, input, output):
+        container['activation'] = output.detach()
+    return hook
+
+
+from PIL import Image, ImageFilter
+import torchvision.transforms as T
+
+def blur_stack(input_tensor, radius=5):
+    to_pil = T.ToPILImage()
+    to_tensor = T.ToTensor()
+
+    blurred_frames = []
+
+    for i in range(4):
+        img_pil = to_pil(input_tensor[0, i])  # (224, 224)
+
+        print(f"IMG PIL Shape: {img_pil.size}")
+
+        img_blurred = img_pil.filter(ImageFilter.GaussianBlur(radius=radius))
+        img_tensor = to_tensor(img_blurred).squeeze(0)  # (224, 224)
+
+        print(f"FRAME img_tensor: {img_tensor.shape}")
+        blurred_frames.append(img_tensor)
+
+    blurred_stack = torch.stack(blurred_frames, dim=0).unsqueeze(0)  # (1, 4, 224, 224)
+    return blurred_stack
+
+
+def check_grad(model, device: str):
+    x = torch.rand(1, 4, 224, 224, requires_grad=True, device=device)
+    model.eval()
+    act_container = {}
+
+    print(f"x.is_leaf in check_grad(): {x.is_leaf}")
+
+    def get_activation_hook(container):
+        def hook(module, input, output):
+            container['activation'] = output
+        return hook
+
+    for name, module in model.named_modules():
+        print(f"CHECKING ACTIVATION FOR NAME: {name}")
+        if not isinstance(module, torch.nn.Conv2d):
+            continue
+
+        handle = module.register_forward_hook(get_activation_hook(act_container))
+        break
+
+    out = model(x)
+    activation = act_container['activation']
+    loss = -activation.mean()
+    loss.backward()
+
+    print(f"x.grad mean: {x.grad.abs().mean()} activation mean: {activation.abs().mean()} activation.mean(): {activation.mean()}")  # Should be > 0
+
+
+def maximize_each_layer(
+    model,
+    observation,
+    input_shape=(1, 4, 224, 224),
+    max_steps=1000,
+    lr=0.05,
+    tv_weight=1e-3,
+    l2_weight=1e-3,
+    #l2_weight=0,
+    device='cpu',
+    screen=None):
+
+    check_grad(model, device=device)
+
+    results = {}
+
+    act_container = {}
+
+    model.eval()
+
+    obs_blur = blur_stack(observation.detach()).to(device)
+
+    print(f"OBS BLUR: {obs_blur.shape}")
+
+    layer_i = 0
+    for name, module in model.named_modules():
+        if not isinstance(module, torch.nn.Conv2d):
+            continue
+
+        # Get real activation from input observation
+        if False:
+            with torch.no_grad():
+                handle = module.register_forward_hook(get_activation_hook(act_container))
+                obs_tensor = observation.clone().detach().float().div(255).to(device)  # (1, C, H, W)
+                _ = model(obs_tensor)
+                real_act = act_container['activation'].detach()
+
+        print(f"Maximizing activation for: {name}")
+        act_container = {}
+
+        # Register a temporary hook
+        handle = module.register_forward_hook(get_activation_hook(act_container))
+
+        # Create a leaf input with grad
+        if False:
+            x = torch.rand(input_shape, device=device, requires_grad=True)
+        else:
+            x = obs_blur.clone().detach().requires_grad_()
+
+        # print(f"x.is_leaf in maximize_each_layer(): {x.is_leaf}")
+        optimizer = torch.optim.Adam([x], lr=lr)
+
+        patience = 20
+
+        best_loss = float('inf')
+        steps_without_improvement = 0
+        for step in range(max_steps):
+            optimizer.zero_grad()
+
+            # print(f"X is_leaf: {x.is_leaf}")
+            _x_encoded = model(x)
+            activation = act_container['activation']
+
+            if False:
+                act_score = F.cosine_similarity(activation.view(1, -1), real_act.view(1, -1)).mean()
+            else:
+                # E.g. torch.Size([1, 128, 24, 24])
+                # print(f"ACTIVATION SHAPE: {activation.shape}")
+
+                # Optimize specific neuron.  This looks like something, but is it just averaging noise?
+                #act_score = activation[0, -1, -1, -1]
+                act_score = activation[0, 16, 12, 12]
+                print(f"act_score: {act_score=}")
+
+                # Optimize whole sequence of frames.
+                #act_score = activation[0].mean()
+                #act_score = activation[0, 16].mean()
+
+
+                # act_score = activation.norm()
+
+            # Regularization
+            if True:
+                tv = total_variation_loss(x)
+                l2 = l2_loss(x)
+            else:
+                tv = torch.tensor([0], device=x.device)
+                l2 = torch.tensor([0], device=x.device)
+
+            # Weighted sum
+            loss = -act_score + tv_weight * tv + l2_weight * l2
+            #loss = -act_score
+
+            if x.grad:
+                #print(f"X MEAN BEFORE BACKWARD: {x.grad.abs().mean()}")
+                pass
+
+            loss.backward()
+
+            # print(f"X MEAN AFTER BACKWARD: {x.grad.abs().mean()}")
+            # print(f"activation.mean().item() AFTER BACKWARD: {activation.mean()}")
+
+            #print("BEFORE STEP:", x[0,0,0,0].item())
+            optimizer.step()
+            #print("AFTER STEP:", x[0,0,0,0].item())
+
+            #print(f"X MEAN AFTER BACKWARD STEP: {x.grad.abs().mean()}")
+
+
+            if step % 10 == 0 or step == max_steps - 1:
+                # print(f"[{step:03}] cosine_sim={sim.item():.4f} | TV={tv.item():.5f} | L2={l2.item():.5f}")
+                print(f"Step {step:03} | Loss: {loss} | Activation: {act_score.item():.5f} | TV: {tv.item():.5f} | L2: {l2.item():.5f}")
+                #print(f"Step {step:03} | cosine_sim: {act_score.item():.5f} | TV: {tv.item():.5f} | L2: {l2.item():.5f}")
+
+            if screen is not None:
+                # print(f"SHOWING ON LAYER: {layer_i}")
+                screen_index = 4 + layer_i
+
+                activation_map_f = x[0].mean(dim=0).detach().cpu().numpy()
+                activation_map_grayscale = (activation_map_f * 255).astype(np.uint8)
+
+                img_gray = Image.fromarray(activation_map_grayscale.T, mode='L')
+                img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
+                screen.blit_image(img_rgb_240, screen_index=screen_index)
+
+                if True:
+                    # Show all 4 frames of the image.
+                    for i in range(4):
+                        activation_map_f = x[0,i].detach().cpu().numpy()
+                        activation_map_grayscale = (activation_map_f * 255).astype(np.uint8)
+
+                        img_gray = Image.fromarray(activation_map_grayscale.T, mode='L')
+                        img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
+                        screen.blit_image(img_rgb_240, screen_index=8 + i)
+
+                screen.show()
+
+
+
+            # Early stopping check
+            if loss.item() < best_loss - 1e-6:
+                best_loss = loss.item()
+                steps_without_improvement = 0
+            else:
+                steps_without_improvement += 1
+                if steps_without_improvement >= patience:
+                    print(f"Activation: Early stopping at step {step+1}")
+                    break
+
+        # Save result image
+        optimized_image = x.clone().detach().clamp(0, 1).cpu()[0]
+        results[name] = optimized_image
+
+
+        print(f"OPTIMIZED IMAGE SIZE: {optimized_image.shape}")
+
+        handle.remove()  # Remove hook after each layer
+
+        layer_i += 1
+
+    model.train()
+
+    return results
+
+
+def find_highest_activated_neuron(model, input_image, device='cpu', max_layers=10):
+    model.eval()
+    input_image = input_image.clone().detach().float().div(255).to(device)
+
+    top_neuron = {'layer': None, 'channel': None, 'h': None, 'w': None, 'activation': -float('inf')}
+    container = {}
+
+    # Register forward hooks to capture activations
+    def get_hook(name):
+        def hook_fn(module, input, output):
+            container[name] = output.detach().cpu()
+        return hook_fn
+
+    handles = []
+    for i, (name, module) in enumerate(model.named_modules()):
+        if isinstance(module, torch.nn.Conv2d):
+            filters = module.weight
+            print(f"LAYER NAME: {name}: weights_shape={filters.shape}")
+            handles.append(module.register_forward_hook(get_hook(name)))
+            if len(handles) >= max_layers:
+                break
+
+    with torch.no_grad():
+        _ = model(input_image)
+
+    # Search for highest activation
+    for name, act in container.items():
+        val, idx = act.view(act.shape[0], act.shape[1], -1).mean(dim=2).max(dim=1)  # mean across spatial, max across channels
+        c = idx.item()
+        spatial = act[0, c]
+        max_val = spatial.max().item()
+        h, w = (spatial == spatial.max()).nonzero(as_tuple=True)
+        h = h[0].item()
+        w = w[0].item()
+
+        if max_val > top_neuron['activation']:
+            top_neuron.update({
+                'layer': name,
+                'channel': c,
+                'h': h,
+                'w': w,
+                'activation': max_val
+            })
+
+    for handle in handles:
+        handle.remove()
+
+    return top_neuron
+
+
+def visualize_conv_filters(screen, model):
+    for i, (name, module) in enumerate(model.named_modules()):
+        if not isinstance(module, torch.nn.Conv2d):
+            continue
+
+        filters = module.weight
+        print(f"LAYER NAME: {name}: weight id={id(module.weight)} weights_shape={filters.shape}")
+
+        expected_shape = (32, 4, 8, 8)
+        assert filters.shape == expected_shape, f"Unexpected shape: {filters.shape} != {expected_shape}"
+
+        # 32 filters of size 8x8
+        filters_per_row = 240 // 8
+        filters_per_col = 224 // 8
+
+        filters_np = filters.detach().cpu().numpy()
+
+        # -> (C, B, H, W)
+        filters_cbhw = filters_np.transpose(1, 0, 2, 3)
+
+        print(f"VISUALIZING FILTERS cbhw: {filters_cbhw.shape}")
+
+        for channel, filters_bhw in enumerate(filters_cbhw):
+            # Each channel goes in a different screen.
+            screen_index_i = channel
+
+            img_f = np.zeros((224, 240), dtype=np.float32)
+
+            for f, filter in enumerate(filters_bhw):
+                # (4, H, W)
+                row = f // filters_per_row
+                col = f % filters_per_row
+
+                y = row * 8
+                x = col * 8
+
+                #print(f"FILTER SIZE: {filter.shape} f={f} row={row} col={col} x={x} y={y}")
+                img_f[y:y+8, x:x+8] = filter
+
+            img_gray = Image.fromarray((img_f * 255).astype(np.uint8), mode='L')
+            img_rgb_240 = img_gray.convert('RGB')
+            screen.blit_image(img_rgb_240, screen_index=12 + screen_index_i)
+
+        # First layer only.
+        break
+
+def visualize_receptive_field(screen, model, input_image, target_layer_name='layer3.2.conv2', target_channel=16, target_h=12, target_w=12, device='cpu'):
+    model = model.to(device).eval()
+    input_image = input_image.clone().detach().float().div(255).to(device).requires_grad_()  # (1, 4, 224, 224)
+
+    # === Register Hook ===
+    act_container = {}
+    def hook_fn(module, input, output):
+        act_container['activation'] = output
+    hook = None
+    for name, module in model.named_modules():
+        if name == target_layer_name:
+            hook = module.register_forward_hook(hook_fn)
+            break
+    if hook is None:
+        raise ValueError(f"Layer {target_layer_name} not found")
+
+    # === Forward & Saliency ===
+    model.zero_grad()
+    _ = model(input_image)
+    activation = act_container['activation']
+    target_neuron = activation[0, target_channel, target_h, target_w]
+    target_neuron.backward()
+
+    saliency = input_image.grad.abs().squeeze().cpu().numpy()  # (4, 224, 224)
+
+    # === Activation Maximization with Spatial Mask ===
+    x = torch.zeros_like(input_image, requires_grad=True)
+
+    # Define spatial mask (e.g., 64×64 box centered in 224x224)
+    mask = torch.zeros_like(x)
+    #mask[:, :, 80:144, 80:144] = 1.0  # You can adjust this
+    mask[:, :, :, :] = 1.0  # You can adjust this
+
+    optimizer = torch.optim.Adam([x], lr=0.05)
+    for _ in range(100):
+        optimizer.zero_grad()
+        _ = model(x * mask + (1 - mask) * x.detach())  # only optimize masked region
+        act = act_container['activation'][0, target_channel, target_h, target_w]
+        loss = -act + 1e-4 * (x ** 2).mean()
+        loss.backward()
+        optimizer.step()
+        with torch.no_grad():
+            x.data.clamp_(0, 1)
+
+    maxed_image = x.detach().squeeze(0).cpu().numpy()  # (4, 224, 224)
+
+    # === Visualization ===
+    for i in range(4):
+        saliency_f = saliency[i]
+        saliency_grayscale = (saliency_f * 255).astype(np.uint8)
+
+        img_gray = Image.fromarray(saliency_grayscale.T, mode='L')
+        img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
+        screen.blit_image(img_rgb_240, screen_index=8 + i)
+
+        screen.show()
+
+    for i in range(4):
+        maxed_image_f = maxed_image[i]
+        max_image_grayscale = (maxed_image_f * 255).astype(np.uint8)
+
+        img_gray = Image.fromarray(max_image_grayscale.T, mode='L')
+        img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
+        screen.blit_image(img_rgb_240, screen_index=12 + i)
+
+        screen.show()
+
+    hook.remove()
+
+    model.train()
+
+
+def visualize_full_saliency(screen, model, decoder, input_image, target_layer_name, target_channel, device='cpu'):
+    model.eval()
+    input_image = input_image.clone().detach().float().div(255).to(device).requires_grad_()  # (1, 4, 224, 224)
+
+    # Hook to extract activation
+    act_container = {}
+    def hook_fn(module, input, output):
+        act_container['activation'] = output
+
+    # Register hook
+    hook = None
+    for name, module in model.named_modules():
+        if name == target_layer_name:
+            hook = module.register_forward_hook(hook_fn)
+            break
+    if hook is None:
+        raise ValueError(f"Layer {target_layer_name} not found")
+
+    # Forward + backward
+    model.zero_grad()
+    encoded = model(input_image)
+    # decoded = decoder(encoded)
+    activation = act_container['activation']  # (1, C, H, W)
+
+    # Sum over all spatial locations for this channel
+    act_score = activation[0, target_channel].sum()
+    act_score.backward()
+
+    # Gradients w.r.t input
+    saliency = input_image.grad.abs().squeeze(0).cpu().numpy()  # shape (4, 224, 224)
+
+    print("input_image.grad.mean():", input_image.grad.abs().mean())
+    print("activation.mean():", activation[0, target_channel].mean().item())
+
+
+    for i in range(4):
+        saliency_f = saliency[i]
+        print("Saliency stats:", saliency_f.min(), saliency_f.max(), saliency_f.mean())
+
+        saliency_norm = (saliency_f - saliency_f.min()) / (saliency_f.max() - saliency_f.min() + 1e-8)
+
+        print(f"SALIENCY NORM RANGE: {saliency_norm.min()} {saliency_norm.max()}")
+
+        saliency_grayscale = (saliency_norm * 255).astype(np.uint8)
+
+        img_gray = Image.fromarray(saliency_grayscale.T, mode='L')
+        img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
+        screen.blit_image(img_rgb_240, screen_index=8 + i)
+
+        screen.show()
+
+    hook.remove()
+
+    model.train()
 
 def main():
     args = tyro.cli(Args)
@@ -722,12 +1223,15 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
-    if device == torch.device("cpu"):
-        # Try mps
-        if torch.backends.mps.is_available():
-            device = torch.device("mps")
-        else:
-            print("No GPU available, using CPU.")
+    if True:
+        if device == torch.device("cpu"):
+            # Try mps
+            if torch.backends.mps.is_available():
+                device = torch.device("mps")
+            else:
+                print("No GPU available, using CPU.")
+    else:
+        device = 'cpu'
 
     global USE_VAE
     if args.vision_model == VisionModel.VAE_GRAYSCALE_224:
@@ -824,6 +1328,71 @@ def main():
 
             # NOTE: Silent conversion to float32 for Tensor.
             next_obs = torch.Tensor(next_obs).to(device)
+
+            if pygame.K_v in nes.keys_pressed:
+                start_vis = time.time()
+                print("Generating activation maps...")
+                #activation_map_rgb = generate_activation_map(agent.trunk, device=device)
+
+                if True:
+                    print(f"MODEL ID OF agent.trunk: {id(agent.trunk)}")
+                    visualize_conv_filters(screen, agent.trunk)
+
+                if False:
+                    activation_map_results = maximize_each_layer(agent.trunk, next_obs, device=device, screen=screen)
+
+                if False:
+                    model = agent.trunk
+                    decoder = agent.decoder
+
+                    # Get your real frame stack: shape (1, 4, 224, 224)
+                    neuron = find_highest_activated_neuron(model, next_obs, device=device)
+                    print(f"Best neuron found: {neuron}")
+
+                    if False:
+                        visualize_receptive_field(
+                            screen,
+                            model,
+                            input_image=next_obs,
+                            target_layer_name=neuron['layer'],
+                            target_channel=neuron['channel'],
+                            target_h=neuron['h'],
+                            target_w=neuron['w'],
+                            device=device,
+                        )
+
+                    visualize_full_saliency(
+                        screen,
+                        model,
+                        decoder,
+                        input_image=next_obs,
+                        target_layer_name=neuron['layer'],
+                        target_channel=neuron['channel'],
+                        device=device,
+                    )
+
+                if False:
+                    for i, (name, result) in enumerate(activation_map_results.items()):
+                        activation_map_f = activation_map_results[name][-1].cpu().numpy()
+
+                        print(f"GRAYSCALE_F RANGE: {activation_map_f.min()}, {activation_map_f.max()}, dtype={activation_map_f.dtype}")
+
+                        activation_map_grayscale = (activation_map_f * 255).astype(np.uint8)
+
+                        print(f"GRAYSCALE RANGE: {activation_map_grayscale.min()}, {activation_map_grayscale.max()}, dtype={activation_map_grayscale.dtype}")
+
+                        img_gray = Image.fromarray(activation_map_grayscale.T, mode='L')
+                        img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST).convert('RGB')
+                        screen.blit_image(img_rgb_240, screen_index=4 + i)
+
+                        if font is None:
+                            font = pygame.font.SysFont("Arial", 14)
+                        antialias = True
+                        color = (255, 0, 0)
+                        layer_text = font.render(name, antialias, color)
+                        screen.surfs[4 + i].blit(layer_text, (0, 224 - 14))
+
+                print(f"Generated activation maps: {time.time()-start_vis:.4f}s")
 
             if nes.keys_pressed:
                 nes.keys_pressed = []
@@ -933,7 +1502,7 @@ def main():
                     optimizer.step()
 
                 if False:
-                    # TODO(millman): TSNE
+                    # TODO(millman): Activation maximization seems like the next thing to try
                     with torch.no_grad():
                         from sklearn.manifold import TSNE
 
