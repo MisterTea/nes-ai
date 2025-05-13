@@ -22,6 +22,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import tyro
 from PIL import Image
+from scipy.ndimage import zoom
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 from stable_baselines3.common.atari_wrappers import (  # isort:skip
@@ -52,6 +53,7 @@ NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 
 class VisionModel(Enum):
     CONV_GRAYSCALE_224 = 'conv_grayscale_224'
+    CONV_GRAYSCALE_224_big = 'conv_grayscale_224_big'
     CONV_GRAYSCALE_224_with_linear = 'conv_grayscale_224_with_linear'
 
 
@@ -114,7 +116,9 @@ class Args:
     reset_to_save_state: bool = False
 
     # Vision model
-    vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_with_linear
+    vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224
+    #vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_big
+    #vision_model: VisionModel = VisionModel.CONV_GRAYSCALE_224_with_linear
 
     # Algorithm specific arguments
     env_id: str = "SuperMarioBros-mame-v0"
@@ -127,17 +131,14 @@ class Args:
     """the learning rate of the decoder optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
-    num_steps: int = 3
+    num_steps: int = 2
     """the number of steps to run in each environment per policy rollout"""
 
-    num_minibatches: int = 3
+    num_minibatches: int = 1
     """the number of mini-batches"""
-    update_epochs: int = 3
-    # update_epochs: int = 20
+    update_epochs: int = -1
+    #update_epochs: int = 20
     """the K epochs to update the policy"""
-
-    max_grad_norm: float = 0.5
-    """the maximum norm for the gradient clipping"""
 
     # to be filled in runtime
     batch_size: int = 0
@@ -155,7 +156,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, vision_m
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
             raise RuntimeError("STOP")
         else:
-            env = gym.make(env_id, render_mode="human", reset_to_save_state=False, screen_rc=(4,4))
+            env = gym.make(env_id, render_mode="human", reset_to_save_state=False, screen_rc=(5,8))
 
         print(f"RENDER MODE: {env.render_mode}")
 
@@ -171,6 +172,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, vision_m
 
         if vision_model in (
             VisionModel.CONV_GRAYSCALE_224,
+            VisionModel.CONV_GRAYSCALE_224_big,
             VisionModel.CONV_GRAYSCALE_224_with_linear,
         ):
             env = gym.wrappers.GrayscaleObservation(env)
@@ -246,6 +248,46 @@ class ConvTrunkGrayscale224Decoder(nn.Module):
         return self.deconv(x)
 
 
+class ConvTrunkGrayscale224_big(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.trunk = nn.Sequential(
+            nn.Conv2d(4, 32, kernel_size=9, stride=4),         # 224 → 55
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=5, stride=2),        # 55 → 26
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=5, stride=2),       # 26 → 11
+            nn.ReLU(),
+            nn.Conv2d(128, 256, kernel_size=2, stride=1),      # 11 → 10
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return self.trunk(x)
+
+class ConvTrunkGrayscale224Decoder_big(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.deconv = nn.Sequential(
+            nn.ConvTranspose2d(256, 128, kernel_size=2, stride=1),         # 10 → 11
+            nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, kernel_size=5, stride=2),          # 11 → 25
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, kernel_size=5, stride=2),           # 25 → 53
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 4, kernel_size=9, stride=4),            # 53 → 224
+
+            nn.Upsample(size=(224, 224), mode='bilinear', align_corners=False),
+            nn.Sigmoid()
+        )
+
+
+    def forward(self, x):
+        return self.deconv(x)
+
+
 class ConvTrunkGrayscale224_with_linear(nn.Module):
     def __init__(self):
         super().__init__()
@@ -266,7 +308,6 @@ class ConvTrunkGrayscale224_with_linear(nn.Module):
 
             nn.Flatten(),
             #nn.LayerNorm(64 * 24 * 24),
-            #layer_init(nn.Linear(64 * 24 * 24, 512)),        # (B, 36864) → (B, 512)
             layer_init(nn.Linear(64 * 24 * 24, 512)),        # (B, 36864) → (B, 512)
             nn.ReLU(),
         )
@@ -362,6 +403,9 @@ class Agent(nn.Module):
         if vision_model == VisionModel.CONV_GRAYSCALE_224:
             self.trunk = ConvTrunkGrayscale224()
             self.decoder = ConvTrunkGrayscale224Decoder()
+        elif vision_model == VisionModel.CONV_GRAYSCALE_224_big:
+            self.trunk = ConvTrunkGrayscale224_big()
+            self.decoder = ConvTrunkGrayscale224Decoder_big()
         elif vision_model == VisionModel.CONV_GRAYSCALE_224_with_linear:
             self.trunk = ConvTrunkGrayscale224_with_linear()
             self.decoder = ConvTrunkGrayscale224Decoder_with_linear()
@@ -390,14 +434,17 @@ def _draw_obs(obs_np, screen: Any, screen_index: int):
 
 def visualize_conv_filters(screen, model):
     # Start on the second row.
-    screen_index = 4
+    screen_index = screen.cols
+
+    max_screen_index = len(screen.surfs)
+    print(f"MAX SCREEN INDEX: {max_screen_index}")
 
     for i, (name, module) in enumerate(model.named_modules()):
         if not isinstance(module, torch.nn.Conv2d):
             continue
 
         filters = module.weight
-        # print(f"LAYER NAME: {name}: weight id={id(module.weight)} weights_shape={filters.shape}")
+        # print(f"LAYER NAME: {name}: weight id={id(filters)} weights_shape={filters.shape} weights_mean={filters.mean()}")
 
 
         # expected_shape = (32, 4, 8, 8)
@@ -405,7 +452,10 @@ def visualize_conv_filters(screen, model):
 
         # print(f"FILTER MIN, MAX: {filters.min()} {filters.max()}")
 
-        fh, fw = filters.shape[2:]
+        scale = 3
+        raw_fh, raw_fw = filters.shape[2:]
+        fw, fh = int(raw_fw * scale), int(raw_fh * scale)
+
         row_spacing = 2
         col_spacing = 2
 
@@ -415,6 +465,7 @@ def visualize_conv_filters(screen, model):
 
         filters_np = filters.detach().cpu().numpy()
         filters_f = (filters_np - filters_np.min()) / (filters_np.max() - filters_np.min())
+        #filters_f = filters_np
 
         # -> (C, B, H, W)
         #filters_cbhw = filters_f.transpose(1, 0, 2, 3)
@@ -431,11 +482,15 @@ def visualize_conv_filters(screen, model):
 
             for f, filter in enumerate(filters_bhw):
                 # (4, H, W)
+                scaled_filter = zoom(filter, zoom=scale, order=0)  # order=0 => nearest neighbor
+
                 y = row * (fh + row_spacing)
                 x = col * (fw + col_spacing)
 
+                #normed_filter = (scaled_filter - scaled_filter.min()) / (scaled_filter.max() - scaled_filter.min())
+
                 #print(f"FILTER SIZE: {filter.shape} f={f} row={row} col={col} x={x} y={y}")
-                img_f[y:y+fh, x:x+fw] = filter
+                img_f[y:y+fh, x:x+fw] = scaled_filter
 
                 # print(f"layer={name} channel={channel} f={f} y={y} x={x} screen_index={screen_index} row={row} col={col}")
 
@@ -449,6 +504,8 @@ def visualize_conv_filters(screen, model):
                     # print(f"BLITTING SCREEN: {screen_index}")
                     # Blit current image into screen.
                     img_gray = Image.fromarray((img_f * 255).astype(np.uint8), mode='L')
+                    #img_gray = Image.fromarray(np.random.randint(low=0, high=255, size=(224, 240), dtype=np.uint8), mode='L')
+
                     img_rgb_240 = img_gray.convert('RGB')
                     screen.blit_image(img_rgb_240, screen_index=screen_index)
 
@@ -460,8 +517,11 @@ def visualize_conv_filters(screen, model):
                     row = 0
                     screen_index += 1
 
-                if screen_index >= 16:
+                if screen_index >= max_screen_index:
                     break
+
+        if screen_index >= max_screen_index:
+            break
 
         # Blit current image into screen.
         img_gray = Image.fromarray((img_f * 255).astype(np.uint8), mode='L')
@@ -476,7 +536,7 @@ def visualize_conv_filters(screen, model):
         # Always advance to the next screen for a different layer.
         screen_index += 1
 
-        if screen_index >= 16:
+        if screen_index >= max_screen_index:
             break
 
 
@@ -591,7 +651,7 @@ def main():
             next_obs_np = next_obs.cpu().numpy()
 
             # Check that the encoding matches the trunk, like we think.
-            if True:
+            if False:
                 encoded_output2 = agent.trunk(next_obs / 255)
 
                 #print(f"SHAPE OF ENCODED2: {len(encoded_output2)} NEXT={len(next_encoded_obs)}")
@@ -623,7 +683,7 @@ def main():
             # NOTE: Silent conversion to float32 for Tensor.
             next_obs = torch.Tensor(next_obs).to(device)
 
-            if pygame.K_v in nes.keys_pressed or (args.continuous_vis and iteration > 1):
+            if False: #pygame.K_v in nes.keys_pressed or (args.continuous_vis and iteration > 1):
                 start_vis = time.time()
                 print("Visualizing filters...")
 
@@ -650,15 +710,16 @@ def main():
             epochs_start = time.time()
 
             # Select 80% as training set, remainder as test set.
-            train_end_index = int(args.batch_size * 0.8)
+            train_end_index = max(1, int(args.batch_size * 0.8))
             b_inds = np.arange(train_end_index)
             b_val_inds = train_end_index + np.arange(args.batch_size - train_end_index)
 
             b_val_obs = b_obs_tensor[b_val_inds]
 
             # Display 4 random observations
-            print(f"INIT BATCH INDICES: {b_inds}")
-            print(f"INIT VAL INDICES: {b_val_inds}")
+            if False:
+                print(f"INIT BATCH INDICES: {b_inds}")
+                print(f"INIT VAL INDICES: {b_val_inds}")
 
             # Validation
             best_val_loss = float('inf')
@@ -675,7 +736,6 @@ def main():
                 # OK: These look random
                 # print(f"RANDOM BATCH INDICES: {b_inds}")
 
-                print(f"RANGE: 0,{args.batch_size},{args.minibatch_size}")
                 for start in range(0, args.batch_size, args.minibatch_size):
                     end = start + args.minibatch_size
                     mb_inds = b_inds[start:end]
@@ -687,6 +747,7 @@ def main():
 
                     # print(f"OBS TENSOR: {obs_tensor.shape} mb_inds={mb_inds} start={start} end={end}")
 
+                    # NOTE: grad is required for contractive_loss()
                     obs_tensor.requires_grad = True
 
                     encoded_tensor = agent.trunk(obs_tensor)
@@ -699,8 +760,10 @@ def main():
 
                     # print(f"DECODED SHAPE: {decoded_tensor.shape} obs={obs_tensor.shape}")
 
+                    loss = F.mse_loss(decoded_tensor, obs_tensor)
+
                     # TODO(millman): try a different loss function?  This seems to be blurry.  Or, use another conv layer?
-                    loss = F.smooth_l1_loss(decoded_tensor, obs_tensor)
+                    # loss = F.smooth_l1_loss(decoded_tensor, obs_tensor)
 
                     # x = obs_tensor
                     # z = encoded_tensor
@@ -712,13 +775,36 @@ def main():
                     loss.backward()
                     optimizer.step()
 
+                # ---- Visualization ----
+                if args.continuous_vis:
+                    if True:
+                        start_vis = time.time()
+                        # print("Visualizing filters...")
+
+                        with torch.no_grad():
+                            visualize_conv_filters(screen, agent.trunk)
+
+                        # print(f"Visualizing filters: {time.time()-start_vis:.4f}s")
+
+                    with torch.no_grad():
+                        # (1, 4, 224, 224)
+                        encoded_tensor = agent.trunk(b_obs_tensor[-1:])
+                        decoded_obs_np = decoder(encoded_tensor).cpu().numpy()
+                        decoded_grayscale_f = decoded_obs_np[0, -1]
+                        _draw_obs(decoded_grayscale_f, screen, 2)
+
+                    screen.show()
+
                 # ----- Validation -----
-                with torch.no_grad():
-                    val_encoded = agent.trunk(b_val_obs)
+                if len(b_val_obs) > 0:
+                    with torch.no_grad():
+                        val_encoded = agent.trunk(b_val_obs)
 
-                    val_recon = decoder(val_encoded)
+                        val_recon = decoder(val_encoded)
 
-                    val_loss = F.mse_loss(val_recon, b_val_obs)
+                        val_loss = F.mse_loss(val_recon, b_val_obs)
+                else:
+                    val_loss = float('nan')
 
                 print(f"Epoch {epoch+1}: train_loss={loss:.4f} val_loss={val_loss:.4f}")
 
@@ -743,8 +829,10 @@ def main():
             steps_dt = steps_end - steps_start
             optimize_networks_dt = optimize_networks_end - optimize_networks_start
 
-            print(f"Time steps: (num_steps={args.num_steps}): {steps_dt:.4f}")
-            print(f"Time optimize: (epochs={args.update_epochs} batch_size={args.batch_size} minibatch_size={args.minibatch_size}) per-sample: {per_sample_dt:.4f} optimize_networks: {optimize_networks_dt:.4f}")
+            # TODO(millman): turn this into "time since last print", and aggregate stats across seconds
+            if False: #
+                print(f"Time steps: (num_steps={args.num_steps}): {steps_dt:.4f}")
+                print(f"Time optimize: (epochs={args.update_epochs} batch_size={args.batch_size} minibatch_size={args.minibatch_size}) per-sample: {per_sample_dt:.4f} optimize_networks: {optimize_networks_dt:.4f}")
 
     envs.close()
     writer.close()

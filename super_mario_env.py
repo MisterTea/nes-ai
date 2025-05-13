@@ -240,8 +240,8 @@ class SimpleAiHandler:
 class SimpleScreenRxC:
     def __init__(self, screen_size: tuple[int, int], scale: int, rows: int, cols: int):
         r, c = rows, cols
-        self.r = rows
-        self.c = cols
+        self.rows = rows
+        self.cols = cols
         self.scale = scale
 
         w, h = screen_size
