@@ -869,11 +869,11 @@ def maximize_each_layer(
 
                 # Optimize specific neuron.  This looks like something, but is it just averaging noise?
                 #act_score = activation[0, -1, -1, -1]
-                act_score = activation[0, 16, 12, 12]
-                print(f"act_score: {act_score=}")
+                #act_score = activation[0, 16, 12, 12]
+                #print(f"act_score: {act_score=}")
 
                 # Optimize whole sequence of frames.
-                #act_score = activation[0].mean()
+                act_score = activation[0].mean()
                 #act_score = activation[0, 16].mean()
 
 
@@ -883,6 +883,9 @@ def maximize_each_layer(
             if True:
                 tv = total_variation_loss(x)
                 l2 = l2_loss(x)
+
+                tv_weight = 0
+                l2_weight = 0
             else:
                 tv = torch.tensor([0], device=x.device)
                 l2 = torch.tensor([0], device=x.device)
@@ -1342,7 +1345,7 @@ def main():
                     print(f"MODEL ID OF agent.trunk: {id(agent.trunk)}")
                     visualize_conv_filters(screen, agent.trunk)
 
-                if False:
+                if True:
                     activation_map_results = maximize_each_layer(agent.trunk, next_obs, device=device, screen=screen)
 
                 if False:
@@ -1493,12 +1496,15 @@ def main():
 
                         # print(f"DECODED SHAPE: {decoded_tensor.shape} obs={obs_tensor.shape}")
 
-                        # loss = F.mse_loss(decoded_tensor, obs_tensor)
+                        loss = F.mse_loss(decoded_tensor, obs_tensor)
+
                         # loss = contrastive_loss(decoded_tensor, obs_tensor)
-                        x = obs_tensor
-                        z = encoded_tensor
-                        x_hat = decoded_tensor
-                        loss = contractive_loss(x, x_hat, z)
+
+                        # Contractive loss.
+                        # x = obs_tensor
+                        # z = encoded_tensor
+                        # x_hat = decoded_tensor
+                        # loss = contractive_loss(x, x_hat, z)
 
                     # Total loss
                     optimizer.zero_grad()
