@@ -433,66 +433,47 @@ def _draw_obs(obs_np, screen: Any, screen_index: int):
 
 
 def visualize_conv_filters(screen, model):
+    scale = 3
+    row_spacing = 2
+    col_spacing = 2
+
+    max_screen_index = len(screen.surfs)
+
     # Start on the second row.
     screen_index = screen.cols
 
-    max_screen_index = len(screen.surfs)
-    print(f"MAX SCREEN INDEX: {max_screen_index}")
+    def blit_current_image(img_f):
+        img_gray = Image.fromarray((img_f * 255).astype(np.uint8), mode='L')
+        img_rgb_240 = img_gray.convert('RGB')
+        screen.blit_image(img_rgb_240, screen_index=screen_index)
 
     for i, (name, module) in enumerate(model.named_modules()):
         if not isinstance(module, torch.nn.Conv2d):
             continue
 
-        filters = module.weight
-        # print(f"LAYER NAME: {name}: weight id={id(filters)} weights_shape={filters.shape} weights_mean={filters.mean()}")
+        # Normalize filters weights across layer.
+        filters = module.weight.detach().cpu().numpy()
+        filters_f = (filters - filters.min()) / (filters.max() - filters.min())
 
-
-        # expected_shape = (32, 4, 8, 8)
-        # assert filters.shape == expected_shape, f"Unexpected shape: {filters.shape} != {expected_shape}"
-
-        # print(f"FILTER MIN, MAX: {filters.min()} {filters.max()}")
-
-        scale = 3
         raw_fh, raw_fw = filters.shape[2:]
-        fw, fh = int(raw_fw * scale), int(raw_fh * scale)
+        fh, fw = int(raw_fh * scale), int(raw_fw * scale)
 
-        row_spacing = 2
-        col_spacing = 2
-
-        # 32 filters of size 8x8
         filters_per_row = 240 // (fw + col_spacing)
         filters_per_col = 224 // (fh + row_spacing)
-
-        filters_np = filters.detach().cpu().numpy()
-        filters_f = (filters_np - filters_np.min()) / (filters_np.max() - filters_np.min())
-        #filters_f = filters_np
-
-        # -> (C, B, H, W)
-        #filters_cbhw = filters_f.transpose(1, 0, 2, 3)
-        filters_cbhw = filters_f
-
-        # print(f"VISUALIZING FILTERS cbhw: {filters_cbhw.shape}")
 
         img_f = np.zeros((224, 240), dtype=np.float32)
         row = 0
         col = 0
 
-        for channel, filters_bhw in enumerate(filters_cbhw):
-            # Each channel goes in a different screen.
-
+        for channel, filters_bhw in enumerate(filters_f):
             for f, filter in enumerate(filters_bhw):
-                # (4, H, W)
-                scaled_filter = zoom(filter, zoom=scale, order=0)  # order=0 => nearest neighbor
+                if screen_index >= max_screen_index:
+                    break
 
+                scaled_filter = zoom(filter, zoom=scale, order=0)
                 y = row * (fh + row_spacing)
                 x = col * (fw + col_spacing)
-
-                #normed_filter = (scaled_filter - scaled_filter.min()) / (scaled_filter.max() - scaled_filter.min())
-
-                #print(f"FILTER SIZE: {filter.shape} f={f} row={row} col={col} x={x} y={y}")
                 img_f[y:y+fh, x:x+fw] = scaled_filter
-
-                # print(f"layer={name} channel={channel} f={f} y={y} x={x} screen_index={screen_index} row={row} col={col}")
 
                 col += 1
 
@@ -500,44 +481,19 @@ def visualize_conv_filters(screen, model):
                     col = 0
                     row += 1
 
-                if row >= filters_per_col:
-                    # print(f"BLITTING SCREEN: {screen_index}")
-                    # Blit current image into screen.
-                    img_gray = Image.fromarray((img_f * 255).astype(np.uint8), mode='L')
-                    #img_gray = Image.fromarray(np.random.randint(low=0, high=255, size=(224, 240), dtype=np.uint8), mode='L')
-
-                    img_rgb_240 = img_gray.convert('RGB')
-                    screen.blit_image(img_rgb_240, screen_index=screen_index)
-
-                    # Reset image.
-                    img_f = np.zeros((224, 240), dtype=np.float32)
-
-                    # Advance to next screen.
-                    col = 0
-                    row = 0
-                    screen_index += 1
-
-                if screen_index >= max_screen_index:
-                    break
+                    if row >= filters_per_col:
+                        blit_current_image(img_f)
+                        screen_index += 1
+                        img_f[:] = 0
+                        row = 0
+                        col = 0
 
         if screen_index >= max_screen_index:
             break
 
-        # Blit current image into screen.
-        img_gray = Image.fromarray((img_f * 255).astype(np.uint8), mode='L')
-        img_rgb_240 = img_gray.convert('RGB')
-
-        # Reset image.
-        img_f = np.zeros((224, 240), dtype=np.float32)
-
-        # print(f"BLITTING SCREEN END: {screen_index}")
-        screen.blit_image(img_rgb_240, screen_index=screen_index)
-
-        # Always advance to the next screen for a different layer.
+        # Blit any remaining filters on this layer's image
+        blit_current_image(img_f)
         screen_index += 1
-
-        if screen_index >= max_screen_index:
-            break
 
 
 def contractive_loss(x, x_hat, z, lam=1e-4):
