@@ -179,7 +179,7 @@ class Config:
     # defaults: List[dict] = field(default_factory=lambda: [{"override hydra/launcher": "submitit_local"}])
 
     # Environment
-    task: str = "dog-run"
+    task: str = "smb"
     obs: str = "rgb"
     episodic: bool = False
 
@@ -266,6 +266,7 @@ class Config:
     episode_lengths: Optional[Any] = None
     seed_steps: Optional[Any] = None
     bin_size: Optional[Any] = None
+    num_discrete_actions: Optional[Any] = None
 
 
 from gymnasium.wrappers import TransformObservation
@@ -540,7 +541,7 @@ def to_td(env, obs, action=None, reward=None, terminated=None):
     if isinstance(obs, dict):
         obs = TensorDict(obs, batch_size=(), device='cpu')
     else:
-        print(f"OBSERVATION SIZE: {obs.shape}")
+        # print(f"OBSERVATION SIZE: {obs.shape}")
         obs = obs.unsqueeze(0).cpu()
     if action is None:
         rand_act = env.rand_act()
@@ -551,7 +552,7 @@ def to_td(env, obs, action=None, reward=None, terminated=None):
         terminated = torch.tensor(float('nan'))
 
 
-    print(f"to_td: obs={obs.shape} action={action.shape} reward={reward.shape} terminated={terminated.shape}")
+    # print(f"to_td: obs={obs.shape} action={action.shape} reward={reward.shape} terminated={terminated.shape}")
 
     td = TensorDict(
         obs=obs,
@@ -561,7 +562,7 @@ def to_td(env, obs, action=None, reward=None, terminated=None):
         batch_size=(1,),
     )
 
-    print(f"to_td, shape: {td.shape}")
+    # print(f"to_td, shape: {td.shape}")
 
     return td
 
@@ -636,7 +637,7 @@ def main():
     screen = first_env.screen
     nes = first_env.unwrapped.nes
 
-    action_dim = envs.single_action_space.n
+    action_dim = 1 # envs.single_action_space.n
     env = envs.envs[0]
 
     print(f"ACTION DIM: {action_dim}")
@@ -659,7 +660,9 @@ def main():
 
     # NOTE: We're saying the action dimension for the agent is 7, even though it's really 1 dimensional with 7 values.
     #   TD-MPC2 was designed for continuous action spaces, so we'll use a 1-hot-encoded version to mimic continuous space.
-    cfg.action_dim = action_dim
+    cfg.action_dim = 1
+
+    cfg.num_discrete_actions = env.action_space.n
 
 
     cfg.episode_length = 60 * 60 * 5 # env.max_episode_steps
@@ -713,7 +716,7 @@ def main():
     _tds = []
     train_metrics, done, eval_next = {}, True, False
 
-    for step in range(0, args.num_steps):
+    for step in range(0, args.total_timesteps):
         iteration = step
 
         print(f"Iteration: {iteration}")
@@ -724,7 +727,7 @@ def main():
             eval_next = True
 
         # Reset environment
-        if done or step > 3:
+        if done:
             if False: # eval_next:
                 eval_metrics = eval()
                 eval_metrics.update(common_metrics())
@@ -745,10 +748,11 @@ def main():
                     train_metrics.update(common_metrics())
                     logger.log(train_metrics, 'train')
 
-                print(f"torch.cat on len: {len(_tds)}")
-                for i, td in enumerate(_tds):
-                    for k, v in td.items():
-                        print(f"GOT TENSOR[{i}]: {k}: {v.shape}")
+                if False:
+                    print(f"torch.cat on len: {len(_tds)}")
+                    for i, td in enumerate(_tds):
+                        for k, v in td.items():
+                            print(f"GOT TENSOR[{i}]: {k}: {v.shape}")
 
                 _ep_idx = buffer.add(torch.cat(_tds))
 
@@ -759,20 +763,19 @@ def main():
 
         # Collect experience
         if True: # step > cfg.seed_steps:
-            action_onehot = agent.act(obs, t0=len(_tds)==1)
+            action_index = agent.act(obs, t0=len(_tds)==1)
         else:
-            action_onehot = env.rand_act()
+            action_index = env.rand_act()
 
-        print(f"ACTION TO env.step(): {action_onehot=}")
+        # print(f"ACTION INDEX: {action_index}")
 
-        action = action_onehot.argmax(dim=0)
-        obs, reward, done, truncated, info = env.step(action)
+        obs, reward, done, truncated, info = env.step(action_index)
         obs = torch.Tensor(obs).to(device)
 
 
         # print(f"OBS SIZE: {obs.shape}")
 
-        _tds.append(to_td(env, obs, action_onehot, reward, info['terminated']))
+        _tds.append(to_td(env, obs, action_index, reward, info['terminated']))
 
         # Update agent
         if step >= cfg.seed_steps:

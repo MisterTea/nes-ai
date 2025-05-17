@@ -16,7 +16,7 @@ class TensorWrapper(gym.Wrapper):
 		super().__init__(env)
 
 	def rand_act(self):
-		print(f"RAND ACT, ACTION SPACE: {self.action_space=} sample={self.action_space.sample()}")
+		# print(f"RAND ACT, ACTION SPACE: {self.action_space=} sample={self.action_space.sample()}")
 		action_index = self.action_space.sample()
 		action_onehot = F.one_hot(torch.tensor(action_index), num_classes=self.action_space.n).float()
 		return action_onehot

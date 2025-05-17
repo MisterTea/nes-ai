@@ -155,61 +155,141 @@ class TDMPC2(torch.nn.Module):
 		# Sample policy trajectories
 		z = self.model.encode(obs, task)
 		if self.cfg.num_pi_trajs > 0:
-			pi_actions = torch.empty(self.cfg.horizon, self.cfg.num_pi_trajs, self.cfg.action_dim, device=self.device)
-
-			# print(f"TENSOR SIZE in _plan: {z.shape}, num_pi_tras={self.cfg.num_pi_trajs}")
-
+			# Sample policy-guided actions (index-based)
+			pi_actions = torch.empty(self.cfg.horizon, self.cfg.num_pi_trajs, dtype=torch.long, device=self.device)
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
-			for t in range(self.cfg.horizon-1):
-				pi_actions[t], _ = self.model.pi(_z, task)
+			for t in range(self.cfg.horizon - 1):
+				logits, _ = self.model.pi(_z, task)
+				pi_actions[t] = logits.argmax(dim=-1)
 				_z = self.model.next(_z, pi_actions[t], task)
-			pi_actions[-1], _ = self.model.pi(_z, task)
+			logits, _ = self.model.pi(_z, task)
+			pi_actions[-1] = logits.argmax(dim=-1)
 
 		# Initialize state and parameters
 		z = z.repeat(self.cfg.num_samples, 1)
-		mean = torch.zeros(self.cfg.horizon, self.cfg.action_dim, device=self.device)
-		std = torch.full((self.cfg.horizon, self.cfg.action_dim), self.cfg.max_std, dtype=torch.float, device=self.device)
-		if not t0:
-			mean[:-1] = self._prev_mean[1:]
-		actions = torch.empty(self.cfg.horizon, self.cfg.num_samples, self.cfg.action_dim, device=self.device)
+
+		# actions = torch.empty(self.cfg.horizon, self.cfg.num_samples, self.cfg.action_dim, device=self.device)
+		actions = torch.empty(self.cfg.horizon, self.cfg.num_samples, dtype=torch.long, device=self.device)
+
 		if self.cfg.num_pi_trajs > 0:
 			actions[:, :self.cfg.num_pi_trajs] = pi_actions
 
-		# Iterate MPPI
-		for _ in range(self.cfg.iterations):
+		if _USE_CONTINUOUS_ACTIONS := False:
+			mean = torch.zeros(self.cfg.horizon, self.cfg.action_dim, device=self.device)
+			std = torch.full((self.cfg.horizon, self.cfg.action_dim), self.cfg.max_std, dtype=torch.float, device=self.device)
+			if not t0:
+				mean[:-1] = self._prev_mean[1:]
 
-			# Sample actions
-			r = torch.randn(self.cfg.horizon, self.cfg.num_samples-self.cfg.num_pi_trajs, self.cfg.action_dim, device=std.device)
-			actions_sample = mean.unsqueeze(1) + std.unsqueeze(1) * r
-			actions_sample = actions_sample.clamp(-1, 1)
-			actions[:, self.cfg.num_pi_trajs:] = actions_sample
-			if self.cfg.multitask:
-				actions = actions * self.model._action_masks[task]
+			# Iterate MPPI
+			for _ in range(self.cfg.iterations):
+				# Sample actions
+				r = torch.randn(self.cfg.horizon, self.cfg.num_samples-self.cfg.num_pi_trajs, self.cfg.action_dim, device=std.device)
+				actions_sample = mean.unsqueeze(1) + std.unsqueeze(1) * r
+				actions_sample = actions_sample.clamp(-1, 1)
+				actions[:, self.cfg.num_pi_trajs:] = actions_sample
+				if self.cfg.multitask:
+					actions = actions * self.model._action_masks[task]
 
-			# Compute elite actions
-			value = self._estimate_value(z, actions, task).nan_to_num(0)
-			elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
-			elite_value, elite_actions = value[elite_idxs], actions[:, elite_idxs]
+				# Compute elite actions
+				value = self._estimate_value(z, actions, task).nan_to_num(0)
+				elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
+				elite_value, elite_actions = value[elite_idxs], actions[:, elite_idxs]
 
-			# Update parameters
-			max_value = elite_value.max(0).values
-			score = torch.exp(self.cfg.temperature*(elite_value - max_value))
-			score = score / score.sum(0)
-			mean = (score.unsqueeze(0) * elite_actions).sum(dim=1) / (score.sum(0) + 1e-9)
-			std = ((score.unsqueeze(0) * (elite_actions - mean.unsqueeze(1)) ** 2).sum(dim=1) / (score.sum(0) + 1e-9)).sqrt()
-			std = std.clamp(self.cfg.min_std, self.cfg.max_std)
-			if self.cfg.multitask:
-				mean = mean * self.model._action_masks[task]
-				std = std * self.model._action_masks[task]
+				# Update parameters
+				max_value = elite_value.max(0).values
+				score = torch.exp(self.cfg.temperature*(elite_value - max_value))
+				score = score / score.sum(0)
+				mean = (score.unsqueeze(0) * elite_actions).sum(dim=1) / (score.sum(0) + 1e-9)
+				std = ((score.unsqueeze(0) * (elite_actions - mean.unsqueeze(1)) ** 2).sum(dim=1) / (score.sum(0) + 1e-9)).sqrt()
+				std = std.clamp(self.cfg.min_std, self.cfg.max_std)
+				if self.cfg.multitask:
+					mean = mean * self.model._action_masks[task]
+					std = std * self.model._action_masks[task]
 
-		# Select action
-		rand_idx = math.gumbel_softmax_sample(score.squeeze(1))
-		actions = torch.index_select(elite_actions, 1, rand_idx).squeeze(1)
-		a, std = actions[0], std[0]
-		if not eval_mode:
-			a = a + std * torch.randn(self.cfg.action_dim, device=std.device)
-		self._prev_mean.copy_(mean)
-		return a.clamp(-1, 1)
+			# Select action
+			rand_idx = math.gumbel_softmax_sample(score.squeeze(1))
+			actions = torch.index_select(elite_actions, 1, rand_idx).squeeze(1)
+			a, std = actions[0], std[0]
+			if not eval_mode:
+				a = a + std * torch.randn(self.cfg.action_dim, device=std.device)
+			self._prev_mean.copy_(mean)
+			return a.clamp(-1, 1)
+
+		elif _USE_ONEHOT := False:
+			# MPPI Loop
+			for _ in range(self.cfg.iterations):
+				# Sample discrete actions
+				actions_sample = torch.randint(0, self.cfg.action_dim, (self.cfg.horizon, self.cfg.num_samples - self.cfg.num_pi_trajs), device=self.device)
+				actions_onehot = F.one_hot(actions_sample, num_classes=self.cfg.action_dim).float()
+				actions[:, self.cfg.num_pi_trajs:] = actions_onehot
+
+				# Evaluate and select elites
+				value = self._estimate_value(z, actions, task).nan_to_num(0)
+				elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
+				elite_value, elite_actions = value[elite_idxs], actions[:, elite_idxs]
+
+				# Majority vote for each timestep
+				elite_indices = elite_actions.argmax(dim=-1)  # (horizon, num_elites)
+				mode_actions = torch.mode(elite_indices, dim=1).values  # (horizon,)
+				actions = F.one_hot(mode_actions, num_classes=self.cfg.action_dim).float().unsqueeze(1).repeat(1, self.cfg.num_samples, 1)
+
+			# Select action
+			if False:
+				first_action = mode_actions[0]
+				return F.one_hot(first_action, num_classes=self.cfg.action_dim).float()
+			else:
+				sample_probs = elite_value.softmax(0)  # or use score
+				idx = torch.multinomial(sample_probs, 1)
+				return elite_actions[0, idx].squeeze(0)
+
+		else:
+			# MPPI Loop
+			# Assume:
+			#   self.cfg.horizon = H
+			#   self.cfg.num_samples = N
+			#   self.cfg.num_pi_trajs = P
+			#   self.cfg.num_elites = E
+			#   self.cfg.action_dim = A
+			#   z.shape = (N, latent_dim)
+			#   actions: preallocated as shape (H, N), dtype=torch.long
+
+			for _ in range(self.cfg.iterations):
+				# Sample discrete actions for remaining trajectories
+				actions_sample = torch.randint(
+					0, self.cfg.num_discrete_actions,
+					(self.cfg.horizon, self.cfg.num_samples - self.cfg.num_pi_trajs),  # shape: (H, N - P)
+					device=self.device
+				)
+				# DEBUG PRINT: (H, N - P)
+				# print(f"ACTIONS SAMPLE, high={self.cfg.num_discrete_actions} shape: {actions_sample.shape} actions shape: {actions.shape} {actions_sample=}")
+
+				# Fill sampled actions into the remaining slots
+				actions[:, self.cfg.num_pi_trajs:] = actions_sample  # actions shape: (H, N)
+
+				# Compute estimated value for each action sequence
+				value = self._estimate_value(z, actions, task).nan_to_num(0)  # shape: (N, 1)
+
+				# Select top-k elite action sequences by value
+				elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices  # shape: (E,)
+				elite_value = value[elite_idxs]                    # shape: (E, 1)
+				elite_actions = actions[:, elite_idxs]             # shape: (H, E)
+
+				# Majority vote across elites per timestep
+				mode_actions = torch.mode(elite_actions, dim=1).values  # shape: (H,)
+
+				# Repeat mode_actions across all samples, in-place
+				# mode_actions[:, None] shape: (H, 1) → broadcast to (H, N) in assignment
+				actions[:] = mode_actions[:, None]  # actions shape: (H, N) after write
+
+			# Return first action (discrete index)
+			if eval_mode:
+				return mode_actions[0]  # (int tensor)
+			else:
+				probs = elite_value.softmax(0)  # (num_elites,)
+				# print(f"PROBS shape: {probs.shape}")
+				idx = torch.multinomial(probs.squeeze(1), 1).item()
+				return elite_actions[0, idx]    # (int tensor)
+
 
 	def update_pi(self, zs, task):
 		"""
