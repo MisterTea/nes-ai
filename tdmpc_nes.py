@@ -545,14 +545,22 @@ def to_td(env, obs, action=None, reward=None, terminated=None):
         obs = obs.unsqueeze(0).cpu()
     if action is None:
         rand_act = env.rand_act()
-        action = torch.full_like(rand_act, float('nan'))
+
+        # print(f"SIZE OF RAND_ACT: {rand_act}")
+        # raise AssertionError("STOP")
+
+        # action = torch.full_like(rand_act, float('nan'))
+        action = torch.tensor(-1)
+
     if reward is None:
         reward = torch.tensor(float('nan'))
     if terminated is None:
         terminated = torch.tensor(float('nan'))
 
-
     # print(f"to_td: obs={obs.shape} action={action.shape} reward={reward.shape} terminated={terminated.shape}")
+
+    assert action.dim() == 0, f"Unexpected action shape: {action.shape}, action={action}"
+    #assert action.shape == (1,), f"Unexpected action shape: {action.shape}, action={action}"
 
     td = TensorDict(
         obs=obs,
@@ -620,7 +628,7 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
-    if False: # device == torch.device("cpu"):
+    if device == torch.device("cpu"):
         # Try mps
         if torch.backends.mps.is_available():
             device = torch.device("mps")
@@ -666,7 +674,7 @@ def main():
 
 
     cfg.episode_length = 60 * 60 * 5 # env.max_episode_steps
-    cfg.seed_steps = max(1000, 5*cfg.episode_length)
+    cfg.seed_steps = 3 # max(1000, 5*cfg.episode_length)
 
     assert cfg.steps > 0, 'Must train for at least 1 step.'
     cfg = parse_cfg(cfg)
@@ -754,6 +762,7 @@ def main():
                         for k, v in td.items():
                             print(f"GOT TENSOR[{i}]: {k}: {v.shape}")
 
+                print("ADDED TO BUFFER")
                 _ep_idx = buffer.add(torch.cat(_tds))
 
             obs, _info = env.reset()
@@ -778,7 +787,7 @@ def main():
         _tds.append(to_td(env, obs, action_index, reward, info['terminated']))
 
         # Update agent
-        if step >= cfg.seed_steps:
+        if step > cfg.seed_steps and buffer.num_eps > 0:
             if step == cfg.seed_steps:
                 num_updates = cfg.seed_steps
                 print('Pretraining agent on seed data...')
@@ -787,6 +796,9 @@ def main():
 
             for _ in range(num_updates):
                 _train_metrics = agent.update(buffer)
+
+                for key, value in _train_metrics.items():
+                    print(f"_train_metrics[{key}]: {value}")
 
             if False:
                 train_metrics.update(_train_metrics)

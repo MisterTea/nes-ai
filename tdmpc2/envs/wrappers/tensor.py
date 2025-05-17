@@ -18,8 +18,10 @@ class TensorWrapper(gym.Wrapper):
 	def rand_act(self):
 		# print(f"RAND ACT, ACTION SPACE: {self.action_space=} sample={self.action_space.sample()}")
 		action_index = self.action_space.sample()
-		action_onehot = F.one_hot(torch.tensor(action_index), num_classes=self.action_space.n).float()
-		return action_onehot
+		return action_index
+
+		#action_onehot = F.one_hot(torch.tensor(action_index), num_classes=self.action_space.n).float()
+		#return action_onehot
 
 		# return torch.from_numpy(self.action_space.sample().astype(np.float32))
 

@@ -17,6 +17,9 @@ class TDMPC2(torch.nn.Module):
 
 	def __init__(self, cfg, device: str = 'cuda:0'):
 		super().__init__()
+
+		capturable = torch.cuda.is_available()
+
 		self.cfg = cfg
 		self.device = torch.device(device)
 		self.model = WorldModel(cfg).to(self.device)
@@ -28,8 +31,8 @@ class TDMPC2(torch.nn.Module):
 			{'params': self.model._Qs.parameters()},
 			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []
 			 }
-		], lr=self.cfg.lr, capturable=True)
-		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
+		], lr=self.cfg.lr, capturable=capturable)
+		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=capturable)
 		self.model.eval()
 		self.scale = RunningScale(cfg, device=device)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
@@ -120,7 +123,11 @@ class TDMPC2(torch.nn.Module):
 		if eval_mode:
 			action = info["mean"]
 
-		return action[0].cpu()
+		action_index = action[0].cpu()
+
+		assert action_index.shape == (1,), f"Unexpected action_index shape: {action_index.shape}"
+
+		return action_index
 
 	@torch.no_grad()
 	def _estimate_value(self, z, actions, task):
@@ -129,6 +136,7 @@ class TDMPC2(torch.nn.Module):
 		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
 		for t in range(self.cfg.horizon):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
+			# print(f"_plan actions[t]: {actions[t].shape}")
 			z = self.model.next(z, actions[t], task)
 			G = G + discount * (1-termination) * reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
@@ -161,6 +169,8 @@ class TDMPC2(torch.nn.Module):
 			for t in range(self.cfg.horizon - 1):
 				logits, _ = self.model.pi(_z, task)
 				pi_actions[t] = logits.argmax(dim=-1)
+
+				# print(f"_plan pi_actions[t]: {pi_actions[t].shape}")
 				_z = self.model.next(_z, pi_actions[t], task)
 			logits, _ = self.model.pi(_z, task)
 			pi_actions[-1] = logits.argmax(dim=-1)
@@ -275,7 +285,9 @@ class TDMPC2(torch.nn.Module):
 				elite_actions = actions[:, elite_idxs]             # shape: (H, E)
 
 				# Majority vote across elites per timestep
-				mode_actions = torch.mode(elite_actions, dim=1).values  # shape: (H,)
+				#
+				# NOTE: elite_actions moved to cpu() because torch.mode() isn't available on device 'mps'.
+				mode_actions = torch.mode(elite_actions.cpu(), dim=1).values  # shape: (H,)
 
 				# Repeat mode_actions across all samples, in-place
 				# mode_actions[:, None] shape: (H, 1) → broadcast to (H, N) in assignment
@@ -357,13 +369,17 @@ class TDMPC2(torch.nn.Module):
 		zs[0] = z
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
+			# print(f"_plan _update[t]: {_action.shape}")
 			z = self.model.next(z, _action, task)
 			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
 			zs[t+1] = z
 
+		# print(f"Q _update[t]: {_action.shape}")
+		b_action = action.unsqueeze(-1)
+
 		# Predictions
 		_zs = zs[:-1]
-		qs = self.model.Q(_zs, action, task, return_type='all')
+		qs = self.model.Q(_zs, b_action, task, return_type='all')
 		reward_preds = self.model.reward(_zs, action, task)
 		if self.cfg.episodic:
 			termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
@@ -427,8 +443,16 @@ class TDMPC2(torch.nn.Module):
 			dict: Dictionary of training statistics.
 		"""
 		obs, action, reward, terminated, task = buffer.sample()
+
+		# print(f"ACTION SHAPE FROM BUFFER: {action.shape}")
+
+		# action = action.unsqueeze(-1)
+
 		kwargs = {}
 		if task is not None:
 			kwargs["task"] = task
 		torch.compiler.cudagraph_mark_step_begin()
+
+		# print(f"SHAPE PASSED IN TO _update: {action.shape}")
+
 		return self._update(obs, action, reward, terminated, **kwargs)

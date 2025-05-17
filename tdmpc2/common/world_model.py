@@ -124,7 +124,7 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 
-		# print(f"Z SHAPE: {z.shape}, a: {a.shape}")
+		#print(f"Z SHAPE: {z.shape}, a: {a.shape}")
 		b_a = a.unsqueeze(-1)
 		z = torch.cat([z, b_a], dim=-1)
 		return self._dynamics(z)
@@ -191,6 +191,9 @@ class WorldModel(nn.Module):
 			"entropy": -log_prob,
 			"scaled_entropy": -log_prob * entropy_scale,
 		})
+
+		# print(f"SHAPE OF SAMPLED ACTION FROM PI: {action.shape}")
+
 		return action, info
 
 	def Q(self, z, a, task, return_type='min', target=False, detach=False):
@@ -206,6 +209,11 @@ class WorldModel(nn.Module):
 
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
+
+		assert z.shape[:-1] == a.shape[:-1], f"Mismatched action shape: z.shape={z.shape} a.shape={a.shape}"
+		#b_a = a.unsqueeze(-1)
+
+		# print(f"PROBLEM WITH SHAPE: z.shape={z.shape} a.shape={a.shape}")
 
 		z = torch.cat([z, a], dim=-1)
 		if target:
