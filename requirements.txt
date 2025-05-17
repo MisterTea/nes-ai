@@ -4,6 +4,7 @@ torch
 torchvision
 Pillow
 timm
+# hydra
 imagehash
 numpy
 python-dotenv
@@ -15,6 +16,9 @@ torcheval
 tensorboard
 # pyaudio
 sqlitedict
+tensordict
+termcolor
+torchrl
 PyOpenGL
 stable-baselines3
 gymnasium[all]

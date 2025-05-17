@@ -10,9 +10,10 @@ class Buffer():
 	Uses CUDA memory if available, and CPU memory otherwise.
 	"""
 
-	def __init__(self, cfg):
+	def __init__(self, cfg, device: str):
 		self.cfg = cfg
-		self._device = torch.device('cuda:0')
+		self.device_str = device
+		self._device = torch.device(device)
 		self._capacity = min(cfg.buffer_size, cfg.steps)
 		self._sampler = SliceSampler(
 			num_slices=self.cfg.batch_size,
@@ -50,7 +51,12 @@ class Buffer():
 	def _init(self, tds):
 		"""Initialize the replay buffer. Use the first episode to estimate storage requirements."""
 		print(f'Buffer capacity: {self._capacity:,}')
-		mem_free, _ = torch.cuda.mem_get_info()
+
+		if torch.cuda.is_available():
+			mem_free, _ = torch.cuda.mem_get_info()
+		else:
+			mem_free = 8 * 1024**3
+
 		bytes_per_step = sum([
 				(v.numel()*v.element_size() if not isinstance(v, TensorDict) \
 				else sum([x.numel()*x.element_size() for x in v.values()])) \
@@ -59,7 +65,7 @@ class Buffer():
 		total_bytes = bytes_per_step*self._capacity
 		print(f'Storage required: {total_bytes/1e9:.2f} GB')
 		# Heuristic: decide whether to use CUDA or CPU memory
-		storage_device = 'cuda:0' if 2.5*total_bytes < mem_free else 'cpu'
+		storage_device = self.device_str if 2.5*total_bytes < mem_free else 'cpu'
 		print(f'Using {storage_device.upper()} memory for storage.')
 		self._storage_device = torch.device(storage_device)
 		return self._reserve_buffer(

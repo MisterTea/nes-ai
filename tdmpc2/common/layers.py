@@ -45,8 +45,17 @@ class ShiftAug(nn.Module):
 
 	def forward(self, x):
 		x = x.float()
+
+		# print(f"INPUT SHAPE IN ShiftAug: {x.shape}")
+
+		# (B, W, H, C) -> (B, C, H, W)
+		expected_shape = (64, 64, 3)
+		assert x.shape[1:] == expected_shape, f"Unexpected ShiftAug shape: {x.shape} != {expected_shape}"
+
+		x = x.permute(0, 3, 2, 1)
+
 		n, _, h, w = x.size()
-		assert h == w
+		assert h == w, f"Unexpected h/w: {x.size()} n={n} _=??? h={h} w={w}"
 		x = F.pad(x, self.padding, 'replicate')
 		eps = 1.0 / (h + 2 * self.pad)
 		arange = torch.linspace(-1.0 + eps, 1.0 - eps, h + 2 * self.pad, device=x.device, dtype=x.dtype)[:h]
@@ -56,7 +65,13 @@ class ShiftAug(nn.Module):
 		shift = torch.randint(0, 2 * self.pad + 1, size=(n, 1, 1, 2), device=x.device, dtype=x.dtype)
 		shift *= 2.0 / (h + 2 * self.pad)
 		grid = base_grid + shift
-		return F.grid_sample(x, grid, padding_mode='zeros', align_corners=False)
+
+		result = F.grid_sample(x, grid, padding_mode='zeros', align_corners=False)
+
+		# Transpose back.
+		result = result.permute(0, 1, 2, 3)
+
+		return result
 
 
 class PixelPreprocess(nn.Module):
@@ -138,7 +153,7 @@ def conv(in_shape, num_channels, act=None):
 	Basic convolutional encoder for TD-MPC2 with raw image observations.
 	4 layers of convolution with ReLU activations, followed by a linear layer.
 	"""
-	assert in_shape[-1] == 64 # assumes rgb observations to be 64x64
+	assert in_shape[-1] == 64, f"Unexpected shape: {in_shape=}" # assumes rgb observations to be 64x64
 	layers = [
 		ShiftAug(), PixelPreprocess(),
 		nn.Conv2d(in_shape[0], num_channels, 7, stride=2), nn.ReLU(inplace=False),
@@ -154,13 +169,20 @@ def enc(cfg, out={}):
 	"""
 	Returns a dictionary of encoders for each observation in the dict.
 	"""
+	print(f"OBS SHAPE: {cfg.obs_shape=}")
 	for k in cfg.obs_shape.keys():
 		if k == 'state':
 			out[k] = mlp(cfg.obs_shape[k][0] + cfg.task_dim, max(cfg.num_enc_layers-1, 1)*[cfg.enc_dim], cfg.latent_dim, act=SimNorm(cfg))
 		elif k == 'rgb':
+			print(f"cfg.num_channels: {cfg.num_channels=}")
+			print(f"cfg.obs_shape: {cfg.obs_shape=}")
 			out[k] = conv(cfg.obs_shape[k], cfg.num_channels, act=SimNorm(cfg))
 		else:
 			raise NotImplementedError(f"Encoder for observation type {k} not implemented.")
+
+
+	print(f"OBS SHAPE: {cfg.obs_shape=}")
+
 	return nn.ModuleDict(out)
 
 

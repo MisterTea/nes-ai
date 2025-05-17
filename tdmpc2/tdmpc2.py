@@ -1,10 +1,10 @@
 import torch
 import torch.nn.functional as F
 
-from common import math
-from common.scale import RunningScale
-from common.world_model import WorldModel
-from common.layers import api_model_conversion
+from .common import math
+from .common.scale import RunningScale
+from .common.world_model import WorldModel
+from .common.layers import api_model_conversion
 from tensordict import TensorDict
 
 
@@ -15,10 +15,10 @@ class TDMPC2(torch.nn.Module):
 	and supports both state and pixel observations.
 	"""
 
-	def __init__(self, cfg):
+	def __init__(self, cfg, device: str = 'cuda:0'):
 		super().__init__()
 		self.cfg = cfg
-		self.device = torch.device('cuda:0')
+		self.device = torch.device(device)
 		self.model = WorldModel(cfg).to(self.device)
 		self.optim = torch.optim.Adam([
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
@@ -31,10 +31,10 @@ class TDMPC2(torch.nn.Module):
 		], lr=self.cfg.lr, capturable=True)
 		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
 		self.model.eval()
-		self.scale = RunningScale(cfg)
+		self.scale = RunningScale(cfg, device=device)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
 		self.discount = torch.tensor(
-			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device='cuda:0'
+			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device=device
 		) if self.cfg.multitask else self._get_discount(cfg.episode_length)
 		print('Episode length:', cfg.episode_length)
 		print('Discount factor:', self.discount)
@@ -114,10 +114,12 @@ class TDMPC2(torch.nn.Module):
 			task = torch.tensor([task], device=self.device)
 		if self.cfg.mpc:
 			return self.plan(obs, t0=t0, eval_mode=eval_mode, task=task).cpu()
+
 		z = self.model.encode(obs, task)
 		action, info = self.model.pi(z, task)
 		if eval_mode:
 			action = info["mean"]
+
 		return action[0].cpu()
 
 	@torch.no_grad()
@@ -154,6 +156,9 @@ class TDMPC2(torch.nn.Module):
 		z = self.model.encode(obs, task)
 		if self.cfg.num_pi_trajs > 0:
 			pi_actions = torch.empty(self.cfg.horizon, self.cfg.num_pi_trajs, self.cfg.action_dim, device=self.device)
+
+			# print(f"TENSOR SIZE in _plan: {z.shape}, num_pi_tras={self.cfg.num_pi_trajs}")
+
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)

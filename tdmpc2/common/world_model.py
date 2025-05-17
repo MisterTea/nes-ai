@@ -3,7 +3,7 @@ from copy import deepcopy
 import torch
 import torch.nn as nn
 
-from common import layers, math, init
+from . import layers, math, init
 from tensordict import TensorDict
 from tensordict.nn import TensorDictParams
 
@@ -105,10 +105,16 @@ class WorldModel(nn.Module):
 		Encodes an observation into its latent representation.
 		This implementation assumes a single state-based observation.
 		"""
+
 		if self.cfg.multitask:
 			obs = self.task_emb(obs, task)
+
+		# print(f"CONFIG OBS: {self.cfg.obs=} ndim={obs.ndim}")
+		# print(f"encode obs: {obs.shape} ndim={obs.ndim}")
 		if self.cfg.obs == 'rgb' and obs.ndim == 5:
-			return torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
+			result_obs = torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
+			# print(f"RESULT_OBS: {result_obs.shape}")
+			return result_obs
 		return self._encoder[self.cfg.obs](obs)
 
 	def next(self, z, a, task):
@@ -128,7 +134,7 @@ class WorldModel(nn.Module):
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
 		return self._reward(z)
-	
+
 	def termination(self, z, task, unnormalized=False):
 		"""
 		Predicts termination signal.
@@ -139,7 +145,7 @@ class WorldModel(nn.Module):
 		if unnormalized:
 			return self._termination(z)
 		return torch.sigmoid(self._termination(z))
-		
+
 
 	def pi(self, z, task):
 		"""

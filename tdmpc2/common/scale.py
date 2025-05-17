@@ -5,11 +5,11 @@ from torch.nn import Buffer
 class RunningScale(torch.nn.Module):
 	"""Running trimmed scale estimator."""
 
-	def __init__(self, cfg):
+	def __init__(self, cfg, device: str):
 		super().__init__()
 		self.cfg = cfg
-		self.value = Buffer(torch.ones(1, dtype=torch.float32, device=torch.device('cuda:0')))
-		self._percentiles = Buffer(torch.tensor([5, 95], dtype=torch.float32, device=torch.device('cuda:0')))
+		self.value = Buffer(torch.ones(1, dtype=torch.float32, device=torch.device(device)))
+		self._percentiles = Buffer(torch.tensor([5, 95], dtype=torch.float32, device=torch.device(device)))
 
 	def state_dict(self):
 		return dict(value=self.value, percentiles=self._percentiles)

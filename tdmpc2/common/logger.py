@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from termcolor import colored
 
-from common import TASK_SET
+from . import TASK_SET
 
 
 CONSOLE_FORMAT = [
@@ -115,8 +115,8 @@ class Logger:
 		self._seed = cfg.seed
 		self._eval = []
 		print_run(cfg)
-		self.project = cfg.get("wandb_project", "none")
-		self.entity = cfg.get("wandb_entity", "none")
+		self.project = cfg.wandb_project
+		self.entity = cfg.wandb_entity
 		if not cfg.enable_wandb or self.project == "none" or self.entity == "none":
 			print(colored("Wandb disabled.", "blue", attrs=["bold"]))
 			cfg.save_agent = False
