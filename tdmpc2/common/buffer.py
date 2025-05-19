@@ -113,6 +113,9 @@ class Buffer():
 		task = td.get('task', None)
 		if task is not None:
 			task = task[0].contiguous()
+
+		print(f"PREPARE BATCH, shapes: obs={obs.shape} action={action.shape} reward={reward.shape} terminated={terminated.shape}")
+
 		return obs, action, reward, terminated, task
 
 	def sample(self):

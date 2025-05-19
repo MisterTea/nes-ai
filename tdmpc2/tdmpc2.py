@@ -8,6 +8,39 @@ from .common.layers import api_model_conversion
 from tensordict import TensorDict
 
 
+def symlog(x):
+	"""
+	Symmetric logarithmic function.
+	Adapted from https://github.com/danijar/dreamerv3.
+	"""
+	return torch.sign(x) * torch.log(1 + torch.abs(x))
+
+def two_hot_debug(x, cfg):
+	"""Converts a batch of scalars to soft two-hot encoded targets for discrete regression."""
+	if cfg.num_bins == 0:
+		return x
+	elif cfg.num_bins == 1:
+		return symlog(x)
+	x = torch.clamp(symlog(x), cfg.vmin, cfg.vmax).squeeze(1)
+	bin_idx = torch.floor((x - cfg.vmin) / cfg.bin_size)
+	bin_offset = ((x - cfg.vmin) / cfg.bin_size - bin_idx).unsqueeze(-1)
+	soft_two_hot = torch.zeros(x.shape[0], cfg.num_bins, device=x.device, dtype=x.dtype)
+	bin_idx = bin_idx.long()
+	soft_two_hot = soft_two_hot.scatter(1, bin_idx.unsqueeze(1), 1 - bin_offset)
+	soft_two_hot = soft_two_hot.scatter(1, (bin_idx.unsqueeze(1) + 1) % cfg.num_bins, bin_offset)
+
+	# print(f"two_hot_debug: x={x.shape},nan:{x.isnan().any()} bin_idx={bin_idx.shape},nan:{bin_idx.isnan().any()} bin_offset={bin_offset.shape},nan:{bin_offset.isnan().any()} soft_two_hot={soft_two_hot.shape},nan:{soft_two_hot.isnan().any()}")
+
+	return soft_two_hot
+
+
+def _soft_ce_debug(pred, target, cfg):
+	#print(f"_soft_ce_debug: orig_pred={pred.shape}, nan:{pred.isnan().any()} orig_target={target.shape}, nan:{target.isnan().any()}")
+	pred = F.log_softmax(pred, dim=-1)
+	target = two_hot_debug(target, cfg)
+	#print(f"_soft_ce_debug: pred={pred.shape}, nan:{pred.isnan().any()} target={target.shape}, nan:{target.isnan().any()}")
+	return -(target * pred).sum(-1, keepdim=True)
+
 class TDMPC2(torch.nn.Module):
 	"""
 	TD-MPC2 agent. Implements training + inference.
@@ -380,6 +413,9 @@ class TDMPC2(torch.nn.Module):
 		# Predictions
 		_zs = zs[:-1]
 		qs = self.model.Q(_zs, b_action, task, return_type='all')
+
+		# print(f"qs: {qs.shape},nan:{qs.isnan().any()} _zs: {_zs.shape},nan:{_zs.isnan().any()}")
+
 		reward_preds = self.model.reward(_zs, action, task)
 		if self.cfg.episodic:
 			termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
@@ -387,9 +423,31 @@ class TDMPC2(torch.nn.Module):
 		# Compute losses
 		reward_loss, value_loss = 0, 0
 		for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
+			# print("REWARD LOSS DEBUG")
+			# soft_ce_result = _soft_ce_debug(rew_pred_unbind, rew_unbind, self.cfg).mean()
+			# print(f"REWARD LOSS UPDATE parts: rew_pred_unbind={rew_pred_unbind.shape} rew_unbind={rew_unbind.shape} rho={self.cfg.rho} soft_ce_result={soft_ce_result=} t={t=}")
+
+
 			reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
 			for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
+				# print("VALUE LOSS DEBUG")
+				# soft_ce_result = _soft_ce_debug(qs_unbind_unbind, td_targets_unbind, self.cfg).mean()
+				# print(f"VALUE LOSS UPDATE parts: qs_unbind_unbind={qs_unbind_unbind.shape} td_targets_unbind={td_targets_unbind.shape} rho={self.cfg.rho} soft_ce_result={soft_ce_result=} t={t=}")
+
 				value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
+
+		if reward_loss.isnan().any() or value_loss.isnan().any():
+			print("FOUND NAN")
+			reward_preds
+			print(f"reward_preds: nan:{reward_preds.isnan.any()} {reward_preds=}")
+			print(f"reward: nan:{reward.isnan.any()} {reward=}")
+			print(f"td_targets_unbind: nan:{td_targets_unbind.isnan.any()} {td_targets_unbind=}")
+			print(f"qs: nan:{qs.isnan.any()} {qs=}")
+			print(f"reward_loss: nan:{reward_loss.isnan().any()} {reward_loss=}")
+			print(f"value_loss: nan:{value_loss.isnan().any()} {value_loss=}")
+			raise AssertionError("FOUND NAN")
+
+		# print(f"_update(): reward_loss0={reward_loss} value_loss={value_loss}")
 
 		consistency_loss = consistency_loss / self.cfg.horizon
 		reward_loss = reward_loss / self.cfg.horizon

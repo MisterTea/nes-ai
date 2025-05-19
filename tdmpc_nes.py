@@ -181,7 +181,7 @@ class Config:
     # Environment
     task: str = "smb"
     obs: str = "rgb"
-    episodic: bool = False
+    episodic: bool = True
 
     # Evaluation
     checkpoint: Optional[str] = None
@@ -203,7 +203,7 @@ class Config:
     discount_denom: int = 5
     discount_min: float = 0.95
     discount_max: float = 0.995
-    buffer_size: int = 1_000_000
+    buffer_size: int = 250_000
     exp_name: str = "default"
     data_dir: Optional[str] = None
 
@@ -256,7 +256,7 @@ class Config:
     # Convenience
     work_dir: Optional[str] = None
     task_title: Optional[str] = None
-    multitask: Optional[Union[str, bool]] = None
+    multitask: Optional[Union[str, bool]] = False
     tasks: Optional[Any] = None
     obs_shape: Optional[Any] = None
     action_dim: Optional[Any] = None
@@ -333,7 +333,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str):
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
             raise RuntimeError("STOP")
         else:
-            env = gym.make(env_id, render_mode="human", reset_to_save_state=True, screen_rc=(2,3))
+            env = gym.make(env_id, render_mode="human", reset_to_save_state=False, screen_rc=(2,3))
 
         print(f"RENDER MODE: {env.render_mode}")
 
