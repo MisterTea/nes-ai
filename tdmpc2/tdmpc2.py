@@ -525,7 +525,8 @@ class TDMPC2(torch.nn.Module):
 			w_terminated = terminated.nonzero(as_tuple=True)[0]
 			print(f"w_reward_isnan={reward_nan}  reward_loss.shape={reward_loss.shape}")
 			print(f"w_value_isnan={value_nan} value_loss.shape={value_loss.shape}")
-			print(f"w_terminated={w_terminated} terminated.shape={terminated.shape}")
+			print(f"w_terminated={w_terminated=} terminated.shape={terminated.shape}")
+			print(f"terminated={terminated=}")
 			print(f"reward_preds={reward_preds=}")
 			print(f"reward_preds: nan:{reward_preds.isnan().any()} {reward_preds=}")
 			print(f"reward: nan:{reward.isnan().any()} {reward=}")
