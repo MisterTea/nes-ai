@@ -814,11 +814,13 @@ def main():
 
             vis_reward_image_i += 1
 
-        if False: # args.visualize_actions:
+        if args.visualize_actions:
+            b_obs = obs.unsqueeze(0)
+            action_probs = agent.get_action_probs(b_obs)
             assert action_probs.shape == (1,7), f"Unexpected action_probs shape: {action_probs.shape}"
             action_probs_single_batch = action_probs.squeeze(0)
             # _draw_action_probs(screen.surfs[4], at=vis_action_probs_i, action_probs=action_probs_single_batch, screen_size=screen.screen_size)
-            _draw_action_probs2(screen.surfs[4], at=vis_action_probs_i, action_probs=action_probs_single_batch, action_index=action, screen_size=screen.screen_size)
+            _draw_action_probs2(screen.surfs[4], at=vis_action_probs_i, action_probs=action_probs_single_batch, action_index=action_index, screen_size=screen.screen_size)
 
             vis_action_probs_i += 1
 

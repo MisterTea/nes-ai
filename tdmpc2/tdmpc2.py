@@ -6,6 +6,7 @@ from .common.scale import RunningScale
 from .common.world_model import WorldModel
 from .common.layers import api_model_conversion
 from tensordict import TensorDict
+from torch.distributions.categorical import Categorical
 
 
 def symlog(x):
@@ -658,3 +659,10 @@ class TDMPC2(torch.nn.Module):
 		value = all_values.mean(dim=0).unsqueeze(0)
 
 		return action_probs, value
+
+	def get_action_probs(self, obs):
+		z = self.model.encode(obs, task=None)
+		action_onehot, info = self.model.pi(z, task=None)
+		logits = info['logits']
+		probs = Categorical(logits=logits)
+		return probs.probs
