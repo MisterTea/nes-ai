@@ -137,7 +137,7 @@ class Args:
     """the learning rate of the decoder optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
-    num_steps: int = 128
+    num_steps: int = 9 # 128
     """the number of steps to run in each environment per policy rollout"""
     gamma: float = 0.99
     """the discount factor gamma"""
@@ -550,7 +550,8 @@ def to_td(env, obs, action=None, reward=None, terminated=None):
         # raise AssertionError("STOP")
 
         # action = torch.full_like(rand_act, float('nan'))
-        action = torch.tensor(-1)
+        action_index = torch.tensor(0)
+        action = action_index # F.one_hot(action_index, num_classes=7)
 
     if reward is None:
         reward = torch.tensor(float('nan'))
@@ -559,8 +560,9 @@ def to_td(env, obs, action=None, reward=None, terminated=None):
 
     # print(f"to_td: obs={obs.shape} action={action.shape} reward={reward.shape} terminated={terminated.shape}")
 
-    assert action.dim() == 0, f"Unexpected action shape: {action.shape}, action={action}"
-    #assert action.shape == (1,), f"Unexpected action shape: {action.shape}, action={action}"
+    assert action.shape == (), f"Unexpected action (action_index) shape: {action.shape}, action={action}"
+
+    # print(f"ADDING in to_td: {action.shape} unsqueezed={action.unsqueeze(0).shape}")
 
     td = TensorDict(
         obs=obs,
@@ -645,7 +647,7 @@ def main():
     screen = first_env.screen
     nes = first_env.unwrapped.nes
 
-    action_dim = 1 # envs.single_action_space.n
+    action_dim = envs.single_action_space.n
     env = envs.envs[0]
 
     print(f"ACTION DIM: {action_dim}")
@@ -666,9 +668,9 @@ def main():
     print(f"env.action_space.shape: {envs.action_space.shape=}")
     # cfg.action_dim = env.action_space.shape[0]
 
-    # NOTE: We're saying the action dimension for the agent is 7, even though it's really 1 dimensional with 7 values.
-    #   TD-MPC2 was designed for continuous action spaces, so we'll use a 1-hot-encoded version to mimic continuous space.
-    cfg.action_dim = 1
+    # NOTE: One-hot encoding for each action combo (not button press).  TD-MPC2 was designed for
+    #   continuous action spaces, so we'll use a 1-hot-encoded version to mimic continuous space.
+    cfg.action_dim = action_dim
 
     cfg.num_discrete_actions = env.action_space.n
 
@@ -773,10 +775,10 @@ def main():
         # Collect experience
         if True: # step > cfg.seed_steps:
             action_index = agent.act(obs, t0=len(_tds)==1)
+            # print(f"ACTION ACT action_index: {action_index}")
         else:
             action_index = env.rand_act()
-
-        # print(f"ACTION INDEX: {action_index}")
+            print(f"ACTION ENV action_index: {action_index}")
 
         obs, reward, done, truncated, info = env.step(action_index)
         obs = torch.Tensor(obs).to(device)

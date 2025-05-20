@@ -299,9 +299,13 @@ def render_mario_pos_policy_value_sweep(envs: Any, device: str, agent: Any):
         for controller_press in env.action_controller_presses
     ], device=device, dtype=torch.float32).T
 
+    print(f"env.action_controller_presses: {env.action_controller_presses=}")
+
     for j, y in enumerate(y_steps):
         for i, x in enumerate(x_steps):
             policy_action_probs, value, obs = _get_policy_and_value_at_offset(ram=ram, envs=envs, device=device, agent=agent, x=x, y=y, xvel=0, yvel=0)
+
+            # print(f"action_dirs.shape={action_dirs.shape} policy_action_probs={policy_action_probs.shape}")
 
             # Convert policy action probabilities into a direction.
             # Sum all of the direction*probability.
