@@ -62,7 +62,7 @@ class OnlineTrainer(Trainer):
 		if reward is None:
 			reward = torch.tensor(float('nan'))
 		if terminated is None:
-			terminated = torch.tensor(float('nan'))
+			terminated = torch.tensor(False)
 		td = TensorDict(
 			obs=obs,
 			action=action.unsqueeze(0),

@@ -536,7 +536,7 @@ def _draw_action_probs2(surf: pygame.Surface, at: int, action_probs: np.ndarray,
             pygame.draw.rect(surface=surf, color=prob_vis_rgb, rect=(x_next, y_next + i*block_height, block_width, block_height))
 
 
-def to_td(env, obs, action=None, reward=None, terminated=None):
+def to_td(env, obs, action=None, reward=None, terminated: bool = False):
     """Creates a TensorDict for a new episode."""
     if isinstance(obs, dict):
         obs = TensorDict(obs, batch_size=(), device='cpu')
@@ -555,12 +555,14 @@ def to_td(env, obs, action=None, reward=None, terminated=None):
 
     if reward is None:
         reward = torch.tensor(float('nan'))
-    if terminated is None:
-        terminated = torch.tensor(float('nan'))
+
+    assert terminated is not None
+    terminated = torch.tensor(terminated)
 
     # print(f"to_td: obs={obs.shape} action={action.shape} reward={reward.shape} terminated={terminated.shape}")
 
     assert action.shape == (), f"Unexpected action (action_index) shape: {action.shape}, action={action}"
+    assert terminated.dtype == torch.bool, f"Unexpected terminated type: {terminated.dtype} != torch.bool"
 
     # print(f"ADDING in to_td: {action.shape} unsqueezed={action.unsqueeze(0).shape}")
 
@@ -595,8 +597,10 @@ def main():
         run_prefix = f"{args.env_id}__{args.exp_name}__{args.seed}"
         run_name = f"{run_prefix}__{date_str}"
         args.wandb_run_id = run_name
-
-    run_name = args.wandb_run_id
+        is_new_run = True
+    else:
+        run_name = args.wandb_run_id
+        is_new_run = False
 
     if args.track:
         import wandb
@@ -704,6 +708,8 @@ def main():
     global_step = 0
 
     if args.track and run.resumed:
+        # User specified a run to resume, using wandb.
+        #
         # Reference example (that seems out of date) from: https://docs.cleanrl.dev/advanced/resume-training/#resume-training_1
         # Updated with example from: https://wandb.ai/lavanyashukla/save_and_restore/reports/Saving-and-Restoring-Machine-Learning-Models-with-W-B--Vmlldzo3MDQ3Mw
 
@@ -716,6 +722,17 @@ def main():
         agent.eval()
 
         print(f"Resumed at update {starting_iter}")
+    elif args.wandb_run_id and not is_new_run:
+        # User specified a run to resume, without wandb.
+
+        agent_filename = f"{run_dir}/agent.ckpt"
+        agent_path = Path(agent_filename)
+        if not agent_path.exists():
+            raise RuntimeError(f"Missing agent from path: {agent_filename}")
+
+        print(f"Resuming agent from: {agent_filename}")
+        agent.load(agent_filename)
+
     else:
         starting_iter = 1
 
@@ -737,7 +754,7 @@ def main():
             eval_next = True
 
         # Reset environment
-        if done:
+        if done or step % 5 == 0:
             if False: # eval_next:
                 eval_metrics = eval()
                 eval_metrics.update(common_metrics())
@@ -770,7 +787,7 @@ def main():
             obs, _info = env.reset()
             obs = torch.Tensor(obs).to(device)
 
-            _tds = [to_td(env, obs)]
+            _tds = [to_td(env, obs, terminated=True)]
 
         # Collect experience
         if True: # step > cfg.seed_steps:
@@ -818,6 +835,7 @@ def main():
             b_obs = obs.unsqueeze(0)
             action_probs = agent.get_action_probs(b_obs)
             assert action_probs.shape == (1,7), f"Unexpected action_probs shape: {action_probs.shape}"
+            print(f"action_probs: {action_probs}")
             action_probs_single_batch = action_probs.squeeze(0)
             # _draw_action_probs(screen.surfs[4], at=vis_action_probs_i, action_probs=action_probs_single_batch, screen_size=screen.screen_size)
             _draw_action_probs2(screen.surfs[4], at=vis_action_probs_i, action_probs=action_probs_single_batch, action_index=action_index, screen_size=screen.screen_size)

@@ -22,23 +22,41 @@ def two_hot_debug(x, cfg):
 		return x
 	elif cfg.num_bins == 1:
 		return symlog(x)
-	x = torch.clamp(symlog(x), cfg.vmin, cfg.vmax).squeeze(1)
+
+	assert not x.isnan().any(), f"Unexpected x input nan: {x}"
+
+	symlog_x = symlog(x)
+	assert not symlog_x.isnan().any(), f"Unexpected symlog_x nan: {symlog_x}"
+
+	x = torch.clamp(symlog_x, cfg.vmin, cfg.vmax).squeeze(1)
+	assert not x.isnan().any(), f"Unexpected x nan: {x}"
+
 	bin_idx = torch.floor((x - cfg.vmin) / cfg.bin_size)
 	bin_offset = ((x - cfg.vmin) / cfg.bin_size - bin_idx).unsqueeze(-1)
 	soft_two_hot = torch.zeros(x.shape[0], cfg.num_bins, device=x.device, dtype=x.dtype)
-	bin_idx = bin_idx.long()
-	soft_two_hot = soft_two_hot.scatter(1, bin_idx.unsqueeze(1), 1 - bin_offset)
-	soft_two_hot = soft_two_hot.scatter(1, (bin_idx.unsqueeze(1) + 1) % cfg.num_bins, bin_offset)
+	assert not soft_two_hot.isnan().any(), f"Unexpected soft_two_hot nan (0): {soft_two_hot}"
 
-	# print(f"two_hot_debug: x={x.shape},nan:{x.isnan().any()} bin_idx={bin_idx.shape},nan:{bin_idx.isnan().any()} bin_offset={bin_offset.shape},nan:{bin_offset.isnan().any()} soft_two_hot={soft_two_hot.shape},nan:{soft_two_hot.isnan().any()}")
+	bin_idx = bin_idx.long()
+
+	soft_two_hot = soft_two_hot.scatter(1, bin_idx.unsqueeze(1), 1 - bin_offset)
+	assert not soft_two_hot.isnan().any(), f"Unexpected soft_two_hot nan (1): {soft_two_hot}"
+
+	soft_two_hot = soft_two_hot.scatter(1, (bin_idx.unsqueeze(1) + 1) % cfg.num_bins, bin_offset)
+	assert not soft_two_hot.isnan().any(), f"Unexpected soft_two_hot nan (2): {soft_two_hot}"
 
 	return soft_two_hot
 
 
 def _soft_ce_debug(pred, target, cfg):
+	assert not pred.isnan().any(), f"Unexpected input pred nan: {pred}"
+	assert not target.isnan().any(), f"Unexpected input target nan: {pred}"
+
 	#print(f"_soft_ce_debug: orig_pred={pred.shape}, nan:{pred.isnan().any()} orig_target={target.shape}, nan:{target.isnan().any()}")
 	pred = F.log_softmax(pred, dim=-1)
+	assert not pred.isnan().any(), f"Unexpected pred nan: {pred}"
 	target = two_hot_debug(target, cfg)
+	assert not target.isnan().any(), f"Unexpected target nan: {target}"
+
 	#print(f"_soft_ce_debug: pred={pred.shape}, nan:{pred.isnan().any()} target={target.shape}, nan:{target.isnan().any()}")
 	return -(target * pred).sum(-1, keepdim=True)
 
@@ -463,9 +481,10 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			torch.Tensor: TD-target.
 		"""
+		assert terminated.dtype == torch.bool, f"Unexpected terminated dtype: {terminated.dtype} != torch.bool"
 		action_onehot, _ = self.model.pi(next_z, task)
 		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
-		return reward + discount * (1-terminated) * self.model.Q(next_z, action_onehot, task, return_type='min', target=True)
+		return reward + discount * (1-terminated.float()) * self.model.Q(next_z, action_onehot, task, return_type='min', target=True)
 
 	def _update(self, obs, action, reward, terminated, task=None):
 		# Compute targets
@@ -502,49 +521,108 @@ class TDMPC2(torch.nn.Module):
 		if self.cfg.episodic:
 			termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
 
+		from math import isnan
+
+		# NEED TO PICK OUT NON-TERMINAL VALUES?
+		if True:
+			print(f"SHAPES: reward_preds={reward_preds.shape} reward={reward.shape} td_targets={td_targets.shape} qs={qs.shape} terminated={terminated.shape}")
+
+
 		# Compute losses
 		reward_loss, value_loss = 0, 0
-		for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
+		for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind, term_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1), terminated.unbind(0))):
 			# print("REWARD LOSS DEBUG")
 			# soft_ce_result = _soft_ce_debug(rew_pred_unbind, rew_unbind, self.cfg).mean()
 			# print(f"REWARD LOSS UPDATE parts: rew_pred_unbind={rew_pred_unbind.shape} rew_unbind={rew_unbind.shape} rho={self.cfg.rho} soft_ce_result={soft_ce_result=} t={t=}")
 
+			# Ignore terminal rewards.
+			w_term = term_unbind.squeeze(-1)
+			w_non_term = ~w_term
 
-			reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
+			if rew_pred_unbind[w_non_term].isnan().any() or rew_unbind[w_non_term].isnan().any():
+				# assert not isnan(reward_loss), f"Unexpected reward loss, before calculation: {reward_loss}"
+				print(f"rew_pred_unbind.shape={rew_pred_unbind.shape} non_term.shape={w_non_term.shape}")
+				print(f"rew_unbind.shape={rew_unbind.shape} w_non_term.shape={w_non_term.shape}")
+				print(f"term_unbind.shape={term_unbind.shape} w_non_term.shape={w_non_term.shape}")
+				print(f"indexed shape: rew_pred_unbind={rew_pred_unbind[w_non_term].shape} rew_unbind={rew_unbind[w_non_term].shape}")
+
+				# All rew_pred that have nans in non-terminal positions.
+				rew_pred_unbind_softmax = F.log_softmax(rew_pred_unbind, dim=-1)
+				w_nan_non_term = rew_pred_unbind_softmax.isnan() & w_non_term
+				print(f"rew_pred_unbind w_nan_non_term={w_nan_non_term.nonzero()}")
+
+				w_nan_non_term = rew_unbind.isnan() & w_non_term
+				print(f"rew_unbind w_nan_non_term={w_nan_non_term.nonzero()}")
+
+				raise AssertionError("STOP")
+
+			reward_loss = reward_loss + _soft_ce_debug(rew_pred_unbind[w_non_term], rew_unbind[w_non_term], self.cfg).mean() * self.cfg.rho**t
+
+			# Ignore nan for terminal values.
+			if False:
+				print(f"TERM UNBIND TYPE: {term_unbind=}")
+				w_term = term_unbind.nonzero()
+				if isnan(reward_loss):
+					print(f"w_term={w_term}")
+					print(f"reward_loss has nan={reward_loss}")
+					assert not isnan(reward_loss), f"Unexpected reward loss, after calculation: {reward_loss}"
+
 			for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
 				# print("VALUE LOSS DEBUG")
 				# soft_ce_result = _soft_ce_debug(qs_unbind_unbind, td_targets_unbind, self.cfg).mean()
 				# print(f"VALUE LOSS UPDATE parts: qs_unbind_unbind={qs_unbind_unbind.shape} td_targets_unbind={td_targets_unbind.shape} rho={self.cfg.rho} soft_ce_result={soft_ce_result=} t={t=}")
 
-				value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
+				assert not isnan(value_loss), f"Unexpected value_loss loss, before calculation: {value_loss}"
+				value_loss = value_loss + _soft_ce_debug(qs_unbind_unbind[w_non_term], td_targets_unbind[w_non_term], self.cfg).mean() * self.cfg.rho**t
+				assert not isnan(value_loss), f"Unexpected value_loss loss, after calculation: {value_loss}"
 
-		if reward_loss.isnan().any() or value_loss.isnan().any():
-			print("FOUND NAN")
-			reward_nan = torch.isnan(reward_loss).nonzero(as_tuple=True)[0]
-			value_nan = torch.isnan(value_loss).nonzero(as_tuple=True)[0]
-			w_terminated = terminated.nonzero(as_tuple=True)[0]
-			print(f"w_reward_isnan={reward_nan}  reward_loss.shape={reward_loss.shape}")
-			print(f"w_value_isnan={value_nan} value_loss.shape={value_loss.shape}")
-			print(f"w_terminated={w_terminated=} terminated.shape={terminated.shape}")
-			print(f"terminated={terminated=}")
-			print(f"reward_preds={reward_preds=}")
-			print(f"reward_preds: nan:{reward_preds.isnan().any()} {reward_preds=}")
-			print(f"reward: nan:{reward.isnan().any()} {reward=}")
-			print(f"td_targets_unbind: nan:{td_targets_unbind.isnan().any()} {td_targets_unbind=}")
-			print(f"qs: nan:{qs.isnan().any()} {qs=}")
-			print(f"reward_loss: nan:{reward_loss.isnan().any()} {reward_loss=}")
-			print(f"value_loss: nan:{value_loss.isnan().any()} {value_loss=}")
-			raise AssertionError("FOUND NAN")
+		# Ensure all nan locations are also terminal.
+		if False:
+			w_reward_loss_nan = reward_loss.isnan()
+			w_value_loss_nan = value_loss.isnan()
+			w_nan = w_reward_loss_nan | w_value_loss_nan
+			w_terminated = terminated.nonzero()
+			w_problem = w_nan & ~w_terminated
+			if w_problem.any():
+				print("FOUND NAN")
+				print(f"SHAPES: reward_loss={reward_loss.shape} value_loss={value_loss.shape} terminated={terminated.shape}")
+				reward_nan = torch.isnan(reward_loss).nonzero()
+				value_nan = torch.isnan(value_loss).nonzero()
+				w_terminated = terminated.nonzero()
+				print(f"w_reward_isnan={reward_nan}  reward_loss.shape={reward_loss.shape}")
+				print(f"w_value_isnan={value_nan} value_loss.shape={value_loss.shape}")
+				print(f"w_terminated={w_terminated=} terminated.shape={terminated.shape} dtype={terminated.dtype}")
+				print(f"terminated={terminated=}")
+				print(f"reward_preds={reward_preds=}")
+				print(f"reward_preds: nan:{reward_preds.isnan().any()} {reward_preds=}")
+				print(f"reward: nan:{reward.isnan().any()} {reward=}")
+				print(f"td_targets_unbind: nan:{td_targets_unbind.isnan().any()} {td_targets_unbind=}")
+				print(f"qs: nan:{qs.isnan().any()} {qs=}")
+				print(f"reward_loss: nan:{reward_loss.isnan().any()} {reward_loss=}")
+				print(f"value_loss: nan:{value_loss.isnan().any()} {value_loss=}")
+				raise AssertionError("FOUND NAN")
 
 		# print(f"_update(): reward_loss0={reward_loss} value_loss={value_loss}")
 
 		consistency_loss = consistency_loss / self.cfg.horizon
 		reward_loss = reward_loss / self.cfg.horizon
 		if self.cfg.episodic:
-			termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated)
+			assert terminated.dtype == torch.bool, f"Unexpected terminated dtype: {terminated.dtype} != torch.bool"
+			termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated.float())
 		else:
 			termination_loss = 0.
 		value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
+
+		if consistency_loss.isnan().any() or reward_loss.isnan().any() or termination_loss.isnan().any() or value_loss.isnan().any():
+			print("FOUND NAN in loss")
+			print(f"SHAPES: consistency_loss={consistency_loss.shape} reward_loss={reward_loss.shape} termination_loss={termination_loss.shape} value_loss={value_loss.shape}")
+			print(f"VALUES: consistency_loss={consistency_loss} reward_loss={reward_loss} termination_loss={termination_loss} value_loss={value_loss}")
+			print(f"  consistency_loss.isnan={consistency_loss.isnan().nonzero()}")
+			print(f"  reward_loss.isnan={reward_loss.isnan().nonzero()}")
+			print(f"  termination_loss.isnan={termination_loss.isnan().nonzero()}")
+			print(f"  value_loss.isnan={value_loss.isnan().nonzero()}")
+
+
 		total_loss = (
 			self.cfg.consistency_coef * consistency_loss +
 			self.cfg.reward_coef * reward_loss +

@@ -57,5 +57,5 @@ class TensorWrapper(gym.Wrapper):
 		# print(f"RECEIVED INFO FROM STEP: {info}")
 
 		info['success'] = float(info['success'])
-		info['terminated'] = torch.tensor(float(done))
+		info['terminated'] = torch.tensor(done)
 		return self._obs_to_tensor(obs), torch.tensor(reward, dtype=torch.float32), done, truncated, info
