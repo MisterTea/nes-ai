@@ -27,7 +27,7 @@ from gymnasium.envs.registration import register
 register(
     id="FourRooms-v0",
     entry_point=FourRoomsEnv,
-    max_episode_steps=60 * 60 * 5,
+    max_episode_steps=1_000_000,
 )
 
 
@@ -130,7 +130,7 @@ class Args:
     """the surrogate clipping coefficient"""
     clip_vloss: bool = True
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.01
+    ent_coef: float = 0.1
     """coefficient of the entropy"""
     vf_coef: float = 0.5
     """coefficient of the value function"""

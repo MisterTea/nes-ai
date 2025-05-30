@@ -1,6 +1,7 @@
 from typing import Any, Literal, Optional
 
 import gymnasium as gym
+import matplotlib.pyplot as plt
 import numpy as np
 import pygame
 
@@ -101,8 +102,8 @@ class SimpleScreenRxC:
 
 
 
-SCREEN_W = 53
-SCREEN_H = 53
+SCREEN_W = 51
+SCREEN_H = 51
 
 EMPTY = 0
 WALL = 1
@@ -124,9 +125,9 @@ class FourRoomsEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(len(SIMPLE_MOVEMENT))
 
         #self.observation_space = gym.spaces.Box(low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8)
-        self.observation_space = gym.spaces.MultiDiscrete([53, 53]) # Box(low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8)
+        self.observation_space = gym.spaces.MultiDiscrete([SCREEN_H, SCREEN_W]) # Box(low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8)
 
-        self.screen = SimpleScreenRxC((SCREEN_W, SCREEN_H), scale=10, rows=screen_rc[0], cols=screen_rc[1])
+        self.screen = SimpleScreenRxC((SCREEN_W, SCREEN_H), scale=5, rows=screen_rc[0], cols=screen_rc[1])
 
         # Build action mapping.
         self._action_index_to_grid_offset = {
@@ -134,15 +135,17 @@ class FourRoomsEnv(gym.Env):
             for i, action_str in enumerate(SIMPLE_MOVEMENT)
         }
 
+        self.viridis = plt.get_cmap('viridis')
+
         # Initialize room.
-        # Grid of 53x53:
+        # Grid of 51x51:
         #   * 4 rooms, top-left, top-right, bottom-left, bottom-right.
-        #   * Each room is 26x26.
+        #   * Each room is 25x25.
         #   * A wall separates each room.
         #   * Each wall has a single gridspace passage through it.
 
         # Initialize grid to empty.
-        grid = np.zeros((53, 53), dtype=np.int64)
+        grid = np.zeros((SCREEN_H, SCREEN_W), dtype=np.int64)
 
         # Fill in interior center-vertical wall.
         grid[:, 25] = WALL
@@ -166,11 +169,11 @@ class FourRoomsEnv(gym.Env):
             grid[25 + r, 25 + c] = EMPTY
 
         self._grid_walls = grid
-        self._start_pos = np.array((0, 52))
-        self._goal_pos = np.array((52, 0))
+        self._start_pos = np.array((0, 50))
+        self._goal_pos = np.array((50, 0))
 
         # Agent init.
-        self._grid_counts = np.zeros((53, 53), dtype=np.int64)
+        self._grid_counts = np.zeros((51, 51), dtype=np.int64)
         self._agent_pos = self._start_pos
 
         if False:
@@ -186,17 +189,39 @@ class FourRoomsEnv(gym.Env):
 
                 print()
 
+        if True:
+            print("GRID POSITION AT EDGE")
+            for (r, c) in [(0, 0), (0, 50), (50, 0), (50, 50)]:
+                print(f"  {r},{c}: {self._grid_walls[r,c]}")
+
+
 
     def get_debug_obs(self) -> NdArrayRGB8:
         # Normalize grid counts to range (0, 255).
         grid_f = self._grid_counts.astype(np.float32)
-        grid_gray = (grid_f / grid_f.max() * 255).astype(np.uint8)
+        grid_rgba_f = self.viridis(grid_f / grid_f.max())
+        grid_rgb = (grid_rgba_f[..., :3] * 255).astype(np.uint8)
 
         # Set unexplored spaces as white.
-        grid_gray[self._grid_counts == 0] = 255
+        # grid_rgb[self._grid_counts == 0] = 255
+
+        # Set unexplored spaces as black.
+        grid_rgb[self._grid_counts == 0] = 0
+
+        # Goal in blue.
+        goal_r, goal_c = self._goal_pos
+        grid_rgb[goal_r, goal_c, :] = (0, 0, 255)
+
+        # DEBUG POSITIONS IN BLUE
+        if False:
+            grid_rgb[0, 0] = (0, 0, 255)
+            grid_rgb[0, 50] = (0, 0, 255)
+            grid_rgb[50, 0] = (0, 0, 255)
+            grid_rgb[50, 50] = (0, 0, 255)
 
         # Repeat for RGB.
-        screen_view_np = np.stack([grid_gray]*3, axis=-1)
+        screen_view_np = grid_rgb
+        # screen_view_np = np.stack([grid_gray]*3, axis=-1)
         # screen_view_np = np.repeat(grid_gray[..., np.newaxis], 3, axis=-1)
 
         # Draw walls as green.
@@ -235,7 +260,7 @@ class FourRoomsEnv(gym.Env):
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         # Reset to starting point, top right.
-        self._grid_counts = np.zeros((53, 53), dtype=np.int64)
+        self._grid_counts = np.zeros((SCREEN_H, SCREEN_W), dtype=np.int64)
         self._agent_pos = self._start_pos
 
         # Get initial values.
@@ -253,10 +278,14 @@ class FourRoomsEnv(gym.Env):
         # Move position according to 4 rooms.
         dr, dc = self._action_index_to_grid_offset[action_index]
 
-        new_rc = self._agent_pos + np.array((dr, dc))
+        new_rc = self._agent_pos + np.array((dr, dc), dtype=np.int64)
         new_r, new_c = new_rc
 
-        if (new_rc <= 0).any() or (new_rc >= 53).any():
+        if False:
+            if (self._agent_pos==0).any() or (self._agent_pos==1).any():
+                print(f"NEAR EDGE: {self._agent_pos} + {dr},{dc} -> {new_r},{new_c}")
+
+        if new_r < 0 or new_r >= SCREEN_H or new_c < 0 or new_c >= SCREEN_W:
             # Out of bounds, don't move.
             pass
         elif self._grid_walls[new_r, new_c] == WALL:
@@ -271,13 +300,21 @@ class FourRoomsEnv(gym.Env):
 
         # Get reward in the new position.
         if (self._agent_pos == self._goal_pos).all():
-            reward = 0.0
+            at_goal = True
         else:
-            reward = -1.0
+            at_goal = False
+
+        reward = 0.0 if at_goal else -1.0
 
         # print(f"REWARD: {reward}")
 
-        terminated = False # self.steps >= self.max_steps
+        if False:
+            if (self._agent_pos==0).any() or (self._agent_pos==1).any():
+                r, c = self._agent_pos
+                print(f"GRID COUNTS AT EDGE: {r},{c}: {self._grid_counts[r, c]}")
+
+
+        terminated = at_goal
         truncated = False
         observation = self._get_obs()
         info = self._get_info()
@@ -298,32 +335,6 @@ class FourRoomsEnv(gym.Env):
             return None
         else:
             return None
-
-    @staticmethod
-    def _screen_view_to_np(screen_view: Any) -> NdArrayRGB8:
-        assert screen_view.shape == (240, 224), f"Unexpected screen_view shape: {screen_view.shape} != {(240, 224)}"
-
-        # NOTE: These operations are carefully constructed to avoid memory copies, they are all views.
-        #   Starting type is: (240, 224) uint32 as BGRA.
-        #   Ending type is: (240, 224, 3) uint8 as RGB.
-
-        screen_view_np = np.asarray(screen_view, copy=False)
-        screen_view_bgra = screen_view_np.view(np.uint8).reshape((240, 224, 4))
-        screen_view_bgr = screen_view_bgra[:, :, :3]
-        screen_view_rgb = screen_view_bgr[:, :, ::-1]
-
-        if False:
-            def _is_copy(arr):
-                return 'view' if arr.base is not None else 'new'
-
-            print()
-            print(f"SCREEN VIEW: type={type(screen_view)} shape={screen_view.shape} size={screen_view.size} base={_is_copy(screen_view)}")
-            print(f"SCREEN VIEW NP: shape={screen_view_np.shape} size={screen_view_np.size} cont={screen_view_np.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_np)}")
-            print(f"SCREEN VIEW BGRA: shape={screen_view_bgra.shape} size={screen_view_bgra.size} cont={screen_view_bgra.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_bgra)}")
-            print(f"SCREEN VIEW BGR: shape={screen_view_bgr.shape} size={screen_view_bgr.size} cont={screen_view_bgr.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_bgr)}")
-            print(f"SCREEN VIEW RGB: shape={screen_view_rgb.shape} size={screen_view_rgb.size} cont={screen_view_rgb.flags['C_CONTIGUOUS']} base={_is_copy(screen_view_rgb)}")
-
-        return screen_view_rgb
 
     def close(self):
         self.screen.close()
