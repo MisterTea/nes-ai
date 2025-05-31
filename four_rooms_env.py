@@ -108,6 +108,8 @@ SCREEN_H = 51
 EMPTY = 0
 WALL = 1
 
+OBS_W, OBS_H = 84, 84
+
 
 
 # Reference: https://gymnasium.farama.org/introduction/create_custom_env/
@@ -124,8 +126,10 @@ class FourRoomsEnv(gym.Env):
         # self.action_space = gym.spaces.Discrete(len(SIMPLE_MOVEMENT))
         self.action_space = gym.spaces.Discrete(len(SIMPLE_MOVEMENT))
 
+        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(OBS_W, OBS_H), dtype=np.uint8)
+        # self.observation_space = gym.spaces.Box(low=0, high=255, shape=(84, 84), dtype=np.uint8)
         #self.observation_space = gym.spaces.Box(low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8)
-        self.observation_space = gym.spaces.MultiDiscrete([SCREEN_H, SCREEN_W]) # Box(low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8)
+        #self.observation_space = gym.spaces.MultiDiscrete([SCREEN_H, SCREEN_W]) # Box(low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8)
 
         self.screen = SimpleScreenRxC((SCREEN_W, SCREEN_H), scale=5, rows=screen_rc[0], cols=screen_rc[1])
 
@@ -247,7 +251,27 @@ class FourRoomsEnv(gym.Env):
         return screen_view_np
 
     def _get_obs(self) -> NdArrayRGB8:
-        return self._agent_pos
+        # Get a grayscale grid around the agent position.
+        #obs = np.zeros((OBS_W, OBS_H), dtype=np.uint8)
+        obs = np.zeros((84, 84), dtype=np.uint8)
+
+        for j in range(-3, 3):
+            for i in range(-3, 3):
+                r = self._agent_pos[0] + j
+                c = self._agent_pos[1] + i
+                if r < 0 or r >= SCREEN_H or c < 0 or c >= SCREEN_W:
+                    continue
+
+                #obs[j+3, i+3] = self._grid_walls[r, c] * 255
+                obs[j+42, i+42] = self._grid_walls[r, c] * 255
+
+        # Repeat channels.
+        # obs_rgb = np.stack([obs]*3, axis=-1).transpose((2, 0, 1))
+        # return obs_rgb
+
+        assert not np.isnan(obs).any(), "Observation has NaNs!"
+
+        return obs
 
     def _get_info(self):
         # TODO(millman): Put debug info here that shouldn't be used as game rewards.
