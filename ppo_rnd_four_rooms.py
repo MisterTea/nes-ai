@@ -112,7 +112,7 @@ class Args:
     """the learning rate of the decoder optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
-    num_steps: int = 128
+    num_steps: int = 256
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = False
     """Toggle learning rate annealing for policy and value networks"""
@@ -145,12 +145,12 @@ class Args:
     update_proportion: float = 0.25
     """proportion of exp used for predictor update"""
     int_coef: float = 1.0
-    """coefficient of extrinsic reward"""
-    ext_coef: float = 2.0
     """coefficient of intrinsic reward"""
+    ext_coef: float = 2.0
+    """coefficient of extrinsic reward"""
     int_gamma: float = 0.99
     """Intrinsic reward discount rate"""
-    num_iterations_obs_norm_init: int = 50
+    num_iterations_obs_norm_init: int = 10
     """number of iterations to initialize the observations normalization parameters"""
 
     # to be filled in runtime
@@ -294,18 +294,6 @@ class RewardForwardFilter:
         return self.rewems
 
 
-def virtual_frame_stack(arr: np.ndarray) -> np.ndarray:
-    return arr
-
-    expected_shape = (1, OBS_H, OBS_W)
-    assert arr.shape == expected_shape, f"Unexpected input shape: {arr.shape} != {expected_shape}"
-
-    if isinstance(arr, torch.Tensor):
-        return arr.repeat(4, 1, 1).unsqueeze(0)
-    else:
-        return np.repeat(arr[np.newaxis, ...], 4, axis=1)
-
-
 def main():
     args = tyro.cli(Args)
 
@@ -418,8 +406,6 @@ def main():
 
     # Virtual frame stack: repeat 4 times
     print(f"INIT NEXT OBS: {next_obs.shape}")
-    next_obs = virtual_frame_stack(next_obs)
-    print(f"INIT NEXT OBS AFTER FRAME STACK: {next_obs.shape}")
 
     next_obs = torch.Tensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
@@ -432,9 +418,6 @@ def main():
     for step in range(args.num_steps * args.num_iterations_obs_norm_init):
         acs = np.random.randint(0, envs.single_action_space.n, size=(args.num_envs,))
         s, _reward, d, _truncated, _info = envs.step(acs)
-
-        # Virtual frame stack: repeat 4
-        s = virtual_frame_stack(s)
 
         if False:
             print(f"NEXT OBS: {next_obs.shape}")
@@ -505,10 +488,6 @@ def main():
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, done, _truncated, info = envs.step(action.cpu().numpy())
-
-            # Virtual frame stack: repeat 4
-            next_obs = virtual_frame_stack(next_obs)
-
             rewards[step] = torch.tensor(reward, dtype=torch.float32).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
 

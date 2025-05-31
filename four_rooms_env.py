@@ -174,7 +174,7 @@ class FourRoomsEnv(gym.Env):
         self._goal_pos = np.array((50, 0))
 
         # Agent init.
-        self._grid_counts = np.zeros((51, 51), dtype=np.int64)
+        self._grid_counts = np.zeros((51, 51), dtype=np.float32)
         self._agent_pos = self._start_pos
 
         if False:
@@ -195,47 +195,69 @@ class FourRoomsEnv(gym.Env):
             for (r, c) in [(0, 0), (0, 50), (50, 0), (50, 50)]:
                 print(f"  {r},{c}: {self._grid_walls[r,c]}")
 
-
+        self._debug_grid_static_parts = None
 
     def get_debug_obs(self) -> NdArrayRGB8:
-        # Normalize grid counts to range (0, 255).
-        grid_f = self._grid_counts.astype(np.float32)
-        grid_rgba_f = self.viridis(grid_f / grid_f.max())
-        grid_rgb = (grid_rgba_f[..., :3] * 255).astype(np.uint8)
+        # Build static display info.
+        if self._debug_grid_static_parts is None:
+            grid_static_rgb = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
 
-        # Set unexplored spaces as white.
-        # grid_rgb[self._grid_counts == 0] = 255
+            # Set unexplored spaces as white.
+            # grid_static_rgb[self._grid_counts == 0] = 255
 
-        # Set unexplored spaces as black.
-        grid_rgb[self._grid_counts == 0] = 0
+            # Set unexplored spaces as black.
+            grid_static_rgb[self._grid_counts == 0] = 0
 
-        # Goal in blue.
-        goal_r, goal_c = self._goal_pos
-        grid_rgb[goal_r, goal_c, :] = (0, 0, 255)
+            # Goal in blue.
+            goal_r, goal_c = self._goal_pos
+            grid_static_rgb[goal_r, goal_c, :] = (0, 0, 255)
 
-        # DEBUG POSITIONS IN BLUE
+            # DEBUG POSITIONS IN BLUE
+            if False:
+                grid_static_rgb[0, 0] = (0, 0, 255)
+                grid_static_rgb[0, 50] = (0, 0, 255)
+                grid_static_rgb[50, 0] = (0, 0, 255)
+                grid_static_rgb[50, 50] = (0, 0, 255)
+
+            # Draw walls as green.
+            if False:
+                for r, row in enumerate(self._grid_walls):
+                    for c, is_wall in enumerate(row):
+                        if is_wall:
+                            grid_static_rgb[r, c, :] = [0, 255, 0]
+
+                print(f"SCREEN VIEW SHAPE: {grid_static_rgb.shape}")
+
+            if True:
+                grid_static_rgb[self._grid_walls == WALL] = [0, 255, 0]
+
+            self._debug_grid_static_parts = grid_static_rgb
+            self._debug_grid_mask = ~np.all(grid_static_rgb == 0, axis=2)
+            self._debug_grid_static_parts_masked = grid_static_rgb[self._debug_grid_mask]
+
+
+        if _USE_VIRIDIS := True:
+            # Normalize grid counts to range (0, 255).
+            grid_f = self._grid_counts.astype(np.float32)
+            grid_rgba_f = self.viridis(grid_f / grid_f.max())
+            grid_rgb = (grid_rgba_f[..., :3] * 255).astype(np.uint8)
+        else:
+            # Normalize grid counts to range (0, 255).
+            grid_f = self._grid_counts.astype(np.float32)
+            grid_g = (grid_f / grid_f.max() * 255).astype(np.uint8)
+            grid_rgb = np.stack([grid_g]*3, axis=-1)
+
+
         if False:
-            grid_rgb[0, 0] = (0, 0, 255)
-            grid_rgb[0, 50] = (0, 0, 255)
-            grid_rgb[50, 0] = (0, 0, 255)
-            grid_rgb[50, 50] = (0, 0, 255)
+            print(f"STATIC _debug_grid_static_parts: {self._debug_grid_static_parts.shape}")
+            print(f"STATIC _debug_grid_mask: {self._debug_grid_mask.shape}")
+            print(f"STATIC _debug_grid_static_parts_masked: {self._debug_grid_static_parts_masked.shape}")
+            print(f"grid_rgb: {grid_rgb.shape}")
+
+        grid_rgb[self._debug_grid_mask] = self._debug_grid_static_parts_masked
 
         # Repeat for RGB.
         screen_view_np = grid_rgb
-        # screen_view_np = np.stack([grid_gray]*3, axis=-1)
-        # screen_view_np = np.repeat(grid_gray[..., np.newaxis], 3, axis=-1)
-
-        # Draw walls as green.
-        if False:
-            for r, row in enumerate(self._grid_walls):
-                for c, is_wall in enumerate(row):
-                    if is_wall:
-                        screen_view_np[r, c, :] = [0, 255, 0]
-
-            print(f"SCREEN VIEW SHAPE: {screen_view_np.shape}")
-
-        if True:
-            screen_view_np[self._grid_walls == WALL] = [0, 255, 0]
 
         # Draw agent as red.
         agent_r, agent_c = self._agent_pos
