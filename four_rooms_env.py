@@ -197,6 +197,11 @@ class FourRoomsEnv(gym.Env):
 
         self._debug_grid_static_parts = None
 
+        self._info = {
+            "episodic_return": 0,
+            "episodic_length": 0,
+        }
+
     def get_debug_obs(self) -> NdArrayRGB8:
         # Build static display info.
         if self._debug_grid_static_parts is None:
@@ -295,12 +300,16 @@ class FourRoomsEnv(gym.Env):
         #         self._agent_location - self._target_location, ord=1
         #     )
         # }
-        return {}
+        return self._info
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         # Reset to starting point, top right.
         self._grid_counts = np.zeros((SCREEN_H, SCREEN_W), dtype=np.int64)
         self._agent_pos = self._start_pos
+        self._info = {
+            "episodic_return": 0,
+            "episodic_length": 0,
+        }
 
         # Get initial values.
         observation = self._get_obs()
@@ -344,6 +353,9 @@ class FourRoomsEnv(gym.Env):
             at_goal = False
 
         reward = 0.0 if at_goal else -1.0
+
+        self._info["episodic_length"] += 1
+        self._info["episodic_return"] += reward
 
         # print(f"REWARD: {reward}")
 

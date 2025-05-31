@@ -512,8 +512,7 @@ def main():
             curiosity_rewards[step] = ((target_next_feature - predict_next_feature).pow(2).sum(1) / 2).data
             for idx, d in enumerate(done):
                 if d:
-                    #episodic_return = info["r"][idx]
-                    episodic_return = 0
+                    episodic_return = info["episodic_return"][idx]
 
                     avg_returns.append(episodic_return)
                     epi_ret = np.average(avg_returns)
@@ -527,7 +526,7 @@ def main():
                         curiosity_rewards[step][idx],
                         global_step,
                     )
-                    writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
+                    writer.add_scalar("charts/episodic_length", info["episodic_length"][idx], global_step)
 
         curiosity_reward_per_env = np.array(
             [discounted_reward.update(reward_per_step) for reward_per_step in curiosity_rewards.cpu().data.numpy().T]
