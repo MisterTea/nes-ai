@@ -108,7 +108,7 @@ SCREEN_H = 51
 EMPTY = 0
 WALL = 1
 
-OBS_W, OBS_H = 84, 84
+OBS_W, OBS_H = 7, 7
 
 
 

@@ -186,14 +186,8 @@ class Agent(nn.Module):
     def __init__(self, envs):
         super().__init__()
         self.network = nn.Sequential(
-            layer_init(nn.Conv2d(4, 32, 8, stride=4)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
-            nn.ReLU(),
-            nn.Flatten(),
-            layer_init(nn.Linear(64 * 7 * 7, 256)),
+            nn.Flatten(),                     # (batch, 7, 7) -> (batch, 49)
+            layer_init(nn.Linear(196, 256)),
             nn.ReLU(),
             layer_init(nn.Linear(256, 448)),
             nn.ReLU(),
@@ -252,17 +246,14 @@ class RNDModel(nn.Module):
         self.input_size = input_size
         self.output_size = output_size
 
-        feature_output = 7 * 7 * 64
+        feature_output = 256
 
         # Prediction network
         self.predictor = nn.Sequential(
-            layer_init(nn.Conv2d(in_channels=1, out_channels=32, kernel_size=8, stride=4)),
-            nn.LeakyReLU(),
-            layer_init(nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2)),
-            nn.LeakyReLU(),
-            layer_init(nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1)),
-            nn.LeakyReLU(),
-            nn.Flatten(),
+            nn.Flatten(),                     # (batch, 7, 7) -> (batch, 49)
+            layer_init(nn.Linear(49, 256)),
+            nn.ReLU(),
+
             layer_init(nn.Linear(feature_output, 512)),
             nn.ReLU(),
             layer_init(nn.Linear(512, 512)),
@@ -272,13 +263,10 @@ class RNDModel(nn.Module):
 
         # Target network
         self.target = nn.Sequential(
-            layer_init(nn.Conv2d(in_channels=1, out_channels=32, kernel_size=8, stride=4)),
-            nn.LeakyReLU(),
-            layer_init(nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2)),
-            nn.LeakyReLU(),
-            layer_init(nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1)),
-            nn.LeakyReLU(),
-            nn.Flatten(),
+            nn.Flatten(),                     # (batch, 7, 7) -> (batch, 49)
+            layer_init(nn.Linear(49, 256)),
+            nn.ReLU(),
+
             layer_init(nn.Linear(feature_output, 512)),
         )
 
