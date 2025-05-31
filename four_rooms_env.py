@@ -123,7 +123,6 @@ class FourRoomsEnv(gym.Env):
     ):
         self.render_mode = render_mode
 
-        # self.action_space = gym.spaces.Discrete(len(SIMPLE_MOVEMENT))
         self.action_space = gym.spaces.Discrete(len(SIMPLE_MOVEMENT))
 
         self.observation_space = gym.spaces.Box(low=0, high=255, shape=(OBS_W, OBS_H), dtype=np.uint8)

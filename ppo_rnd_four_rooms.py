@@ -170,7 +170,7 @@ def make_env(env_id, idx, capture_video, run_name):
         else:
             env = gym.make(env_id, render_mode="human")
         env = gym.wrappers.RecordEpisodeStatistics(env)
-        env = gym.wrappers.FrameStackObservation(env, 4)
+        env = gym.wrappers.FrameStackObservation(env, 1)
         return env
 
     return thunk
@@ -187,7 +187,7 @@ class Agent(nn.Module):
         super().__init__()
         self.network = nn.Sequential(
             nn.Flatten(),                     # (batch, 7, 7) -> (batch, 49)
-            layer_init(nn.Linear(196, 256)),
+            layer_init(nn.Linear(49, 256)),
             nn.ReLU(),
             layer_init(nn.Linear(256, 448)),
             nn.ReLU(),
@@ -438,9 +438,9 @@ def main():
 
         if False:
             print(f"NEXT OBS: {next_obs.shape}")
-            # print(f"NEXT OBS RESHAPED: {next_obs[:, 3, :, :].reshape(args.num_envs, 1, OBS_H, OBS_W) }")
+            # print(f"NEXT OBS RESHAPED: {next_obs[:, -1, :, :].reshape(args.num_envs, 1, OBS_H, OBS_W) }")
 
-        reshaped_ob = s[:, 3, :, :].reshape([-1, 1, OBS_H, OBS_W]).tolist()
+        reshaped_ob = s[:, -1, :, :].reshape([-1, 1, OBS_H, OBS_W]).tolist()
 
         next_ob += reshaped_ob
 
@@ -514,9 +514,9 @@ def main():
 
             if False:
                 print(f"NEXT OBS: {next_obs.shape}")
-                print(f"NEXT OBS RESHAPED: {next_obs[:, 3, :, :].reshape(args.num_envs, 1, OBS_H, OBS_W) }")
+                print(f"NEXT OBS RESHAPED: {next_obs[:, -1, :, :].reshape(args.num_envs, 1, OBS_H, OBS_W) }")
 
-            rehsaped_obs = next_obs[:, 3, :, :].reshape(args.num_envs, 1, OBS_H, OBS_W)
+            rehsaped_obs = next_obs[:, -1, :, :].reshape(args.num_envs, 1, OBS_H, OBS_W)
 
             rnd_next_obs = (
                 (
@@ -532,14 +532,17 @@ def main():
             predict_next_feature = rnd_model.predictor(rnd_next_obs)
             curiosity_rewards[step] = ((target_next_feature - predict_next_feature).pow(2).sum(1) / 2).data
             for idx, d in enumerate(done):
-                if d and info["lives"][idx] == 0:
-                    avg_returns.append(info["r"][idx])
+                if d:
+                    #episodic_return = info["r"][idx]
+                    episodic_return = 0
+
+                    avg_returns.append(episodic_return)
                     epi_ret = np.average(avg_returns)
                     print(
-                        f"global_step={global_step}, episodic_return={info['r'][idx]}, curiosity_reward={np.mean(curiosity_rewards[step].cpu().numpy())}"
+                        f"global_step={global_step}, episodic_return={episodic_return}, curiosity_reward={np.mean(curiosity_rewards[step].cpu().numpy())}"
                     )
                     writer.add_scalar("charts/avg_episodic_return", epi_ret, global_step)
-                    writer.add_scalar("charts/episodic_return", info["r"][idx], global_step)
+                    writer.add_scalar("charts/episodic_return", episodic_return, global_step)
                     writer.add_scalar(
                         "charts/episode_curiosity_reward",
                         curiosity_rewards[step][idx],
@@ -606,7 +609,7 @@ def main():
 
             b_advantages = b_int_advantages * args.int_coef + b_ext_advantages * args.ext_coef
 
-            reshaped_b_obs = b_obs[:, 3, :, :].reshape(-1, 1, OBS_H, OBS_W)
+            reshaped_b_obs = b_obs[:, -1, :, :].reshape(-1, 1, OBS_H, OBS_W)
 
             obs_rms.update(reshaped_b_obs.cpu().numpy())
 
@@ -616,7 +619,7 @@ def main():
             # Optimizing the policy and value network
             b_inds = np.arange(args.batch_size)
 
-            reshaped_rnd_next_obs = b_obs[:, 3, :, :].reshape(-1, 1, OBS_H, OBS_W)
+            reshaped_rnd_next_obs = b_obs[:, -1, :, :].reshape(-1, 1, OBS_H, OBS_W)
 
             rnd_next_obs = (
                 (
