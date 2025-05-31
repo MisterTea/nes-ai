@@ -20,7 +20,7 @@ import tyro
 from gym.wrappers.normalize import RunningMeanStd
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
-from four_rooms_env import FourRoomsEnv
+from four_rooms_env import OBS_W, OBS_H, FourRoomsEnv
 
 from gymnasium.envs.registration import register
 
@@ -209,21 +209,23 @@ class Agent(nn.Module):
         self.critic_int = layer_init(nn.Linear(448, 1), std=0.01)
 
     def get_action_and_value(self, x, action=None):
-        print(f"get_action_and_value: dtype={x.dtype} min={x.min()} max={x.max()}")
-        assert not torch.isnan(x).any(), "Observation has NaNs!"
+        if False:
+            print(f"get_action_and_value: dtype={x.dtype} min={x.min()} max={x.max()}")
+            assert not torch.isnan(x).any(), "Observation has NaNs!"
 
         hidden = self.network(x / 255.0)
 
-        print("Hidden min:", hidden.min().item(), "max:", hidden.max().item(), "any nan:", torch.isnan(hidden).any().item())
+        if False:
+            print("Hidden min:", hidden.min().item(), "max:", hidden.max().item(), "any nan:", torch.isnan(hidden).any().item())
 
         logits = self.actor(hidden)
 
-        print("Actor logits min:", logits.min().item(), "max:", logits.max().item(), "any nan:", torch.isnan(logits).any().item())
+        if False:
+            print("Actor logits min:", logits.min().item(), "max:", logits.max().item(), "any nan:", torch.isnan(logits).any().item())
 
-        for name, param in self.actor.named_parameters():
-            if torch.isnan(param).any():
-                print(f"NaN detected in actor parameter: {name}")
-
+            for name, param in self.actor.named_parameters():
+                if torch.isnan(param).any():
+                    print(f"NaN detected in actor parameter: {name}")
 
         probs = Categorical(logits=logits)
         features = self.extra_layer(hidden)
@@ -302,11 +304,6 @@ class RewardForwardFilter:
         else:
             self.rewems = self.rewems * self.gamma + rews
         return self.rewems
-
-
-SCREEN_W, SCREEN_H = 51, 51
-
-OBS_W, OBS_H = 84, 84
 
 
 def virtual_frame_stack(arr: np.ndarray) -> np.ndarray:
@@ -503,9 +500,11 @@ def main():
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                print(f"UPDATE: {update} STEP: {step}")
-                print(f"OBS SHAPE: {obs.shape} min={obs.min()} max={obs.max()}")
-                print(f"OBS[step] SHAPE: {obs[step].shape} min={obs[step].min()} max={obs[step].max()}")
+                if False:
+                    print(f"UPDATE: {update} STEP: {step}")
+                    print(f"OBS SHAPE: {obs.shape} min={obs.min()} max={obs.max()}")
+                    print(f"OBS[step] SHAPE: {obs[step].shape} min={obs[step].min()} max={obs[step].max()}")
+
                 value_ext, value_int = agent.get_value(obs[step])
                 ext_values[step], int_values[step] = (
                     value_ext.flatten(),
@@ -538,7 +537,7 @@ def main():
                 ).clip(-5, 5)
             ).float()
 
-            if True:
+            if False:
                 print(f"rnd_next_obs: {rnd_next_obs.shape} has_nan: {torch.isnan(rnd_next_obs).any()}")
 
             target_next_feature = rnd_model.target(rnd_next_obs)
@@ -658,7 +657,7 @@ def main():
                         mask.sum(), torch.tensor([1], device=device, dtype=torch.float32)
                     )
 
-                    if True:
+                    if False:
                         print(f"get_action_and_value, b_obs[0].shape: {b_obs[0].shape}")
                         assert not torch.isnan(b_obs[mb_inds].any()), "Found nans!"
 
@@ -694,7 +693,8 @@ def main():
                     pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
                     pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                    print(f"PG LOSS VALUES: pg_loss={pg_loss} pg_loss1={pg_loss1} pg_loss2={pg_loss2} mb_advantages: {mb_advantages}")
+                    if False:
+                        print(f"PG LOSS VALUES: pg_loss={pg_loss} pg_loss1={pg_loss1} pg_loss2={pg_loss2} mb_advantages: {mb_advantages}")
 
                     # Value loss
                     new_ext_values, new_int_values = new_ext_values.view(-1), new_int_values.view(-1)
@@ -716,8 +716,8 @@ def main():
                     entropy_loss = entropy.mean()
                     loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef + forward_loss
 
-
-                    print(f"LOSS VALUES: loss={loss} pg_loss={pg_loss} entropy_loss={entropy_loss} v_loss={v_loss} forward_loss={forward_loss}")
+                    if False:
+                        print(f"LOSS VALUES: loss={loss} pg_loss={pg_loss} entropy_loss={entropy_loss} v_loss={v_loss} forward_loss={forward_loss}")
 
                     optimizer.zero_grad()
                     loss.backward()

@@ -127,8 +127,6 @@ class FourRoomsEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(len(SIMPLE_MOVEMENT))
 
         self.observation_space = gym.spaces.Box(low=0, high=255, shape=(OBS_W, OBS_H), dtype=np.uint8)
-        # self.observation_space = gym.spaces.Box(low=0, high=255, shape=(84, 84), dtype=np.uint8)
-        #self.observation_space = gym.spaces.Box(low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8)
         #self.observation_space = gym.spaces.MultiDiscrete([SCREEN_H, SCREEN_W]) # Box(low=0, high=255, shape=(SCREEN_W, SCREEN_H, 3), dtype=np.uint8)
 
         self.screen = SimpleScreenRxC((SCREEN_W, SCREEN_H), scale=5, rows=screen_rc[0], cols=screen_rc[1])
@@ -252,8 +250,8 @@ class FourRoomsEnv(gym.Env):
 
     def _get_obs(self) -> NdArrayRGB8:
         # Get a grayscale grid around the agent position.
-        #obs = np.zeros((OBS_W, OBS_H), dtype=np.uint8)
-        obs = np.zeros((84, 84), dtype=np.uint8)
+        obs = np.zeros((OBS_W, OBS_H), dtype=np.uint8)
+        center_x, center_y = OBS_W//2, OBS_H//2
 
         for j in range(-3, 3):
             for i in range(-3, 3):
@@ -263,11 +261,7 @@ class FourRoomsEnv(gym.Env):
                     continue
 
                 #obs[j+3, i+3] = self._grid_walls[r, c] * 255
-                obs[j+42, i+42] = self._grid_walls[r, c] * 255
-
-        # Repeat channels.
-        # obs_rgb = np.stack([obs]*3, axis=-1).transpose((2, 0, 1))
-        # return obs_rgb
+                obs[j+center_x, i+center_y] = self._grid_walls[r, c] * 255
 
         assert not np.isnan(obs).any(), "Observation has NaNs!"
 
