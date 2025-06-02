@@ -16,7 +16,7 @@ import tyro
 
 from torch.utils.tensorboard import SummaryWriter
 
-from super_mario_env_search import SuperMarioEnv, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses
+from super_mario_env_search import SuperMarioEnv, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses, get_time_left
 
 from gymnasium.envs.registration import register
 
@@ -122,6 +122,25 @@ def _seconds_to_hms(seconds):
     return f"{int(hours):02}:{int(minutes):02}:{int(secs):02}"
 
 
+def _print_saves_list(saves: list[SaveInfo]):
+    # Determine hyperbolic weighting as a multiple of the first weight.
+    N = len(saves)
+    indices = np.arange(N)
+    c = 1.0
+    hyperbolic_weights = 1.0 / (N - indices + c)
+    hyperbolic_weights /= hyperbolic_weights[0]
+
+    # Print bottom-10 and top-10 saves.
+    for s, w in zip(saves[:10], hyperbolic_weights[:10]):
+        print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id}")
+
+    num_top = min(len(saves) - 10, 10)
+    if num_top > 0:
+        print('  ...')
+        for s, w in zip(saves[-num_top:], hyperbolic_weights[-num_top:]):
+            print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id}")
+
+
 def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
     # Uniform random
     # return random.choice(saves)
@@ -141,9 +160,14 @@ def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
     return sample
 
 
-def _flip_buttons(controller_presses: NdArrayUint8, flip_prob: float) -> NdArrayUint8:
+def _flip_buttons(controller_presses: NdArrayUint8, flip_prob: float, ignore_button_mask: NdArrayUint8) -> NdArrayUint8:
     flip_mask = np.random.rand(8) < flip_prob   # True where we want to flip
-    return np.where(flip_mask, 1 - controller_presses, controller_presses)
+    flip_mask[ignore_button_mask] = 0
+    result = np.where(flip_mask, 1 - controller_presses, controller_presses)
+    return result
+
+
+_MASK_START_AND_SELECT = _to_controller_presses(['start', 'select']).astype(bool)
 
 
 def main():
@@ -196,7 +220,6 @@ def main():
     )
 
     first_env = envs.envs[0].unwrapped
-    nes = first_env.unwrapped.nes
     nes = first_env.nes
 
     # Global state.
@@ -231,13 +254,15 @@ def main():
         visited_patches=visited_patches.copy(),
     )]
     next_save_id += 1
+    last_save_x = x
+    force_terminate = False
 
     while True:
         # Remember previous states.
         prev_level = level
 
         # Select an action, save in action history.
-        controller = _flip_buttons(controller, flip_prob=0.05)
+        controller = _flip_buttons(controller, flip_prob=0.05, ignore_button_mask=_MASK_START_AND_SELECT)
 
         # Execute action.
         _next_obs, reward, termination, truncation, info = envs.step((controller,))
@@ -253,7 +278,7 @@ def main():
         action_history.append(controller)
 
         # If we died, reload from a gamestate based on recency heuristic.
-        if termination:
+        if termination or force_terminate:
             # Step again so that the environment reset happens before we load.
             envs.step((controller,))
 
@@ -275,46 +300,66 @@ def main():
             x = get_x_pos(ram)
             y = get_y_pos(ram)
 
-
-            # Determine hyperbolic weighting as a multiple of the first weight.
-            N = len(saves)
-            indices = np.arange(N)
-            c = 1.0
-            hyperbolic_weights = 1.0 / (N - indices + c)
-            hyperbolic_weights /= hyperbolic_weights[0]
-
-            print(f"Loaded save: save_id={save_info.save_id} level={world}-{level} x={x} y={y}")
-
-            # Print bottom-10 and top-10 saves.
-            for s, w in zip(saves[:10], hyperbolic_weights[:10]):
-                print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id} save={id(s.save_state)}")
-
-            num_top = min(len(saves) - 10, 10)
-            if num_top > 0:
-                print('  ...')
-                for s, w in zip(saves[-num_top:], hyperbolic_weights[-num_top:]):
-                    print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id} save={id(s.save_state)}")
-
             prev_level = level
+            last_save_x = x
+
+            if True:
+                print(f"Loaded save: save_id={save_info.save_id} level={world}-{level} x={x} y={y}")
+                _print_saves_list(saves)
+
+            force_terminate = False
 
         # If we made progress, save state.
         #   * Assign (level, x, y) patch position to save state.
         #   * Add state to buffer, with vector-time (number of total actions taken)
         else:
+            # If time left is too short, this creates a bad feedback loop because we can keep
+            # dying due to timer.  That would encourage the agent to finish quick, but it may not
+            # be possible to actually finish.
+            #
+            # We use some domain-specific knowledge here that all levels are about 3000-4000 units.
+            # If we assume that we can clear 4000 units in 400 timer ticks, then that means we need
+            # about 10 units/tick.  If we're too far behind this ratio, avoid saving based on time.
+            #
+            # For example, level 1-1 starts with 401 ticks (approx seconds) and is 3266 position
+            # units long.  The minimum rate at which we can cover ground is 3266 units in 401 ticks,
+            # or 3266/401 (8.1).  If we're under this ratio, we won't be able to finish the level.
+            #
+            # To get the ratio of our advancement, we actually want the number of ticks used, not the
+            # number of ticks left.  We assume that all levels have 401 ticks total.
+            #
+            # Here are some sample numbers:
+            #   3266 units / 401 ticks used ->  8.1 units/tick (min)
+            #   3266 units / 200 ticks used -> 16.3 units/tick (twice normal rate, good)
+            #    100 units /  20 ticks used ->  5.0 units/tick (bad, too slow)
+            #    100 units / 100 ticks used ->  1.0 units/tick (bad, too slow)
+
+            ticks_left = get_time_left(ram)
+            ticks_used = max(1, 400 - ticks_left)
+
+            distance = x - last_save_x
+            distance_per_tick = x / ticks_used
+            min_distance_per_tick = 3266 / 400 * 0.5
+
             patch_id = (world, level, x // 50, y // 50)
 
             if patch_id not in visited_patches:
-                saves.append(SaveInfo(
-                    save_id=next_save_id,
-                    x=x,
-                    y=y,
-                    level=level,
-                    world=world,
-                    save_state=nes.save(),
-                    visited_patches=visited_patches.copy(),
-                ))
-                next_save_id += 1
-                visited_patches.add(patch_id)
+                if distance_per_tick >= min_distance_per_tick:
+                    saves.append(SaveInfo(
+                        save_id=next_save_id,
+                        x=x,
+                        y=y,
+                        level=level,
+                        world=world,
+                        save_state=nes.save(),
+                        visited_patches=visited_patches.copy(),
+                    ))
+                    next_save_id += 1
+                    last_save_x = x
+                    visited_patches.add(patch_id)
+                else:
+                    print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick:.4f}")
+                    force_terminate = True
 
             patches_histogram[patch_id] += 1
 
@@ -344,7 +389,7 @@ def main():
         #   * Novel states/sec
         now = time.time()
         if now - last_print_time > 1.0:
-            print(f"{_seconds_to_hms(now-start_time)} states={len(saves)} level={world}-{level} x={x} y={y} visited={len(visited_patches)})")
+            print(f"{_seconds_to_hms(now-start_time)} states={len(saves)} level={world}-{level} x={x} y={y} visited={len(visited_patches)}")
             last_print_time = now
 
         step += 1

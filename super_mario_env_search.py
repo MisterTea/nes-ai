@@ -45,33 +45,6 @@ def _to_controller_presses(buttons: list[str]) -> NdArrayUint8:
         is_pressed[button_index] = 1
     return is_pressed
 
-CONTROLLER_NOOP = _to_controller_presses([])
-
-
-# Action spaces adapted from:
-# https://github.com/Kautenja/gym-super-mario-bros/blob/master/gym_super_mario_bros/actions.py
-# venv/lib/python3.11/site-packages/gym_super_mario_bros/actions.py
-
-# actions for the simple run right environment
-RIGHT_ONLY = [
-    [],
-    ['right'],
-    ['right', 'a'],
-    ['right', 'b'],
-    ['right', 'a', 'b'],
-]
-
-
-# actions for very simple movement
-SIMPLE_MOVEMENT = [
-    [],
-    ['right'],
-    ['right', 'a'],
-    ['right', 'b'],
-    ['right', 'a', 'b'],
-    ['a'],
-    ['left'],
-]
 
 SCREEN_W = 240
 SCREEN_H = 224
@@ -327,11 +300,6 @@ class SuperMarioEnv(gym.Env):
         self.screen = SimpleScreenRxC((SCREEN_W, SCREEN_H), scale=1, rows=screen_rc[0], cols=screen_rc[1])
 
         self.clock = None
-
-        self.action_controller_presses = [
-            _to_controller_presses(buttons)
-            for buttons in SIMPLE_MOVEMENT
-        ]
 
         self.action_space = gym.spaces.MultiBinary(8)
 
