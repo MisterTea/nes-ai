@@ -154,13 +154,35 @@ def _weight_hyperbolic(N: int) -> np.array:
 
     return weights
 
+PATCH_SIZE = 20
+
 
 def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
-    # Uniform random
-    # return random.choice(saves)
+    if False:
+        # Uniform random
+        # return random.choice(saves)
 
-    weights = _weight_hyperbolic(len(saves))
-    sample = np.random.choice(saves, p=weights)
+        weights = _weight_hyperbolic(len(saves))
+        sample = np.random.choice(saves, p=weights)
+
+    if True:
+        # Cluster patches.
+        saves_by_patch = {}
+        for s in saves:
+            patchx_id = (s.world, s.level, s.x // PATCH_SIZE)
+            saves_by_patch.setdefault(patchx_id, []).append(s)
+
+        # Select a patch location.
+        patches = sorted(saves_by_patch.keys())
+
+        # Choose hyperbolically across x dimension.
+        weights = _weight_hyperbolic(len(patches))
+        patch_indices = np.arange(len(patches))
+        chosen_patch_index = np.random.choice(patch_indices, p=weights)
+        chosen_patch = patches[chosen_patch_index]
+
+        # Choose uniformly across y dimension.
+        sample = random.choice(saves_by_patch[chosen_patch])
 
     return sample
 
@@ -346,7 +368,7 @@ def main():
             distance_per_tick = x / ticks_used
             min_distance_per_tick = 3266 / 400 * 0.5
 
-            patch_id = (world, level, x // 50, y // 50)
+            patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
             if distance_per_tick < min_distance_per_tick:
                 print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick:.4f}")
