@@ -12,38 +12,11 @@ from PIL import Image
 from nes import NES, SYNC_NONE, SYNC_PYGAME
 from nes_ai.ai.base import RewardIndex, RewardMap, compute_reward_map, get_level, get_time_left, get_world
 
+from super_mario_env import _skip_start_screen, _describe_controller_vector, _to_controller_presses
 from super_mario_env_ram_hacks import _skip_change_area, _skip_occupied_states, skip_after_step, life
 
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 NdArrayRGB8 = np.ndarray[tuple[Literal[4]], np.dtype[np.uint8]]
-
-
-# From: nes/peripherals.py:323:
-#   self.is_pressed[self.A] = int(state[self.A])
-#   self.is_pressed[self.B] = int(state[self.B])
-#   self.is_pressed[self.SELECT] = int(state[self.SELECT])
-#   self.is_pressed[self.START] = int(state[self.START])
-#   self.is_pressed[self.UP] = int(state[self.UP])
-#   self.is_pressed[self.DOWN] = int(state[self.DOWN])
-#   self.is_pressed[self.LEFT] = int(state[self.LEFT])
-#   self.is_pressed[self.RIGHT] = int(state[self.RIGHT])
-CONTROLLER_STATE_DESC = ["A", "B", "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT"]
-
-def _describe_controller_vector(is_pressed: NdArrayUint8) -> str:
-    pressed = [
-        desc
-        for is_button_pressed, desc in zip(is_pressed, CONTROLLER_STATE_DESC)
-        if is_button_pressed
-    ]
-    return str(pressed)
-
-
-def _to_controller_presses(buttons: list[str]) -> NdArrayUint8:
-    is_pressed = np.zeros(8, dtype=np.uint8)
-    for button in buttons:
-        button_index = CONTROLLER_STATE_DESC.index(button.upper())
-        is_pressed[button_index] = 1
-    return is_pressed
 
 
 SCREEN_W = 240
@@ -222,58 +195,6 @@ class SimpleScreenRxC:
             pygame.quit()
 
 
-_DEBUG_LEVEL_START = False
-
-def _debug_level_from_ram(ram: NdArrayUint8, frame_num: int, desc: str):
-    if not _DEBUG_LEVEL_START:
-        return
-
-    level = ram[0x0760]
-    game_mode = ram[0x0770]
-    prelevel = ram[0x075E]
-    prelevel_timer = ram[0x07A0]
-    level_entry = ram[0x0752]
-    before_level_load = ram[0x0753]
-    level_loading = ram[0x0772]
-    print(f"{desc}: frame={frame_num} {level=} {game_mode=} {prelevel=} {prelevel_timer=} {level_entry=} {before_level_load=} {level_loading=}")
-
-
-def _skip_start_screen(nes: Any):
-    ram = nes.ram()
-
-    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="RUNNING GAME START")
-
-    # Run frames until start screen.
-    # TODO(millman): Not sure why this is 34 frames?  Found by binary searching until this worked.
-    # for i in range(34):
-    for i in range(40):
-       nes.run_frame()
-
-    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="BEFORE START PRESSED")
-
-    # Press start.
-    nes.controller1.set_state(_to_controller_presses(['start']))
-
-    # Run one frame.
-    nes.run_frame()
-
-    # Make sure "game mode" is set to "normal".
-    game_mode = ram[0x0770]
-    assert game_mode == 1, f"Unexpected game mode (0=demo 1=normal): {game_mode} != 1"
-
-    # Set controller back to no-op.
-    nes.controller1.set_state(_to_controller_presses([]))
-
-    # Skip pre-level stuff.
-    _skip_change_area(ram)
-    _skip_occupied_states(nes)
-
-    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="AFTER START PRESSED")
-
-    # We're now ready to play.
-    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="READY TO PLAY")
-
-
 def get_x_pos(ram: NdArrayUint8) -> int:
     return (int(ram[0x006D]) * 256) + int(ram[0x0086])
 
@@ -290,6 +211,7 @@ class SuperMarioEnv(gym.Env):
         render_mode: str | None = None,
         render_fps: int | None = None,
         screen_rc: tuple[int, int] = (1, 1),
+        world_level: tuple[int, int] | None = None,
     ):
         self.resets = 0
 
@@ -341,7 +263,7 @@ class SuperMarioEnv(gym.Env):
         self.nes.run_init()
 
         # Skip start screen.
-        _skip_start_screen(self.nes)
+        _skip_start_screen(self.nes, world_level=world_level)
 
         # Save a snapshot to restore on next calls to reset.
         self.start_state = self.nes.save()

@@ -12,7 +12,7 @@ from PIL import Image
 from nes import NES, SYNC_NONE, SYNC_PYGAME
 from nes_ai.ai.base import RewardIndex, RewardMap, compute_reward_map, get_level, get_time_left, get_world
 
-from super_mario_env_ram_hacks import _skip_change_area, _skip_occupied_states, skip_after_step, life
+from super_mario_env_ram_hacks import _skip_change_area, _skip_occupied_states, skip_after_step, life, decode_world_level
 
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 NdArrayRGB8 = np.ndarray[tuple[Literal[4]], np.dtype[np.uint8]]
@@ -301,44 +301,98 @@ class SimpleScreenRxC:
             pygame.quit()
 
 
-_DEBUG_LEVEL_START = False
+_DEBUG_LEVEL_START = True
 
 def _debug_level_from_ram(ram: NdArrayUint8, frame_num: int, desc: str):
     if not _DEBUG_LEVEL_START:
         return
 
-    level = ram[0x0760]
+    level = get_level(ram)
     game_mode = ram[0x0770]
     prelevel = ram[0x075E]
     prelevel_timer = ram[0x07A0]
     level_entry = ram[0x0752]
     before_level_load = ram[0x0753]
     level_loading = ram[0x0772]
-    print(f"{desc}: frame={frame_num} {level=} {game_mode=} {prelevel=} {prelevel_timer=} {level_entry=} {before_level_load=} {level_loading=}")
+
+    world = get_world(ram)
+    level = get_level(ram)
+
+    time_left = get_time_left(ram)
+
+    # print(f"{desc}: frame={frame_num} {world=} {level=} {game_mode=} {prelevel=} {prelevel_timer=} {level_entry=} {before_level_load=} {level_loading=}")
+    print(f"{desc}: frame={frame_num:<4} world={world:<2} level={level:<2} game_mode={game_mode} prelevel={prelevel} prelevel_timer={prelevel_timer:<3} level_entry={level_entry} before_level_load={before_level_load} level_loading={level_loading} time_left={time_left:<3}")
 
 
-def _skip_start_screen(nes: Any):
+def _set_prelevel_timer(ram: NdArrayUint8, time_left: int):
+    ram[0x07A0] = np.uint8(time_left)
+
+
+def _set_world_level(ram: NdArrayUint8, world: int, level: int):
+
+    if True:
+        # Decode levels
+        for w in range(1, 9):
+            for l in range(1, 5):
+                target_world, target_stage, target_level = decode_world_level(w, l, lost_levels=False)
+                print(f"SETTING WORLD LEVEL: {w}-{l} decoded -> {target_world}, {target_stage}, {target_level}")
+
+    target_world, target_stage, target_level = decode_world_level(world, level, lost_levels=False)
+
+    ram[0x075f] = np.uint8(target_world - 1)
+    ram[0x075c] = np.uint8(target_stage - 1)
+    ram[0x0760] = np.uint8(target_level - 1)
+
+
+def _skip_start_screen(nes: Any, world_level: tuple[int, int] | None):
     ram = nes.ram()
 
-    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="RUNNING GAME START")
+    LJUST = 35
+
+    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="RUNNING GAME START".ljust(LJUST))
+
+    # Press and release the start button.
+    nes.controller1.set_state(_to_controller_presses(['start']))
+    nes.run_frame()
+    nes.controller1.set_state(_to_controller_presses([]))
+    nes.run_frame()
+
+    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="AFTER START PRESSED ONCE".ljust(LJUST))
 
     # Run frames until start screen.
-    # TODO(millman): Not sure why this is 34 frames?  Found by binary searching until this worked.
-    # for i in range(34):
-    for i in range(40):
-       nes.run_frame()
+    while get_time_left(ram) == 0:
+        _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="LOOPING BEFORE START PRESSED".ljust(LJUST))
 
-    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="BEFORE START PRESSED")
+        # Press and release start button.
+        nes.controller1.set_state(_to_controller_presses(['start']))
+        nes.run_frame()
+        nes.controller1.set_state(_to_controller_presses([]))
+        nes.run_frame()
 
-    # Press start.
-    nes.controller1.set_state(_to_controller_presses(['start']))
+        # Set target level here.
+        if world_level:
+            world, level = world_level
+            _set_world_level(ram, world, level)
 
-    # Run one frame.
-    nes.run_frame()
+        _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="LOOPING BEFORE PRELEVEL RUNOUT".ljust(LJUST))
+
+        # Run out pre-level timer.
+        _set_prelevel_timer(ram, 0)
+
+        _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="LOOPING AFTER PRELEVEL RUNOUT".ljust(LJUST))
 
     # Make sure "game mode" is set to "normal".
     game_mode = ram[0x0770]
     assert game_mode == 1, f"Unexpected game mode (0=demo 1=normal): {game_mode} != 1"
+
+    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="GAME MODE SET, BEFORE CHANGE AREA".ljust(LJUST))
+
+    if False:
+        # Press start.
+        nes.controller1.set_state(_to_controller_presses(['start']))
+
+        # Run one frame.
+        nes.run_frame()
 
     # Set controller back to no-op.
     nes.controller1.set_state(_to_controller_presses([]))
@@ -347,10 +401,10 @@ def _skip_start_screen(nes: Any):
     _skip_change_area(ram)
     _skip_occupied_states(nes)
 
-    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="AFTER START PRESSED")
+    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="AFTER SKIPPED CHANGE AREA".ljust(LJUST))
 
     # We're now ready to play.
-    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="READY TO PLAY")
+    _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="READY TO PLAY".ljust(LJUST))
 
 
 def _left_pos(ram: NdArrayUint8) -> int:
@@ -475,6 +529,8 @@ class SuperMarioEnv(gym.Env):
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         self.resets += 1
+
+        print("NES RESET CALLED")
 
         # TODO(millman): fix seed, etc.
 

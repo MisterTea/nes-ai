@@ -109,7 +109,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless
             raise RuntimeError("STOP")
         else:
             render_mode = "rgb" if headless else "human"
-            env = gym.make(env_id, render_mode=render_mode)
+            env = gym.make(env_id, render_mode=render_mode, world_level=(4, 4))
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
 
@@ -127,7 +127,7 @@ def _seconds_to_hms(seconds):
 
 def _print_saves_list(saves: list[SaveInfo]):
     # Determine weighting as a multiple of the first weight.
-    weights = _weight_exp(len(saves))
+    weights = _weight_hyperbolic(len(saves))
     weights /= weights[0]
 
     N = 2
@@ -163,7 +163,7 @@ def _weight_exp(N: int, beta: float = 0.3) -> np.array:
     return weights
 
 
-PATCH_SIZE = 40
+PATCH_SIZE = 20
 
 
 def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
@@ -185,7 +185,7 @@ def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
         patches = sorted(saves_by_patch.keys())
 
         # Choose across x dimension.
-        weights = _weight_exp(len(patches))
+        weights = _weight_hyperbolic(len(patches))
         patch_indices = np.arange(len(patches))
         chosen_patch_index = np.random.choice(patch_indices, p=weights)
         chosen_patch = patches[chosen_patch_index]
@@ -411,7 +411,7 @@ def main():
 
             patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
-            if distance_per_tick < min_distance_per_tick:
+            if False: # distance_per_tick < min_distance_per_tick:
                 print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick:.4f}")
                 force_terminate = True
             elif False: # patch_id in visited_patches:
