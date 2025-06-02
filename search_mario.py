@@ -16,7 +16,7 @@ import tyro
 
 from torch.utils.tensorboard import SummaryWriter
 
-from super_mario_env_search import SuperMarioEnv, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses, get_time_left
+from super_mario_env_search import SuperMarioEnv, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses, get_time_left, life
 
 from gymnasium.envs.registration import register
 
@@ -36,6 +36,7 @@ class SaveInfo:
     y: int
     level: int
     world: int
+    level_ticks: int
     save_state: Any
     visited_patches: set
 
@@ -125,20 +126,20 @@ def _seconds_to_hms(seconds):
 
 
 def _print_saves_list(saves: list[SaveInfo]):
-    # Determine hyperbolic weighting as a multiple of the first weight.
-    hyperbolic_weights = _weight_hyperbolic(len(saves))
-    hyperbolic_weights /= hyperbolic_weights[0]
+    # Determine weighting as a multiple of the first weight.
+    weights = _weight_exp(len(saves))
+    weights /= weights[0]
 
     N = 2
 
     # Print bottom-N and top-N saves.
-    for s, w in zip(saves[:N], hyperbolic_weights[:N]):
+    for s, w in zip(saves[:N], weights[:N]):
         print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id}")
 
     num_top = min(len(saves) - N, N)
     if num_top > 0:
         print('  ...')
-        for s, w in zip(saves[-num_top:], hyperbolic_weights[-num_top:]):
+        for s, w in zip(saves[-num_top:], weights[-num_top:]):
             print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id}")
 
 
@@ -154,7 +155,15 @@ def _weight_hyperbolic(N: int) -> np.array:
 
     return weights
 
-PATCH_SIZE = 20
+
+def _weight_exp(N: int, beta: float = 0.3) -> np.array:
+    indices = np.arange(N)
+    weights = np.exp(beta * indices)
+    weights /= weights.sum()
+    return weights
+
+
+PATCH_SIZE = 40
 
 
 def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
@@ -175,8 +184,8 @@ def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
         # Select a patch location.
         patches = sorted(saves_by_patch.keys())
 
-        # Choose hyperbolically across x dimension.
-        weights = _weight_hyperbolic(len(patches))
+        # Choose across x dimension.
+        weights = _weight_exp(len(patches))
         patch_indices = np.arange(len(patches))
         chosen_patch_index = np.random.choice(patch_indices, p=weights)
         chosen_patch = patches[chosen_patch_index]
@@ -270,6 +279,7 @@ def main():
     level = get_level(ram)
     x = get_x_pos(ram)
     y = get_y_pos(ram)
+    level_ticks = get_time_left(ram)
 
     saves = [SaveInfo(
         save_id=next_save_id,
@@ -277,6 +287,7 @@ def main():
         y=y,
         level=level,
         world=world,
+        level_ticks=level_ticks,
         save_state=nes.save(),
         visited_patches=visited_patches.copy(),
     )]
@@ -326,12 +337,14 @@ def main():
             level = get_level(ram)
             x = get_x_pos(ram)
             y = get_y_pos(ram)
+            lives = life(ram)
 
             prev_level = level
+            level_ticks = save_info.level_ticks
             last_save_x = x
 
             if True:
-                print(f"Loaded save: save_id={save_info.save_id} level={world}-{level} x={x} y={y}")
+                print(f"Loaded save: save_id={save_info.save_id} level={world}-{level} x={x} y={y} lives={lives}")
                 _print_saves_list(saves)
 
             force_terminate = False
@@ -340,6 +353,30 @@ def main():
         #   * Assign (level, x, y) patch position to save state.
         #   * Add state to buffer, with vector-time (number of total actions taken)
         else:
+            # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
+            # Also dump state histogram.
+            if level != prev_level:
+                print(f"Starting level: {world}-{level}")
+
+                lives = life(ram)
+                assert lives > 0 and lives < 100, f"How did we end up with lives?: {lives}"
+
+                visited_patches = set()
+
+                saves = [SaveInfo(
+                    save_id=next_save_id,
+                    x=x,
+                    y=y,
+                    level=level,
+                    world=world,
+                    level_ticks=level_ticks,
+                    save_state=nes.save(),
+                    visited_patches=visited_patches.copy(),
+                )]
+                next_save_id += 1
+                last_save_x = x
+                level_ticks = get_time_left(ram)
+
             # If time left is too short, this creates a bad feedback loop because we can keep
             # dying due to timer.  That would encourage the agent to finish quick, but it may not
             # be possible to actually finish.
@@ -360,56 +397,56 @@ def main():
             #   3266 units / 200 ticks used -> 16.3 units/tick (twice normal rate, good)
             #    100 units /  20 ticks used ->  5.0 units/tick (bad, too slow)
             #    100 units / 100 ticks used ->  1.0 units/tick (bad, too slow)
-
+            #
+            # Level 1-3 is 3100 units, 300 ticks available ->  10.1 units/tick (min)
+            #
             ticks_left = get_time_left(ram)
-            ticks_used = max(1, 400 - ticks_left)
+            ticks_used = max(1, level_ticks - ticks_left)
 
             distance = x - last_save_x
             distance_per_tick = x / ticks_used
-            min_distance_per_tick = 3266 / 400 * 0.5
+
+            # Use a ratio of <1.0, because we want to be able to slow down and speed up within a level.
+            min_distance_per_tick = 3000 / 300 * 0.7
 
             patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
             if distance_per_tick < min_distance_per_tick:
                 print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick:.4f}")
                 force_terminate = True
+            elif False: # patch_id in visited_patches:
+                # TODO(millman): This doesn't work right, because we always start on the same patch.
+                #   Maybe need to consider transitioning patches?  But then, we'll always pick working off the frontier,
+                #   which isn't right either.
+
+                # We were already here, resample.
+                print(f"Ending trajectory, revisited state: x={x} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick:.4f}")
+                force_terminate = True
             else:
                 if patch_id not in visited_patches:
-                    saves.append(SaveInfo(
-                        save_id=next_save_id,
-                        x=x,
-                        y=y,
-                        level=level,
-                        world=world,
-                        save_state=nes.save(),
-                        visited_patches=visited_patches.copy(),
-                    ))
-                    next_save_id += 1
-                    last_save_x = x
-                    visited_patches.add(patch_id)
+                    lives = life(ram)
+
+                    if lives > 0 and lives < 100:
+                        saves.append(SaveInfo(
+                            save_id=next_save_id,
+                            x=x,
+                            y=y,
+                            level=level,
+                            world=world,
+                            level_ticks=level_ticks,
+                            save_state=nes.save(),
+                            visited_patches=visited_patches.copy(),
+                        ))
+                        next_save_id += 1
+                        last_save_x = x
+                        visited_patches.add(patch_id)
+                    else:
+                        # TODO(millman): how did we get to a state where we don't have full lives?
+                        print(f"Something is wrong with the lives, don't save this state: level={world}-{level} x={x} y={y} ticks-left={ticks_left} lives={lives}")
+
+                    # TODO(millman): dump states
 
             patches_histogram[patch_id] += 1
-
-        # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
-        # Also dump state histogram.
-        if level != prev_level:
-            print(f"Starting level: {world}-{level}")
-
-            visited_patches = set()
-
-            saves = [SaveInfo(
-                save_id=next_save_id,
-                x=x,
-                y=y,
-                level=level,
-                world=world,
-                save_state=nes.save(),
-                visited_patches=visited_patches.copy(),
-            )]
-            next_save_id += 1
-            last_save_x = x
-
-            # TODO(millman): dump states
 
         # Print stats every second:
         #   * Current position: (x, y)
