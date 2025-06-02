@@ -94,19 +94,21 @@ class Args:
 
     # Specific experiments
     reset_to_save_state: bool = False
+    headless: bool = False
 
     # Algorithm specific arguments
     env_id: str = "smb-search-v0"
 
 
-def make_env(env_id: str, idx: int, capture_video: bool, run_name: str):
+def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless: bool):
     def thunk():
         if capture_video and idx == 0:
             env = gym.make(env_id, render_mode="rgb_array")
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
             raise RuntimeError("STOP")
         else:
-            env = gym.make(env_id, render_mode="human")
+            render_mode = "rgb" if headless else "human"
+            env = gym.make(env_id, render_mode=render_mode)
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
 
@@ -124,29 +126,24 @@ def _seconds_to_hms(seconds):
 
 def _print_saves_list(saves: list[SaveInfo]):
     # Determine hyperbolic weighting as a multiple of the first weight.
-    N = len(saves)
-    indices = np.arange(N)
-    c = 1.0
-    hyperbolic_weights = 1.0 / (N - indices + c)
+    hyperbolic_weights = _weight_hyperbolic(len(saves))
     hyperbolic_weights /= hyperbolic_weights[0]
 
-    # Print bottom-10 and top-10 saves.
-    for s, w in zip(saves[:10], hyperbolic_weights[:10]):
+    N = 2
+
+    # Print bottom-N and top-N saves.
+    for s, w in zip(saves[:N], hyperbolic_weights[:N]):
         print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id}")
 
-    num_top = min(len(saves) - 10, 10)
+    num_top = min(len(saves) - N, N)
     if num_top > 0:
         print('  ...')
         for s, w in zip(saves[-num_top:], hyperbolic_weights[-num_top:]):
             print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id}")
 
 
-def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
-    # Uniform random
-    # return random.choice(saves)
-
+def _weight_hyperbolic(N: int) -> np.array:
     # Hyperbolic, last saves have the highest weighting.
-    N = len(saves)
     indices = np.arange(N)
     c = 1.0  # Offset to avoid divide-by-zero
 
@@ -155,6 +152,14 @@ def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
     weights = 1.0 / (N - indices + c)
     weights /= weights.sum()  # Normalize to sum to 1
 
+    return weights
+
+
+def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
+    # Uniform random
+    # return random.choice(saves)
+
+    weights = _weight_hyperbolic(len(saves))
     sample = np.random.choice(saves, p=weights)
 
     return sample
@@ -216,7 +221,7 @@ def main():
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, 0, args.capture_video, run_name)],
+        [make_env(args.env_id, 0, args.capture_video, run_name, args.headless)],
     )
 
     first_env = envs.envs[0].unwrapped
@@ -343,8 +348,11 @@ def main():
 
             patch_id = (world, level, x // 50, y // 50)
 
-            if patch_id not in visited_patches:
-                if distance_per_tick >= min_distance_per_tick:
+            if distance_per_tick < min_distance_per_tick:
+                print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick:.4f}")
+                force_terminate = True
+            else:
+                if patch_id not in visited_patches:
                     saves.append(SaveInfo(
                         save_id=next_save_id,
                         x=x,
@@ -357,9 +365,6 @@ def main():
                     next_save_id += 1
                     last_save_x = x
                     visited_patches.add(patch_id)
-                else:
-                    print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick:.4f}")
-                    force_terminate = True
 
             patches_histogram[patch_id] += 1
 
@@ -389,7 +394,9 @@ def main():
         #   * Novel states/sec
         now = time.time()
         if now - last_print_time > 1.0:
-            print(f"{_seconds_to_hms(now-start_time)} states={len(saves)} level={world}-{level} x={x} y={y} visited={len(visited_patches)}")
+            ticks_left = get_time_left(ram)
+            steps_per_sec = step / (now - start_time)
+            print(f"{_seconds_to_hms(now-start_time)} level={world}-{level} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f}")
             last_print_time = now
 
         step += 1

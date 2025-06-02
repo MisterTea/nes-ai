@@ -359,8 +359,6 @@ class SuperMarioEnv(gym.Env):
         return {}
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
-        print("NES RESET REQUESTED")
-
         self.resets += 1
 
         # TODO(millman): fix seed, etc.
@@ -428,9 +426,10 @@ class SuperMarioEnv(gym.Env):
         lives = life(self.nes.ram())
         assert self.ai_handler.reward_map.lives == lives, f"Mismatched lives: reward_map={self.ai_handler.reward_map.lives} ram={self._ale.lives()}"
 
-        has_lost_life = self.ai_handler.reward_vector[RewardIndex.LIVES] < 0
+        delta_lives = self.ai_handler.reward_vector[RewardIndex.LIVES]
+        has_lost_life = delta_lives < 0
 
-        terminated = has_lost_life
+        terminated = delta_lives < 0 or delta_lives > 1
         truncated = False
         observation = self._get_obs()
         info = self._get_info()
