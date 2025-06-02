@@ -395,6 +395,8 @@ def main():
         if level != prev_level:
             print(f"Starting level: {world}-{level}")
 
+            visited_patches = set()
+
             saves = [SaveInfo(
                 save_id=next_save_id,
                 x=x,
@@ -405,6 +407,7 @@ def main():
                 visited_patches=visited_patches.copy(),
             )]
             next_save_id += 1
+            last_save_x = x
 
             # TODO(millman): dump states
 
