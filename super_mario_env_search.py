@@ -346,7 +346,7 @@ class SuperMarioEnv(gym.Env):
         reward = RewardMap.combine_reward_vector_single(self.ai_handler.reward_vector)
 
         lives = life(self.nes.ram())
-        assert self.ai_handler.reward_map.lives == lives, f"Mismatched lives: reward_map={self.ai_handler.reward_map.lives} ram={self._ale.lives()}"
+        assert self.ai_handler.reward_map.lives == lives, f"Mismatched lives: reward_map={self.ai_handler.reward_map.lives} ram={lives()}"
 
         delta_lives = self.ai_handler.reward_vector[RewardIndex.LIVES]
         has_lost_life = delta_lives < 0

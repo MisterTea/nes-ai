@@ -17,6 +17,7 @@ import tyro
 from torch.utils.tensorboard import SummaryWriter
 
 from super_mario_env_search import SuperMarioEnv, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses, get_time_left, life
+from super_mario_env_ram_hacks import encode_world_level
 
 from gymnasium.envs.registration import register
 
@@ -206,6 +207,10 @@ def _flip_buttons(controller_presses: NdArrayUint8, flip_prob: float, ignore_but
 
 _MASK_START_AND_SELECT = _to_controller_presses(['start', 'select']).astype(bool)
 
+def _str_level(world_ram: int, level_ram: int) -> str:
+    world, level = encode_world_level(world_ram, level_ram)
+    return f"{world}-{level}"
+
 
 def main():
     args = tyro.cli(Args)
@@ -286,7 +291,7 @@ def main():
     if False: # x >= 65500:
         print("SOMETHING WENT WRONG WITH CURRENT STATE")
         ticks_left = get_time_left(ram)
-        print(f"level={world}-{level} x={x} y={y} ticks-left={ticks_left} states=0 visited={len(visited_patches)}")
+        print(f"level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} states=0 visited={len(visited_patches)}")
         raise AssertionError("STOP")
 
     saves = [SaveInfo(
@@ -309,7 +314,7 @@ def main():
         prev_x = x
 
         # Select an action, save in action history.
-        controller = _flip_buttons(controller, flip_prob=0.05, ignore_button_mask=_MASK_START_AND_SELECT)
+        controller = _flip_buttons(controller, flip_prob=0.025, ignore_button_mask=_MASK_START_AND_SELECT)
 
         # Execute action.
         _next_obs, reward, termination, truncation, info = envs.step((controller,))
@@ -371,7 +376,7 @@ def main():
             level_ticks = save_info.level_ticks
 
             if True:
-                print(f"Loaded save: save_id={save_info.save_id} level={world}-{level} x={x} y={y} lives={lives}")
+                print(f"Loaded save: save_id={save_info.save_id} level={_str_level(world, level)} x={x} y={y} lives={lives}")
                 _print_saves_list(saves)
 
             force_terminate = False
@@ -383,7 +388,7 @@ def main():
             # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
             # Also dump state histogram.
             if level != prev_level:
-                print(f"Starting level: {world}-{level}")
+                print(f"Starting level: {_str_level(world, level)}")
 
                 lives = life(ram)
                 assert lives > 0 and lives < 100, f"How did we end up with lives?: {lives}"
@@ -394,7 +399,7 @@ def main():
                 if False: # x >= 65500:
                     print("SOMETHING WENT WRONG WITH CURRENT STATE")
                     ticks_left = get_time_left(ram)
-                    print(f"level={world}-{level} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
+                    print(f"level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
                     raise AssertionError("STOP")
 
                 saves = [SaveInfo(
@@ -457,21 +462,27 @@ def main():
             #   3000 distance remaining / 300 ticks used -> 10.0 units/ticks (nominal)
             #   3000 distance remaining / 150 ticks used -> 15.0 units/ticks (required)
             #
+            #   10 distance remaining / 300 ticks used -> 0.03 units/ticks (required)
+            #
+            # Another way to think about all of this:
+            #   * How much distance is left to cover?
+            #   * How much time do we have left?
+            #   * Distance per time is: speed
+            #   * What's mario's max speed?
+            #   * If our cumulative speed is too low, abort.
 
             ticks_left = get_time_left(ram)
             ticks_used = max(1, level_ticks - ticks_left)
 
             distance = distance_x
-            distance_from_goal = 3000 - distance_x
-            distance_per_tick = distance_from_goal / ticks_used
+            speed = distance / ticks_used
 
             # Use a ratio of <1.0, because we want to be able to slow down and speed up within a level.
-            min_distance_per_tick = 3000 / (300 * 0.5)
+            min_speed = 3000 / 300 * 0.5
 
-            patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
-
-            if distance_per_tick < min_distance_per_tick:
-                print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick:.4f}")
+            # Wait until we've used some ticks, so that the speed is meaningful.
+            if ticks_used > 50 and speed < min_speed:
+                print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance} speed={speed:.4f}")
                 force_terminate = True
             elif False: # patch_id in visited_patches:
                 # TODO(millman): This doesn't work right, because we always start on the same patch.
@@ -479,9 +490,11 @@ def main():
                 #   which isn't right either.
 
                 # We were already here, resample.
-                print(f"Ending trajectory, revisited state: x={x} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick:.4f}")
+                print(f"Ending trajectory, revisited state: x={x} ticks_left={ticks_left} distance={distance} ratio={speed:.4f}")
                 force_terminate = True
             else:
+                patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+
                 if patch_id not in visited_patches:
                     lives = life(ram)
 
@@ -492,11 +505,11 @@ def main():
                     if False: # not valid_x:
                         # TODO(millman): how did we get into a weird x state?  Happens on 4-4.
                         print(f"RAM values: ram[0x006D]={ram[0x006D]=} * 256 + ram[0x0086]={ram[0x0086]=}")
-                        print(f"Something is wrong with the x position, don't save this state: level={world}-{level} x={x} y={y} lives={lives} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
+                        print(f"Something is wrong with the x position, don't save this state: level={_str_level(world, level)} x={x} y={y} lives={lives} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
 
                     if not valid_lives:
                         # TODO(millman): how did we get to a state where we don't have full lives?
-                        print(f"Something is wrong with the lives, don't save this state: level={world}-{level} x={x} y={y} ticks-left={ticks_left} lives={lives}")
+                        print(f"Something is wrong with the lives, don't save this state: level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} lives={lives}")
 
                     if valid_lives and valid_x:
                         saves.append(SaveInfo(
@@ -525,16 +538,15 @@ def main():
         #   * Novel states/sec
         now = time.time()
         if now - last_print_time > 1.0:
-            ticks_left = get_time_left(ram)
             steps_per_sec = step / (now - start_time)
 
+            ticks_left = get_time_left(ram)
             ticks_used = max(1, level_ticks - ticks_left)
 
             distance = distance_x
-            distance_from_goal = 3000 - distance_x
-            distance_per_tick = distance_from_goal / ticks_used
+            speed = distance / ticks_used
 
-            print(f"{_seconds_to_hms(now-start_time)} level={world}-{level} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} ticks-used:{ticks_used} dist-from-goal:{distance_from_goal} dist-per-tick-required:{distance_per_tick:.4f}")
+            print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} ticks-used={ticks_used} speed={speed:.2f} (required={min_speed:.2f})")
             last_print_time = now
 
         step += 1

@@ -200,3 +200,13 @@ def decode_world_level(world: int, level: int, lost_levels: bool) -> tuple[int, 
 
     return target_world, target_stage, target_area
 
+
+def encode_world_level(world_ram: int, level_ram: int) -> tuple[int, int]:
+    world = world_ram + 1
+    level = level_ram + 1
+
+    if world in {1, 2, 4, 7}:
+        if level >= 2:
+            level = level - 1
+
+    return (world_ram + 1, level)
