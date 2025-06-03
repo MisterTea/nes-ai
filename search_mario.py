@@ -136,13 +136,13 @@ def _print_saves_list(saves: list[SaveInfo]):
 
     # Print bottom-N and top-N saves.
     for s, w in zip(saves[:N], weights[:N]):
-        print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id}")
+        print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id} visited={len(s.visited_patches)} dist={s.distance_x}")
 
     num_top = min(len(saves) - N, N)
     if num_top > 0:
         print('  ...')
         for s, w in zip(saves[-num_top:], weights[-num_top:]):
-            print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id}")
+            print(f"  {w:.4f}x {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id} visited={len(s.visited_patches)} dist={s.distance_x}")
 
 
 def _weight_hyperbolic(N: int) -> np.array:
@@ -171,8 +171,9 @@ PATCH_SIZE = 20
 def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
     if False:
         # Uniform random
-        # return random.choice(saves)
+        return random.choice(saves)
 
+    if False:
         weights = _weight_hyperbolic(len(saves))
         sample = np.random.choice(saves, p=weights)
 
@@ -180,7 +181,7 @@ def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
         # Cluster patches.
         saves_by_patch = {}
         for s in saves:
-            patchx_id = (s.world, s.level, s.x // PATCH_SIZE)
+            patchx_id = (s.world, s.level, s.distance_x // PATCH_SIZE)
             saves_by_patch.setdefault(patchx_id, []).append(s)
 
         # Select a patch location.
@@ -194,6 +195,13 @@ def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
 
         # Choose uniformly across y dimension.
         sample = random.choice(saves_by_patch[chosen_patch])
+
+    if False:
+        # Order by most novel, determined by patches.
+        saves_ordered_by_patches = sorted(saves, key=lambda s: len(s.visited_patches))
+
+        weights = _weight_hyperbolic(len(saves_ordered_by_patches))
+        sample = np.random.choice(saves_ordered_by_patches, p=weights)
 
     return sample
 
@@ -287,6 +295,7 @@ def main():
     y = get_y_pos(ram)
     level_ticks = get_time_left(ram)
     distance_x = 0
+    lives = life(ram)
 
     if False: # x >= 65500:
         print("SOMETHING WENT WRONG WITH CURRENT STATE")
@@ -307,11 +316,13 @@ def main():
     )]
     next_save_id += 1
     force_terminate = False
+    steps_since_load = 0
 
     while True:
         # Remember previous states.
         prev_level = level
         prev_x = x
+        prev_lives = lives
 
         # Select an action, save in action history.
         controller = _flip_buttons(controller, flip_prob=0.025, ignore_button_mask=_MASK_START_AND_SELECT)
@@ -319,13 +330,14 @@ def main():
         # Execute action.
         _next_obs, reward, termination, truncation, info = envs.step((controller,))
 
-        # Update state.
+        # Read and record state.
         #   * Add position count to histogram.
         #   * Add action to action history.
         world = get_world(ram)
         level = get_level(ram)
         x = get_x_pos(ram)
         y = get_y_pos(ram)
+        lives = life(ram)
 
         action_history.append(controller)
 
@@ -335,13 +347,25 @@ def main():
         else:
             distance_x += x - prev_x
 
+        # Calculate derived states.
+        ticks_left = get_time_left(ram)
+        ticks_used = max(1, level_ticks - ticks_left)
+
+        speed = distance_x / ticks_used
+        patches_per_tick = len(visited_patches) / ticks_used
+
+        # TODO(millman): something is broken with the termination flag?
+        if lives < prev_lives and not termination:
+            print(f"Lost a life: x={x} ticks_left={ticks_left} distance={distance_x}")
+            raise AssertionError("Missing termination flag for lost life")
+
         # If we died, reload from a gamestate based on recency heuristic.
         if termination or force_terminate:
             # Step again so that the environment reset happens before we load.
             envs.step((controller,))
 
             # Reorder saves across all trajectories by advancement through the game (x pos).
-            saves = sorted(saves, key=lambda s: (s.world, s.level, s.x, s.y))
+            saves = sorted(saves, key=lambda s: (s.world, s.level, s.distance_x, s.y))
 
             # Choose save.
             save_info = _choose_save(saves)
@@ -372,14 +396,22 @@ def main():
                 assert save_info.x == x, f"Mismatched save state!"
                 assert save_info.y == y, f"Mismatched save state!"
 
+            prev_x = x
             prev_level = level
+            prev_lives = lives
             level_ticks = save_info.level_ticks
+            steps_since_load = 0
 
             if True:
                 print(f"Loaded save: save_id={save_info.save_id} level={_str_level(world, level)} x={x} y={y} lives={lives}")
                 _print_saves_list(saves)
 
             force_terminate = False
+
+        # If we died, skip.
+        elif lives < prev_lives:
+            print(f"Lost a life: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
+            force_terminate = True
 
         # If we made progress, save state.
         #   * Assign (level, x, y) patch position to save state.
@@ -390,8 +422,7 @@ def main():
             if level != prev_level:
                 print(f"Starting level: {_str_level(world, level)}")
 
-                lives = life(ram)
-                assert lives > 0 and lives < 100, f"How did we end up with lives?: {lives}"
+                assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
 
                 visited_patches = set()
                 distance_x = 0
@@ -471,18 +502,27 @@ def main():
             #   * What's mario's max speed?
             #   * If our cumulative speed is too low, abort.
 
-            ticks_left = get_time_left(ram)
-            ticks_used = max(1, level_ticks - ticks_left)
-
-            distance = distance_x
-            speed = distance / ticks_used
-
             # Use a ratio of <1.0, because we want to be able to slow down and speed up within a level.
             min_speed = 3000 / 300 * 0.5
 
+            # We want to ensure Mario is finding new states at a reasonable rate, otherwise it means that we're
+            # going back over too much ground we've seen before.
+            #
+            # If each patch is (say) 20 units, and we want mario to find a new one every
+            #
+            # A level is about 3000 pixels
+            # A level is about 3000/20 patches = 150 patches
+            # 150 patches in 300 ticks is 0.5 patches/tick
+            # That doesn't account for vertical positions too, which will yield extra patches.
+
+            min_patches_per_tick = 3000 / PATCH_SIZE / 300 * 1.5
+
             # Wait until we've used some ticks, so that the speed is meaningful.
             if ticks_used > 50 and speed < min_speed:
-                print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance} speed={speed:.4f}")
+                print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
+                force_terminate = True
+            elif ticks_used > 50 and patches_per_tick < min_patches_per_tick:
+                print(f"Ending trajectory, patch discovery rate is too slow: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
                 force_terminate = True
             elif False: # patch_id in visited_patches:
                 # TODO(millman): This doesn't work right, because we always start on the same patch.
@@ -490,15 +530,13 @@ def main():
                 #   which isn't right either.
 
                 # We were already here, resample.
-                print(f"Ending trajectory, revisited state: x={x} ticks_left={ticks_left} distance={distance} ratio={speed:.4f}")
+                print(f"Ending trajectory, revisited state: x={x} ticks_left={ticks_left} distance={distance_x} ratio={speed:.4f}")
                 force_terminate = True
             else:
                 patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
                 if patch_id not in visited_patches:
-                    lives = life(ram)
-
-                    valid_lives = lives > 0 and lives < 100
+                    valid_lives = lives > 1 and lives < 100
                     valid_x = x < 65500
 
                     # NOTE: Some levels (like 4-4) are discontinuous.  We can get x values of > 65500.
@@ -509,7 +547,8 @@ def main():
 
                     if not valid_lives:
                         # TODO(millman): how did we get to a state where we don't have full lives?
-                        print(f"Something is wrong with the lives, don't save this state: level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} lives={lives}")
+                        print(f"Something is wrong with the lives, don't save this state: level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} lives={lives} steps_since_load={steps_since_load}")
+                        raise AssertionError("STOP")
 
                     if valid_lives and valid_x:
                         saves.append(SaveInfo(
@@ -546,10 +585,13 @@ def main():
             distance = distance_x
             speed = distance / ticks_used
 
-            print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} ticks-used={ticks_used} speed={speed:.2f} (required={min_speed:.2f})")
+            patches_per_tick = len(visited_patches) / ticks_used
+
+            print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} ticks-used={ticks_used} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} steps_since_load={steps_since_load}")
             last_print_time = now
 
         step += 1
+        steps_since_load += 1
 
 
 if __name__ == "__main__":

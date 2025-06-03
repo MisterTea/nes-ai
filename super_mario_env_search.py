@@ -29,105 +29,14 @@ class SimpleAiHandler:
     def __init__(self):
         self.frame_num = -1
 
-        self.reset()
-
     def reset(self):
-        self.last_reward_map = None
-
-        ram = np.zeros(RAM_SIZE, dtype=np.uint8)
-        self.reward_map, self.reward_vector = compute_reward_map(None, ram)
-
-        self.prev_info = None
+        pass
 
     def shutdown(self):
-        print("Shutting down ai handler")
+        pass
 
     def update(self, frame: int, controller1: NdArrayUint8, ram: NdArrayUint8, screen_image: Image):
-        # Update rewards.
-        self.last_reward_map = self.reward_map
-        self.reward_map, self.reward_vector = compute_reward_map(
-            self.last_reward_map, torch.from_numpy(ram).int()
-        )
-
-        _PRINT_FRAME_INFO = True
-
-        # Print frame updates.
-        if _PRINT_FRAME_INFO:
-            if False:
-                always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
-                controller_desc = _describe_controller_vector(controller1.is_pressed)
-                new_info = f"Left pos: {self.reward_map.left_pos:<5} Reward: {self.reward_map} {self.reward_vector} Controller: {controller_desc}"
-                if new_info == self.prev_info:
-                    # Clear out old line and display again.
-                    print(always_changing_info + new_info, end='\r', flush=True)
-                else:
-                    # New info, start a new line.
-                    print('\n' + always_changing_info + new_info, end='\r', flush=True)
-
-            if False:
-                # For debugging screen positions.
-
-                always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
-
-                # 0x0086	Player x position on screen
-                # 0x006D	Player horizontal position in level
-
-                # 0x00B5    Player vertical screen position
-                # 0x00CE    Player y pos on screen (multiply with value at 0x00B5 to get level y pos)
-
-                # Player horizontal position in level.
-                level_x = ram[0x006D]
-
-                # Screen X position.
-                screen_x = ram[0x0086]
-
-                # Player x pos within current screen offset.
-                screen_offset = ram[0x03AD]
-
-                new_info = f"level_x={level_x:>3} screen_x={screen_x:>3} screen_offset={screen_offset:>3}"
-
-                if True: # new_info == self.prev_info:
-                    # Clear out old line and display again.
-                    print(always_changing_info + new_info, end='\r', flush=True)
-                else:
-                    # New info, start a new line.
-                    print('\n' + always_changing_info + new_info, end='\r', flush=True)
-
-                self.prev_info = new_info
-
-            if False:
-                # For debugging player state / end of level.
-
-                # Player's state
-                # 0x00 - Leftmost of screen
-                # 0x01 - Climbing vine
-                # 0x02 - Entering reversed-L pipe
-                # 0x03 - Going down a pipe
-                # 0x04 - Autowalk
-                # 0x05 - Autowalk
-                # 0x06 - Player dies
-                # 0x07 - Entering area
-                # 0x08 - Normal
-                # 0x09 - Transforming from Small to Large (cannot move)
-                # 0x0A - Transforming from Large to Small (cannot move)
-                # 0x0B - Dying
-                # 0x0C - Transforming to Fire Mario (cannot move)
-                player_state = ram[0x000E]
-
-                always_changing_info = f"Frame: {frame:<5} Time left: {self.reward_map.time_left:<5} "
-
-                new_info = f"player_state={player_state}"
-
-                if True: # new_info == self.prev_info:
-                    # Clear out old line and display again.
-                    print(always_changing_info + new_info, end='\r', flush=True)
-                else:
-                    # New info, start a new line.
-                    print('\n' + always_changing_info + new_info, end='\r', flush=True)
-
-
         self.frame_num = frame
-
         return True
 
 
@@ -243,7 +152,6 @@ class SuperMarioEnv(gym.Env):
         self.nes = NES(
             "./roms/Super_mario_brothers.nes",
             SimpleAiHandler(),
-            # sync_mode=SYNC_PYGAME,
             sync_mode=SYNC_NONE,
             opengl=True,
             audio=False,
@@ -301,9 +209,14 @@ class SuperMarioEnv(gym.Env):
 
         self.last_observation = observation
 
+        self.ai_handler.reset()
+
         return observation, info
 
     def step(self, controller_presses: NdArrayUint8):
+        ram = self.nes.ram()
+        prev_lives = life(ram)
+
         PRINT_CONTROLLER = False
 
         if PRINT_CONTROLLER:
@@ -343,13 +256,10 @@ class SuperMarioEnv(gym.Env):
         self.nes.run_frame()
 
         # Read off the current reward.  Convert to a single value reward for this timestep.
-        reward = RewardMap.combine_reward_vector_single(self.ai_handler.reward_vector)
+        reward = 0
 
         lives = life(self.nes.ram())
-        assert self.ai_handler.reward_map.lives == lives, f"Mismatched lives: reward_map={self.ai_handler.reward_map.lives} ram={lives()}"
-
-        delta_lives = self.ai_handler.reward_vector[RewardIndex.LIVES]
-        has_lost_life = delta_lives < 0
+        delta_lives = lives - prev_lives
 
         terminated = delta_lives < 0 or delta_lives > 1
         truncated = False
