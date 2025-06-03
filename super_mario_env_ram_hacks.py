@@ -199,3 +199,4 @@ def decode_world_level(world: int, level: int, lost_levels: bool) -> tuple[int, 
                 target_area = target_area + 1
 
     return target_world, target_stage, target_area
+

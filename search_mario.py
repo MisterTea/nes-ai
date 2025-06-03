@@ -37,6 +37,7 @@ class SaveInfo:
     level: int
     world: int
     level_ticks: int
+    distance_x: int
     save_state: Any
     visited_patches: set
 
@@ -280,6 +281,13 @@ def main():
     x = get_x_pos(ram)
     y = get_y_pos(ram)
     level_ticks = get_time_left(ram)
+    distance_x = 0
+
+    if False: # x >= 65500:
+        print("SOMETHING WENT WRONG WITH CURRENT STATE")
+        ticks_left = get_time_left(ram)
+        print(f"level={world}-{level} x={x} y={y} ticks-left={ticks_left} states=0 visited={len(visited_patches)}")
+        raise AssertionError("STOP")
 
     saves = [SaveInfo(
         save_id=next_save_id,
@@ -288,16 +296,17 @@ def main():
         level=level,
         world=world,
         level_ticks=level_ticks,
+        distance_x=distance_x,
         save_state=nes.save(),
         visited_patches=visited_patches.copy(),
     )]
     next_save_id += 1
-    last_save_x = x
     force_terminate = False
 
     while True:
         # Remember previous states.
         prev_level = level
+        prev_x = x
 
         # Select an action, save in action history.
         controller = _flip_buttons(controller, flip_prob=0.05, ignore_button_mask=_MASK_START_AND_SELECT)
@@ -314,6 +323,12 @@ def main():
         y = get_y_pos(ram)
 
         action_history.append(controller)
+
+        # If we get teleported, or if the level boundary is discontinuous, the change in x position isn't meaningful.
+        if abs(x - prev_x) > 50:
+            print(f"Discountinuous x position: {prev_x} -> {x}")
+        else:
+            distance_x += x - prev_x
 
         # If we died, reload from a gamestate based on recency heuristic.
         if termination or force_terminate:
@@ -338,10 +353,22 @@ def main():
             x = get_x_pos(ram)
             y = get_y_pos(ram)
             lives = life(ram)
+            distance_x = save_info.distance_x
+
+            if True:
+                print(f"Validate save state:")
+                print(f"  world: {save_info.world} =? {world} -> {save_info.world == world}")
+                print(f"  level: {save_info.level} =? {level} -> {save_info.level == level}")
+                print(f"  x:     {save_info.x} =? {x} -> {save_info.x == x}")
+                print(f"  y:     {save_info.y} =? {y} -> {save_info.y == y}")
+                print(f"  lives: ??? =? {lives} -> ???")
+                assert save_info.world == world, f"Mismatched save state!"
+                assert save_info.level == level, f"Mismatched save state!"
+                assert save_info.x == x, f"Mismatched save state!"
+                assert save_info.y == y, f"Mismatched save state!"
 
             prev_level = level
             level_ticks = save_info.level_ticks
-            last_save_x = x
 
             if True:
                 print(f"Loaded save: save_id={save_info.save_id} level={world}-{level} x={x} y={y} lives={lives}")
@@ -362,6 +389,13 @@ def main():
                 assert lives > 0 and lives < 100, f"How did we end up with lives?: {lives}"
 
                 visited_patches = set()
+                distance_x = 0
+
+                if False: # x >= 65500:
+                    print("SOMETHING WENT WRONG WITH CURRENT STATE")
+                    ticks_left = get_time_left(ram)
+                    print(f"level={world}-{level} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
+                    raise AssertionError("STOP")
 
                 saves = [SaveInfo(
                     save_id=next_save_id,
@@ -370,11 +404,11 @@ def main():
                     level=level,
                     world=world,
                     level_ticks=level_ticks,
+                    distance_x=distance_x,
                     save_state=nes.save(),
                     visited_patches=visited_patches.copy(),
                 )]
                 next_save_id += 1
-                last_save_x = x
                 level_ticks = get_time_left(ram)
 
             # If time left is too short, this creates a bad feedback loop because we can keep
@@ -400,18 +434,43 @@ def main():
             #
             # Level 1-3 is 3100 units, 300 ticks available ->  10.1 units/tick (min)
             #
+            #
+            # Level 4-4 (and probably 8-4) are discontinuous.
+            # There is a jump from x=200 to x=665535 (max value) at some point.  If the x has
+            # changed by more than some large amount (say 100 units), then it means the distance_per_tick
+            # metric is invalid.  Instead of looking at pure x value, we need to measure the accumulated x
+            # position.
+            #
+            # Here are sample numbers when using distance, comparing with ticks remaining vs ticks used:
+            #   3000 distance remaining / 400 ticks remaining ->  7.5 units/tick
+            #   3000 distance remaining / 300 ticks remaining -> 10.0 units/tick
+            #   3000 distance remaining / 200 ticks remaining -> 15.0 units/tick
+            #   3000 distance remaining / 100 ticks remaining -> 30.0 units/tick
+            #
+            #   3000 distance remaining /   0 ticks used -> +inf units/tick
+            #   3000 distance remaining / 100 ticks used -> 30.0 units/tick
+            #   3000 distance remaining / 300 ticks used -> 10.0 units/tick
+            #   3000 distance remaining / 400 ticks used ->  7.5 units/tick
+            #
+            # A fast world might be 3000 distance in 300 ticks.  If we spend half the time waiting around, then
+            # the remaining time we need finish in half the ticks:
+            #   3000 distance remaining / 300 ticks used -> 10.0 units/ticks (nominal)
+            #   3000 distance remaining / 150 ticks used -> 15.0 units/ticks (required)
+            #
+
             ticks_left = get_time_left(ram)
             ticks_used = max(1, level_ticks - ticks_left)
 
-            distance = x - last_save_x
-            distance_per_tick = x / ticks_used
+            distance = distance_x
+            distance_from_goal = 3000 - distance_x
+            distance_per_tick = distance_from_goal / ticks_used
 
             # Use a ratio of <1.0, because we want to be able to slow down and speed up within a level.
-            min_distance_per_tick = 3000 / 300 * 0.7
+            min_distance_per_tick = 3000 / (300 * 0.5)
 
             patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
-            if False: # distance_per_tick < min_distance_per_tick:
+            if distance_per_tick < min_distance_per_tick:
                 print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance} ratio={distance_per_tick:.4f}")
                 force_terminate = True
             elif False: # patch_id in visited_patches:
@@ -426,7 +485,20 @@ def main():
                 if patch_id not in visited_patches:
                     lives = life(ram)
 
-                    if lives > 0 and lives < 100:
+                    valid_lives = lives > 0 and lives < 100
+                    valid_x = x < 65500
+
+                    # NOTE: Some levels (like 4-4) are discontinuous.  We can get x values of > 65500.
+                    if False: # not valid_x:
+                        # TODO(millman): how did we get into a weird x state?  Happens on 4-4.
+                        print(f"RAM values: ram[0x006D]={ram[0x006D]=} * 256 + ram[0x0086]={ram[0x0086]=}")
+                        print(f"Something is wrong with the x position, don't save this state: level={world}-{level} x={x} y={y} lives={lives} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
+
+                    if not valid_lives:
+                        # TODO(millman): how did we get to a state where we don't have full lives?
+                        print(f"Something is wrong with the lives, don't save this state: level={world}-{level} x={x} y={y} ticks-left={ticks_left} lives={lives}")
+
+                    if valid_lives and valid_x:
                         saves.append(SaveInfo(
                             save_id=next_save_id,
                             x=x,
@@ -434,15 +506,12 @@ def main():
                             level=level,
                             world=world,
                             level_ticks=level_ticks,
+                            distance_x=distance_x,
                             save_state=nes.save(),
                             visited_patches=visited_patches.copy(),
                         ))
                         next_save_id += 1
-                        last_save_x = x
                         visited_patches.add(patch_id)
-                    else:
-                        # TODO(millman): how did we get to a state where we don't have full lives?
-                        print(f"Something is wrong with the lives, don't save this state: level={world}-{level} x={x} y={y} ticks-left={ticks_left} lives={lives}")
 
                     # TODO(millman): dump states
 
@@ -458,7 +527,14 @@ def main():
         if now - last_print_time > 1.0:
             ticks_left = get_time_left(ram)
             steps_per_sec = step / (now - start_time)
-            print(f"{_seconds_to_hms(now-start_time)} level={world}-{level} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f}")
+
+            ticks_used = max(1, level_ticks - ticks_left)
+
+            distance = distance_x
+            distance_from_goal = 3000 - distance_x
+            distance_per_tick = distance_from_goal / ticks_used
+
+            print(f"{_seconds_to_hms(now-start_time)} level={world}-{level} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} ticks-used:{ticks_used} dist-from-goal:{distance_from_goal} dist-per-tick-required:{distance_per_tick:.4f}")
             last_print_time = now
 
         step += 1
