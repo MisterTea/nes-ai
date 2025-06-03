@@ -381,7 +381,7 @@ def main():
                 action_visited=[0] * len(UCB_ACTIONS),
             )
         else:
-            if random.random() < 0.025:
+            if random.random() < 0.05:
                 controller = _to_controller_presses(
                     ucb_states[prev_patch_id].next_action_ucb() + ["b"]
                 )
@@ -589,7 +589,7 @@ def main():
             # 150 patches in 300 ticks is 0.5 patches/tick
             # That doesn't account for vertical positions too, which will yield extra patches.
 
-            min_patches_per_tick = 3000 / PATCH_SIZE / 300 * 1.5
+            min_patches_per_tick = 10000 / PATCH_SIZE / 300 * 1.5
 
             # Wait until we've used some ticks, so that the speed is meaningful.
             if ticks_used > 50 and speed < min_speed:
