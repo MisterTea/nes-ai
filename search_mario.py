@@ -3,7 +3,7 @@
 import os
 import random
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -41,6 +41,7 @@ class SaveInfo:
     distance_x: int
     save_state: Any
     visited_patches: set
+    visited_patches_x: set
 
 
 @dataclass
@@ -111,7 +112,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless
             raise RuntimeError("STOP")
         else:
             render_mode = "rgb" if headless else "human"
-            env = gym.make(env_id, render_mode=render_mode, world_level=(4, 4))
+            env = gym.make(env_id, render_mode=render_mode, world_level=(8, 1))
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
 
@@ -135,14 +136,15 @@ def _print_saves_list(saves: list[SaveInfo]):
     N = 2
 
     # Print bottom-N and top-N saves.
-    for s, w in zip(saves[:N], weights[:N]):
-        print(f"  {w:.4f}x {s.world}-{s.level} x={s.x} y={s.y} save_id={s.save_id} visited={len(s.visited_patches)} dist={s.distance_x}")
+    for i, (s, w) in enumerate(zip(saves[:N], weights[:N])):
+        print(f"  [{i}] {w:.4f}x {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id} visited={len(s.visited_patches)} dist={s.distance_x}")
 
     num_top = min(len(saves) - N, N)
     if num_top > 0:
         print('  ...')
-        for s, w in zip(saves[-num_top:], weights[-num_top:]):
-            print(f"  {w:.4f}x {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id} visited={len(s.visited_patches)} dist={s.distance_x}")
+        for e, (s, w) in enumerate(zip(saves[-num_top:], weights[-num_top:])):
+            i = len(saves) - num_top + e
+            print(f"  [{i}] {w:.4f}x {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id} visited={len(s.visited_patches)} dist={s.distance_x}")
 
 
 def _weight_hyperbolic(N: int) -> np.array:
@@ -177,7 +179,7 @@ def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
         weights = _weight_hyperbolic(len(saves))
         sample = np.random.choice(saves, p=weights)
 
-    if True:
+    if False:
         # Cluster patches.
         saves_by_patch = {}
         for s in saves:
@@ -197,11 +199,30 @@ def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
         sample = random.choice(saves_by_patch[chosen_patch])
 
     if False:
-        # Order by most novel, determined by patches.
-        saves_ordered_by_patches = sorted(saves, key=lambda s: len(s.visited_patches))
+        # Order by most novel, determined by patches explored, along the x dimension.
+        saves_ordered_by_patches = sorted(saves, key=lambda s: len(s.visited_patches_x))
 
         weights = _weight_hyperbolic(len(saves_ordered_by_patches))
         sample = np.random.choice(saves_ordered_by_patches, p=weights)
+
+    if True:
+        # Cluster patches along x dimension.
+        saves_by_patch = {}
+        for s in saves:
+            patchx_id = (s.world, s.level, len(s.visited_patches_x))
+            saves_by_patch.setdefault(patchx_id, []).append(s)
+
+        # Select a patch location.
+        patches = sorted(saves_by_patch.keys())
+
+        # Choose across x dimension.
+        weights = _weight_hyperbolic(len(patches))
+        patch_indices = np.arange(len(patches))
+        chosen_patch_x_index = np.random.choice(patch_indices, p=weights)
+        chosen_patch_x = patches[chosen_patch_x_index]
+
+        # Choose uniformly across y dimension.
+        sample = random.choice(saves_by_patch[chosen_patch_x])
 
     return sample
 
@@ -218,6 +239,44 @@ _MASK_START_AND_SELECT = _to_controller_presses(['start', 'select']).astype(bool
 def _str_level(world_ram: int, level_ram: int) -> str:
     world, level = encode_world_level(world_ram, level_ram)
     return f"{world}-{level}"
+
+
+class PatchReservoir:
+
+    def __init__(self, max_saves_per_patch: int = 5):
+        self.max_saves_per_patch = max_saves_per_patch
+        self._saves_by_patches = defaultdict(list)
+        self._patch_seen_counts = Counter()
+
+    def add(self, save: SaveInfo):
+        patch_id = (save.world, save.level, save.x // PATCH_SIZE, save.y // PATCH_SIZE)
+
+        if self._patch_seen_counts[patch_id] < self.max_saves_per_patch:
+            # Reservoir is still small, add it.
+            self._saves_by_patches[patch_id].append(save)
+
+        else:
+            seen_count = self._patch_seen_counts[patch_id]
+
+            # Random chance of selecting an item in the reservoir.
+            k = random.randint(0, seen_count)
+
+            # Kick out the existing item in reservoir.
+            if k < self.max_saves_per_patch:
+                self._saves_by_patches[patch_id][k] = save
+
+        # Update count.
+        self._patch_seen_counts[patch_id] += 1
+
+    def values(self) -> list[SaveInfo]:
+        return [
+            save
+            for saves in self._saves_by_patches.values()
+            for save in saves
+        ]
+
+    def __len__(self) -> int:
+        return len(self._saves_by_patches)
 
 
 def main():
@@ -282,6 +341,7 @@ def main():
     # Per-trajectory state.  Resets after every death/level.
     action_history = []
     visited_patches = set()
+    visited_patches_x = set()
     controller = _to_controller_presses([])
 
     # Start searching the Mario game tree.
@@ -297,13 +357,16 @@ def main():
     distance_x = 0
     lives = life(ram)
 
+    print(f"LIVES AT START: {life(ram)}")
+
     if False: # x >= 65500:
         print("SOMETHING WENT WRONG WITH CURRENT STATE")
         ticks_left = get_time_left(ram)
         print(f"level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} states=0 visited={len(visited_patches)}")
         raise AssertionError("STOP")
 
-    saves = [SaveInfo(
+    saves = PatchReservoir()
+    saves.add(SaveInfo(
         save_id=next_save_id,
         x=x,
         y=y,
@@ -313,7 +376,9 @@ def main():
         distance_x=distance_x,
         save_state=nes.save(),
         visited_patches=visited_patches.copy(),
-    )]
+        visited_patches_x=visited_patches_x.copy(),
+    ))
+
     next_save_id += 1
     force_terminate = False
     steps_since_load = 0
@@ -364,11 +429,11 @@ def main():
             # Step again so that the environment reset happens before we load.
             envs.step((controller,))
 
-            # Reorder saves across all trajectories by advancement through the game (x pos).
-            saves = sorted(saves, key=lambda s: (s.world, s.level, s.distance_x, s.y))
+            # Collect saves.
+            saves_list = saves.values()
 
             # Choose save.
-            save_info = _choose_save(saves)
+            save_info = _choose_save(saves_list)
 
             # Reload and re-initialize.
             nes.load(save_info.save_state)
@@ -376,13 +441,13 @@ def main():
             controller[:] = nes.controller1.is_pressed[:]
 
             visited_patches = save_info.visited_patches.copy()
+            visited_patches_x = save_info.visited_patches_x.copy()
             action_history = []
             world = get_world(ram)
             level = get_level(ram)
             x = get_x_pos(ram)
             y = get_y_pos(ram)
             lives = life(ram)
-            distance_x = save_info.distance_x
 
             if True:
                 print(f"Validate save state:")
@@ -402,9 +467,16 @@ def main():
             level_ticks = save_info.level_ticks
             steps_since_load = 0
 
+            ticks_left = get_time_left(ram)
+            ticks_used = max(1, level_ticks - ticks_left)
+            distance_x = save_info.distance_x
+
+            speed = distance_x / ticks_used
+            patches_per_tick = len(visited_patches) / ticks_used
+
             if True:
                 print(f"Loaded save: save_id={save_info.save_id} level={_str_level(world, level)} x={x} y={y} lives={lives}")
-                _print_saves_list(saves)
+                _print_saves_list(saves_list)
 
             force_terminate = False
 
@@ -425,6 +497,7 @@ def main():
                 assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
 
                 visited_patches = set()
+                visited_patches_x = set()
                 distance_x = 0
 
                 if False: # x >= 65500:
@@ -433,7 +506,8 @@ def main():
                     print(f"level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
                     raise AssertionError("STOP")
 
-                saves = [SaveInfo(
+                saves = PatchReservoir()
+                saves.add(SaveInfo(
                     save_id=next_save_id,
                     x=x,
                     y=y,
@@ -443,7 +517,8 @@ def main():
                     distance_x=distance_x,
                     save_state=nes.save(),
                     visited_patches=visited_patches.copy(),
-                )]
+                    visited_patches_x=visited_patches_x.copy(),
+                ))
                 next_save_id += 1
                 level_ticks = get_time_left(ram)
 
@@ -501,9 +576,11 @@ def main():
             #   * Distance per time is: speed
             #   * What's mario's max speed?
             #   * If our cumulative speed is too low, abort.
+            #
+            # World 8-1 is 6400 pixels long, and only 300 seconds
 
             # Use a ratio of <1.0, because we want to be able to slow down and speed up within a level.
-            min_speed = 3000 / 300 * 0.5
+            min_speed = 6400 / 300 * 1.0
 
             # We want to ensure Mario is finding new states at a reasonable rate, otherwise it means that we're
             # going back over too much ground we've seen before.
@@ -514,14 +591,15 @@ def main():
             # A level is about 3000/20 patches = 150 patches
             # 150 patches in 300 ticks is 0.5 patches/tick
             # That doesn't account for vertical positions too, which will yield extra patches.
+            # If Mario jumps, that will cover about 3 patches.
 
-            min_patches_per_tick = 3000 / PATCH_SIZE / 300 * 1.5
+            min_patches_per_tick = 3000 / PATCH_SIZE / 300 * 2.5
 
             # Wait until we've used some ticks, so that the speed is meaningful.
-            if ticks_used > 50 and speed < min_speed:
+            if ticks_used > 20 and speed < min_speed:
                 print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
                 force_terminate = True
-            elif ticks_used > 50 and patches_per_tick < min_patches_per_tick:
+            elif ticks_used > 20 and patches_per_tick < min_patches_per_tick:
                 print(f"Ending trajectory, patch discovery rate is too slow: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
                 force_terminate = True
             elif False: # patch_id in visited_patches:
@@ -535,37 +613,38 @@ def main():
             else:
                 patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
-                if patch_id not in visited_patches:
-                    valid_lives = lives > 1 and lives < 100
-                    valid_x = x < 65500
+                valid_lives = lives > 1 and lives < 100
+                valid_x = True  # x < 65500
 
-                    # NOTE: Some levels (like 4-4) are discontinuous.  We can get x values of > 65500.
-                    if False: # not valid_x:
-                        # TODO(millman): how did we get into a weird x state?  Happens on 4-4.
-                        print(f"RAM values: ram[0x006D]={ram[0x006D]=} * 256 + ram[0x0086]={ram[0x0086]=}")
-                        print(f"Something is wrong with the x position, don't save this state: level={_str_level(world, level)} x={x} y={y} lives={lives} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
+                # NOTE: Some levels (like 4-4) are discontinuous.  We can get x values of > 65500.
+                if not valid_x:
+                    # TODO(millman): how did we get into a weird x state?  Happens on 4-4.
+                    print(f"RAM values: ram[0x006D]={ram[0x006D]=} * 256 + ram[0x0086]={ram[0x0086]=}")
+                    print(f"Something is wrong with the x position, don't save this state: level={_str_level(world, level)} x={x} y={y} lives={lives} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
 
-                    if not valid_lives:
-                        # TODO(millman): how did we get to a state where we don't have full lives?
-                        print(f"Something is wrong with the lives, don't save this state: level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} lives={lives} steps_since_load={steps_since_load}")
-                        raise AssertionError("STOP")
+                if not valid_lives:
+                    # TODO(millman): how did we get to a state where we don't have full lives?
+                    print(f"Something is wrong with the lives, don't save this state: level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} lives={lives} steps_since_load={steps_since_load}")
+                    raise AssertionError("STOP")
 
-                    if valid_lives and valid_x:
-                        saves.append(SaveInfo(
-                            save_id=next_save_id,
-                            x=x,
-                            y=y,
-                            level=level,
-                            world=world,
-                            level_ticks=level_ticks,
-                            distance_x=distance_x,
-                            save_state=nes.save(),
-                            visited_patches=visited_patches.copy(),
-                        ))
-                        next_save_id += 1
-                        visited_patches.add(patch_id)
+                if valid_lives and valid_x:
+                    saves.add(SaveInfo(
+                        save_id=next_save_id,
+                        x=x,
+                        y=y,
+                        level=level,
+                        world=world,
+                        level_ticks=level_ticks,
+                        distance_x=distance_x,
+                        save_state=nes.save(),
+                        visited_patches=visited_patches.copy(),
+                        visited_patches_x=visited_patches_x.copy(),
+                    ))
+                    next_save_id += 1
+                    visited_patches.add(patch_id)
 
-                    # TODO(millman): dump states
+                    patch_x_id = (world, level, x // PATCH_SIZE)
+                    visited_patches_x.add(patch_x_id)
 
             patches_histogram[patch_id] += 1
 
@@ -582,12 +661,12 @@ def main():
             ticks_left = get_time_left(ram)
             ticks_used = max(1, level_ticks - ticks_left)
 
-            distance = distance_x
-            speed = distance / ticks_used
+            speed = distance_x / ticks_used
 
             patches_per_tick = len(visited_patches) / ticks_used
+            patches_x_per_tick = len(visited_patches_x) / ticks_used
 
-            print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} ticks-used={ticks_used} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} steps_since_load={steps_since_load}")
+            print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} ticks-used={ticks_used} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} patches_x/tick={patches_x_per_tick:.2f} steps_since_load={steps_since_load}")
             last_print_time = now
 
         step += 1
