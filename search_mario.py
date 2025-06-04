@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import collections
 import os
 import random
 import time
@@ -13,9 +14,11 @@ import numpy as np
 import torch
 import tyro
 from gymnasium.envs.registration import register
+from PIL import Image
 from pydantic import BaseModel
 from torch.utils.tensorboard import SummaryWriter
 
+from nes_ai.ai.vlm import GptVisionLanguageModel
 from super_mario_env_ram_hacks import encode_world_level
 from super_mario_env_search import (
     SuperMarioEnv,
@@ -364,6 +367,12 @@ def main():
 
     ucb_states = {}
 
+    vlm = GptVisionLanguageModel("smb")
+    instructions = None
+    instruction_image = None
+
+    screenshots = collections.deque(maxlen=120)
+
     while True:
         # Remember previous states.
         prev_level = level
@@ -388,6 +397,24 @@ def main():
 
         # Execute action.
         _next_obs, reward, termination, truncation, info = envs.step((controller,))
+
+        obs_image = first_env.screen.get_as_image(screen_index=0).resize(
+            (480, 448), Image.Resampling.BICUBIC
+        )
+        screenshots.append(obs_image)
+
+        if instructions is None:
+            print(_next_obs.shape)
+            instruction_image = first_env.screen.get_as_image(screen_index=0).resize(
+                (480, 448), Image.Resampling.BICUBIC
+            )
+            print(instruction_image)
+            instructions = vlm.vlm(
+                image=instruction_image,
+                prompt="<|image_1|>Given the screenshot, give 3-5 specific, step-by-step instructions on where Mario should go next to stay alive and win the game.",
+                system_prompt="You are an expert Super Mario Bros player.",
+            )
+            print(instructions)
 
         # Read and record state.
         #   * Add position count to histogram.
@@ -423,6 +450,32 @@ def main():
         if termination or force_terminate:
             # Step again so that the environment reset happens before we load.
             envs.step((controller,))
+
+            if len(screenshots) < 41:
+                print(
+                    f"Not enough screenshots to analyze: {len(screenshots)} < 41, skipping analysis."
+                )
+            else:
+                print(len(screenshots))
+                obs_image = screenshots[-40]
+                obs_image_2 = screenshots[-20]
+                screenshots.clear()
+                print(obs_image)
+                obs_image.save("output.png")
+                results = vlm.vlm_multi(
+                    images=[instruction_image, obs_image, obs_image_2],
+                    prompt="Sequence: <|image_1|>\n\n<|image_2|>\n\n<|image_3|>\n\n"
+                    + instructions,
+                    system_prompt="Given a before screenshot and an after screenshot, and a set of instructions, determine if the instructions were followed.  For each instruction, output 'yes' if the instruction was followed and 'no' if it wasn't.",
+                )
+                print(results)
+                yes_count = results.lower().count("yes")
+                print(f"Number of instructions followed: {yes_count}")
+                no_count = results.lower().count("no")
+                print(f"Number of instructions not followed: {no_count}")
+                assert (
+                    no_count > 0
+                ), f"Expected not all instructions to be followed, but got {no_count} noes and {yes_count} yeses."
 
             # Reorder saves across all trajectories by advancement through the game (x pos).
             saves = sorted(saves, key=lambda s: (s.world, s.level, s.distance_x, s.y))

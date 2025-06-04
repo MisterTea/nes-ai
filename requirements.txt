@@ -18,7 +18,9 @@ tensorboard
 sqlitedict
 tensordict
 termcolor
+torch
 torchrl
+torchaudio
 PyOpenGL
 stable-baselines3
 gymnasium[all]
