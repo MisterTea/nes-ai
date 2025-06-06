@@ -104,7 +104,6 @@ class Args:
     print_freq_sec: float = 1.0
 
     # Visualization
-    visualize_save_states: bool = True
     vis_freq_sec: float = 0.1
 
     # Algorithm specific arguments
@@ -306,6 +305,88 @@ class PatchReservoir:
         return len(self._saves_by_patches)
 
 
+def _get_min_speed() -> int:
+    # If time left is too short, this creates a bad feedback loop because we can keep
+    # dying due to timer.  That would encourage the agent to finish quick, but it may not
+    # be possible to actually finish.
+    #
+    # We use some domain-specific knowledge here that all levels are about 3000-4000 units.
+    # If we assume that we can clear 4000 units in 400 timer ticks, then that means we need
+    # about 10 units/tick.  If we're too far behind this ratio, avoid saving based on time.
+    #
+    # For example, level 1-1 starts with 401 ticks (approx seconds) and is 3266 position
+    # units long.  The minimum rate at which we can cover ground is 3266 units in 401 ticks,
+    # or 3266/401 (8.1).  If we're under this ratio, we won't be able to finish the level.
+    #
+    # To get the ratio of our advancement, we actually want the number of ticks used, not the
+    # number of ticks left.  We assume that all levels have 401 ticks total.
+    #
+    # Since units/tick is distance/time, that's also "speed".
+    #
+    # Here are some sample numbers:
+    #   3266 units / 401 ticks used ->  8.1 units/tick (min)
+    #   3266 units / 200 ticks used -> 16.3 units/tick (twice normal rate, good)
+    #    100 units /  20 ticks used ->  5.0 units/tick (bad, too slow)
+    #    100 units / 100 ticks used ->  1.0 units/tick (bad, too slow)
+    #
+    # Level 1-3 is 3100 units, 300 ticks available ->  10.1 units/tick (min)
+    #
+    # Level 4-4 (and probably 8-4) are discontinuous.
+    # There is a jump from x=200 to x=665535 (max value) at some point.  If the x has
+    # changed by more than some large amount (say 100 units), then it means the distance_per_tick
+    # metric is invalid.  Instead of looking at pure x value, we need to measure the accumulated x
+    # position.
+    #
+    # Here are sample numbers when using distance, comparing with ticks remaining vs ticks used:
+    #   3000 distance remaining / 400 ticks remaining ->  7.5 units/tick
+    #   3000 distance remaining / 300 ticks remaining -> 10.0 units/tick
+    #   3000 distance remaining / 200 ticks remaining -> 15.0 units/tick
+    #   3000 distance remaining / 100 ticks remaining -> 30.0 units/tick
+    #
+    #   3000 distance remaining /   0 ticks used -> +inf units/tick
+    #   3000 distance remaining / 100 ticks used -> 30.0 units/tick
+    #   3000 distance remaining / 300 ticks used -> 10.0 units/tick
+    #   3000 distance remaining / 400 ticks used ->  7.5 units/tick
+    #
+    # A fast world might be 3000 distance in 300 ticks.  If we spend half the time waiting around, then
+    # the remaining time we need finish in half the ticks:
+    #   3000 distance remaining / 300 ticks used -> 10.0 units/ticks (nominal)
+    #   3000 distance remaining / 150 ticks used -> 15.0 units/ticks (required)
+    #
+    #   10 distance remaining / 300 ticks used -> 0.03 units/ticks (required)
+    #
+    # Another way to think about all of this:
+    #   * How much distance is left to cover?
+    #   * How much time do we have left?
+    #   * Distance per time is: speed
+    #   * What's mario's max speed?
+    #   * If our cumulative speed is too low, abort.
+    #
+    # World 8-1 is 6400 pixels long, and only 300 seconds
+
+    # Use a ratio of <1.0, because we want to be able to slow down and speed up within a level.
+    min_speed = 6400 / 300 * 1.0
+
+    return min_speed
+
+
+def _get_min_patches_per_tick() -> int:
+    # We want to ensure Mario is finding new states at a reasonable rate, otherwise it means that we're
+    # going back over too much ground we've seen before.
+    #
+    # If each patch is (say) 20 units, and we want mario to find a new one every
+    #
+    # A level is about 3000 pixels
+    # A level is about 3000/20 patches = 150 patches
+    # 150 patches in 300 ticks is 0.5 patches/tick
+    # That doesn't account for vertical positions too, which will yield extra patches.
+    # If Mario jumps, that will cover about 3 patches.
+
+    min_patches_per_tick = 3000 / PATCH_SIZE / 300 * 2.5
+
+    return min_patches_per_tick
+
+
 # Histogram visualization
 
 # Approximate the size of the histogram based on how many patches we need.
@@ -440,6 +521,9 @@ def main():
     last_vis_time = time.time()
     patches_histogram = Counter()
 
+    min_speed = _get_min_speed()
+    min_patches_per_tick = _get_min_patches_per_tick()
+
     # Per-trajectory state.  Resets after every death/level.
     action_history = []
     visited_patches = set()
@@ -461,14 +545,6 @@ def main():
 
     patch_id = (world, level, x, y)
 
-    print(f"LIVES AT START: {life(ram)}")
-
-    if False: # x >= 65500:
-        print("SOMETHING WENT WRONG WITH CURRENT STATE")
-        ticks_left = get_time_left(ram)
-        print(f"level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} states=0 visited={len(visited_patches)}")
-        raise AssertionError("STOP")
-
     saves = PatchReservoir()
     saves.add(SaveInfo(
         save_id=next_save_id,
@@ -488,6 +564,10 @@ def main():
     steps_since_load = 0
 
     while True:
+        step += 1
+        steps_since_load += 1
+        now = time.time()
+
         # Remember previous states.
         prev_world = world
         prev_level = level
@@ -498,21 +578,29 @@ def main():
         # Select an action, save in action history.
         controller = _flip_buttons(controller, flip_prob=0.025, ignore_button_mask=_MASK_START_AND_SELECT)
 
+        action_history.append(controller)
+
         # Execute action.
         _next_obs, reward, termination, truncation, info = envs.step((controller,))
 
-        # Read and record state.
-        #   * Add position count to histogram.
-        #   * Add action to action history.
+        # Read current state.
         world = get_world(ram)
         level = get_level(ram)
         x = get_x_pos(ram)
         y = get_y_pos(ram)
         lives = life(ram)
+        ticks_left = get_time_left(ram)
 
         patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
-        action_history.append(controller)
+        # Calculate derived states.
+        ticks_used = max(1, level_ticks - ticks_left)
+
+        speed = distance_x / ticks_used
+        patches_per_tick = len(visited_patches) / ticks_used
+        patches_x_per_tick = len(visited_patches_x) / ticks_used
+
+        steps_per_sec = step / (now - start_time)
 
         # If we get teleported, or if the level boundary is discontinuous, the change in x position isn't meaningful.
         if abs(x - prev_x) > 50:
@@ -525,19 +613,12 @@ def main():
         else:
             distance_x += x - prev_x
 
-        # Calculate derived states.
-        ticks_left = get_time_left(ram)
-        ticks_used = max(1, level_ticks - ticks_left)
-
-        speed = distance_x / ticks_used
-        patches_per_tick = len(visited_patches) / ticks_used
-
         # TODO(millman): something is broken with the termination flag?
         if lives < prev_lives and not termination:
             print(f"Lost a life: x={x} ticks_left={ticks_left} distance={distance_x}")
             raise AssertionError("Missing termination flag for lost life")
 
-        # If we died, reload from a gamestate based on recency heuristic.
+        # If we died, reload from a game state based on heuristic.
         if termination or force_terminate:
             # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
             # Also dump state histogram.
@@ -589,11 +670,14 @@ def main():
             visited_patches = save_info.visited_patches.copy()
             visited_patches_x = save_info.visited_patches_x.copy()
             action_history = []
+
+            # Read current state.
             world = get_world(ram)
             level = get_level(ram)
             x = get_x_pos(ram)
             y = get_y_pos(ram)
             lives = life(ram)
+            ticks_left = get_time_left(ram)
 
             if save_info.world != world or save_info.level != level or save_info.x != x or save_info.y != y:
                 print(f"Validate save state:")
@@ -607,18 +691,21 @@ def main():
                 assert save_info.x == x, f"Mismatched save state!"
                 assert save_info.y == y, f"Mismatched save state!"
 
+            # Set prior frame values to current.  There is no difference at load.
             prev_x = x
+            prev_world = world
             prev_level = level
             prev_lives = lives
-            level_ticks = save_info.level_ticks
             steps_since_load = 0
+            level_ticks = save_info.level_ticks
 
-            ticks_left = get_time_left(ram)
+            # Update derived state.
             ticks_used = max(1, level_ticks - ticks_left)
             distance_x = save_info.distance_x
 
             speed = distance_x / ticks_used
             patches_per_tick = len(visited_patches) / ticks_used
+            patches_x_per_tick = len(visited_patches_x) / ticks_used
 
             if True:
                 print(f"Loaded save: save_id={save_info.save_id} level={_str_level(world, level)} level_ram={world}-{level}, x={x} y={y} lives={lives}")
@@ -638,31 +725,23 @@ def main():
             # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
             # Also dump state histogram.
             if world != prev_world or level != prev_level:
-                now = time.time()
-
                 # Print before-level-end info.
                 if True:
-                    ticks_left = get_time_left(ram)
-                    ticks_used = max(1, level_ticks - ticks_left)
-
-                    speed = distance_x / ticks_used
-                    patches_per_tick = len(visited_patches) / ticks_used
-                    patches_x_per_tick = len(visited_patches_x) / ticks_used
-
                     print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} ticks-used={ticks_used} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} patches_x/tick={patches_x_per_tick:.2f} steps_since_load={steps_since_load}")
+
+                # Set number of ticks in level to the current ticks.
+                level_ticks = get_time_left(ram)
 
                 # Clear state.
                 visited_patches = set()
                 visited_patches_x = set()
 
                 distance_x = 0
-                level_ticks = get_time_left(ram)
 
                 # Print after-level-start info.
                 if True:
                     print(f"Starting level: {_str_level(world, level)}")
 
-                    ticks_left = get_time_left(ram)
                     ticks_used = max(1, level_ticks - ticks_left)
 
                     speed = distance_x / ticks_used
@@ -672,12 +751,6 @@ def main():
                     print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} ticks-used={ticks_used} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} patches_x/tick={patches_x_per_tick:.2f} steps_since_load={steps_since_load}")
 
                 assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
-
-                if False: # x >= 65500:
-                    print("SOMETHING WENT WRONG WITH CURRENT STATE")
-                    ticks_left = get_time_left(ram)
-                    print(f"level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
-                    raise AssertionError("STOP")
 
                 saves = PatchReservoir()
                 saves.add(SaveInfo(
@@ -694,87 +767,21 @@ def main():
                 ))
                 next_save_id += 1
 
-
             # If time left is too short, this creates a bad feedback loop because we can keep
             # dying due to timer.  That would encourage the agent to finish quick, but it may not
             # be possible to actually finish.
             #
-            # We use some domain-specific knowledge here that all levels are about 3000-4000 units.
-            # If we assume that we can clear 4000 units in 400 timer ticks, then that means we need
-            # about 10 units/tick.  If we're too far behind this ratio, avoid saving based on time.
-            #
-            # For example, level 1-1 starts with 401 ticks (approx seconds) and is 3266 position
-            # units long.  The minimum rate at which we can cover ground is 3266 units in 401 ticks,
-            # or 3266/401 (8.1).  If we're under this ratio, we won't be able to finish the level.
-            #
-            # To get the ratio of our advancement, we actually want the number of ticks used, not the
-            # number of ticks left.  We assume that all levels have 401 ticks total.
-            #
-            # Here are some sample numbers:
-            #   3266 units / 401 ticks used ->  8.1 units/tick (min)
-            #   3266 units / 200 ticks used -> 16.3 units/tick (twice normal rate, good)
-            #    100 units /  20 ticks used ->  5.0 units/tick (bad, too slow)
-            #    100 units / 100 ticks used ->  1.0 units/tick (bad, too slow)
-            #
-            # Level 1-3 is 3100 units, 300 ticks available ->  10.1 units/tick (min)
-            #
-            #
-            # Level 4-4 (and probably 8-4) are discontinuous.
-            # There is a jump from x=200 to x=665535 (max value) at some point.  If the x has
-            # changed by more than some large amount (say 100 units), then it means the distance_per_tick
-            # metric is invalid.  Instead of looking at pure x value, we need to measure the accumulated x
-            # position.
-            #
-            # Here are sample numbers when using distance, comparing with ticks remaining vs ticks used:
-            #   3000 distance remaining / 400 ticks remaining ->  7.5 units/tick
-            #   3000 distance remaining / 300 ticks remaining -> 10.0 units/tick
-            #   3000 distance remaining / 200 ticks remaining -> 15.0 units/tick
-            #   3000 distance remaining / 100 ticks remaining -> 30.0 units/tick
-            #
-            #   3000 distance remaining /   0 ticks used -> +inf units/tick
-            #   3000 distance remaining / 100 ticks used -> 30.0 units/tick
-            #   3000 distance remaining / 300 ticks used -> 10.0 units/tick
-            #   3000 distance remaining / 400 ticks used ->  7.5 units/tick
-            #
-            # A fast world might be 3000 distance in 300 ticks.  If we spend half the time waiting around, then
-            # the remaining time we need finish in half the ticks:
-            #   3000 distance remaining / 300 ticks used -> 10.0 units/ticks (nominal)
-            #   3000 distance remaining / 150 ticks used -> 15.0 units/ticks (required)
-            #
-            #   10 distance remaining / 300 ticks used -> 0.03 units/ticks (required)
-            #
-            # Another way to think about all of this:
-            #   * How much distance is left to cover?
-            #   * How much time do we have left?
-            #   * Distance per time is: speed
-            #   * What's mario's max speed?
-            #   * If our cumulative speed is too low, abort.
-            #
-            # World 8-1 is 6400 pixels long, and only 300 seconds
-
-            # Use a ratio of <1.0, because we want to be able to slow down and speed up within a level.
-            min_speed = 6400 / 300 * 1.0
-
-            # We want to ensure Mario is finding new states at a reasonable rate, otherwise it means that we're
-            # going back over too much ground we've seen before.
-            #
-            # If each patch is (say) 20 units, and we want mario to find a new one every
-            #
-            # A level is about 3000 pixels
-            # A level is about 3000/20 patches = 150 patches
-            # 150 patches in 300 ticks is 0.5 patches/tick
-            # That doesn't account for vertical positions too, which will yield extra patches.
-            # If Mario jumps, that will cover about 3 patches.
-
-            min_patches_per_tick = 3000 / PATCH_SIZE / 300 * 2.5
-
             # Wait until we've used some ticks, so that the speed is meaningful.
             if ticks_used > 20 and speed < min_speed:
                 print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
                 force_terminate = True
+
+            # We want to ensure Mario is finding new states at a reasonable rate, otherwise it means that we're
+            # going back over too much ground we've seen before.
             elif ticks_used > 20 and patches_per_tick < min_patches_per_tick:
                 print(f"Ending trajectory, patch discovery rate is too slow: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
                 force_terminate = True
+
             elif False: # patch_id in visited_patches:
                 # TODO(millman): This doesn't work right, because we always start on the same patch.
                 #   Maybe need to consider transitioning patches?  But then, we'll always pick working off the frontier,
@@ -783,6 +790,7 @@ def main():
                 # We were already here, resample.
                 print(f"Ending trajectory, revisited state: x={x} ticks_left={ticks_left} distance={distance_x} ratio={speed:.4f}")
                 force_terminate = True
+
             elif patch_id != prev_patch_id:
                 valid_lives = lives > 1 and lives < 100
                 valid_x = True  # x < 65500
@@ -828,23 +836,12 @@ def main():
         #   * Elapsed time since level start.
         #   * Novel states found (across all trajectories)
         #   * Novel states/sec
-        now = time.time()
-        if now - last_print_time > args.print_freq_sec:
-            steps_per_sec = step / (now - start_time)
-
-            ticks_left = get_time_left(ram)
-            ticks_used = max(1, level_ticks - ticks_left)
-
-            speed = distance_x / ticks_used
-
-            patches_per_tick = len(visited_patches) / ticks_used
-            patches_x_per_tick = len(visited_patches_x) / ticks_used
-
+        if args.print_freq_sec > 0 and now - last_print_time > args.print_freq_sec:
             print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} ticks-used={ticks_used} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} patches_x/tick={patches_x_per_tick:.2f} steps_since_load={steps_since_load}")
             last_print_time = now
 
         # Visualize the distribution of save states.
-        if args.visualize_save_states and now - last_vis_time > args.vis_freq_sec:
+        if args.vis_freq_sec > 0 and now - last_vis_time > args.vis_freq_sec:
 
             # Histogram of number of saves in each patch reservoir.
             if True:
@@ -880,9 +877,6 @@ def main():
             screen.show()
 
             last_vis_time = now
-
-        step += 1
-        steps_since_load += 1
 
 
 if __name__ == "__main__":
