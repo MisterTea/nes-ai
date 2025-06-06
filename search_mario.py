@@ -271,7 +271,7 @@ def _optimal_patch_layout(screen_width, screen_height, n_patches):
 
 class PatchReservoir:
 
-    def __init__(self, max_saves_per_patch: int = 5):
+    def __init__(self, max_saves_per_patch: int = 1):
         self.max_saves_per_patch = max_saves_per_patch
         self._saves_by_patch = defaultdict(list)
         self._patch_seen_counts = Counter()
@@ -708,6 +708,10 @@ def main():
             ram = nes.ram()
             controller[:] = nes.controller1.is_pressed[:]
 
+            # Flip the buttons with some probability.  If we're loading a state, we don't want to
+            # be required to use the same action state that was tried before.
+            controller = _flip_buttons(controller, flip_prob=0.025, ignore_button_mask=_MASK_START_AND_SELECT)
+
             visited_patches = save_info.visited_patches.copy()
             visited_patches_x = save_info.visited_patches_x.copy()
             action_history = save_info.action_history.copy()
@@ -746,6 +750,12 @@ def main():
 
             steps_since_load = 0
             force_terminate = False
+
+        # Stop after some fixed number of steps.  This will force the sampling logic to run more often,
+        # which means we won't waste as much time running through old states.
+        elif steps_since_load > 250:
+            print(f"Ending trajectory, max steps for trajectory: {steps_since_load}: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
+            force_terminate = True
 
         # If we died, skip.
         elif lives < prev_lives:
@@ -817,15 +827,6 @@ def main():
             # going back over too much ground we've seen before.
             elif False:  # ticks_used > 20 and patches_per_tick < min_patches_per_tick:
                 print(f"Ending trajectory, patch discovery rate is too slow: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
-                force_terminate = True
-
-            elif False:  # patch_id in visited_patches:
-                # TODO(millman): This doesn't work right, because we always start on the same patch.
-                #   Maybe need to consider transitioning patches?  But then, we'll always pick working off the frontier,
-                #   which isn't right either.
-
-                # We were already here, resample.
-                print(f"Ending trajectory, revisited state: x={x} ticks_left={ticks_left} distance={distance_x} ratio={speed:.4f}")
                 force_terminate = True
 
             elif patch_id != prev_patch_id:
