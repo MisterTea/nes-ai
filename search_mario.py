@@ -909,7 +909,7 @@ def main():
                     pixel_size=_HIST_PIXEL_SIZE,
                 )
 
-                screen.blit_image(img_rgb_240, screen_index=1)
+                screen.blit_image(img_rgb_240, screen_index=3)
 
             screen.show()
 
