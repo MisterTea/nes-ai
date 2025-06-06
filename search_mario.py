@@ -44,6 +44,7 @@ class SaveInfo:
     save_state: Any
     visited_patches: set
     visited_patches_x: set
+    action_history: list
 
 
 @dataclass
@@ -557,6 +558,7 @@ def main():
         save_state=nes.save(),
         visited_patches=visited_patches.copy(),
         visited_patches_x=visited_patches_x.copy(),
+        action_history=action_history,
     ))
 
     next_save_id += 1
@@ -669,7 +671,7 @@ def main():
 
             visited_patches = save_info.visited_patches.copy()
             visited_patches_x = save_info.visited_patches_x.copy()
-            action_history = []
+            action_history = save_info.action_history.copy()
 
             # Read current state.
             world = get_world(ram)
@@ -733,6 +735,7 @@ def main():
                 level_ticks = get_time_left(ram)
 
                 # Clear state.
+                action_history = []
                 visited_patches = set()
                 visited_patches_x = set()
 
@@ -764,6 +767,7 @@ def main():
                     save_state=nes.save(),
                     visited_patches=visited_patches.copy(),
                     visited_patches_x=visited_patches_x.copy(),
+                    action_history=action_history.copy(),
                 ))
                 next_save_id += 1
 
@@ -818,6 +822,7 @@ def main():
                         save_state=nes.save(),
                         visited_patches=visited_patches.copy(),
                         visited_patches_x=visited_patches_x.copy(),
+                        action_history=action_history.copy()
                     ))
                     next_save_id += 1
                     visited_patches.add(patch_id)
