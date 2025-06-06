@@ -32,7 +32,16 @@ register(
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 NdArrayRGB8 = np.ndarray[tuple[Literal[3]], np.dtype[np.uint8]]
 
-@dataclass
+
+@dataclass(frozen=True)
+class PatchId:
+    world: int
+    level: int
+    patch_x: int
+    patch_y: int
+
+
+@dataclass(frozen=True)
 class SaveInfo:
     save_id: int
     x: int
@@ -46,6 +55,7 @@ class SaveInfo:
     visited_patches: set
     visited_patches_x: set
     action_history: list
+    prev_patch_id: PatchId
 
 
 @dataclass
@@ -120,7 +130,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless
             raise RuntimeError("STOP")
         else:
             render_mode = "rgb" if headless else "human"
-            env = gym.make(env_id, render_mode=render_mode, world_level=(8, 1), screen_rc=(2,2))
+            env = gym.make(env_id, render_mode=render_mode, world_level=(8, 4), screen_rc=(2,2))
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
 
@@ -269,37 +279,59 @@ def _optimal_patch_layout(screen_width, screen_height, n_patches):
     return (best_rows, best_cols, max_patch_size)
 
 
+@dataclass(frozen=True)
+class ReservoirId:
+    world: int
+    level: int
+    patch_x: int
+    patch_y: int
+    prev_patch_x: int
+    prev_patch_y: int
+
+
 class PatchReservoir:
 
-    def __init__(self, max_saves_per_patch: int = 1):
-        self.max_saves_per_patch = max_saves_per_patch
-        self._saves_by_patch = defaultdict(list)
+    def __init__(self, max_saves_per_reservoir: int = 1):
+        self.max_saves_per_reservoir = max_saves_per_reservoir
+        self._saves_by_reservoir = defaultdict(list)
+        self._reservoir_seen_counts = Counter()
         self._patch_seen_counts = Counter()
 
-    def add(self, save: SaveInfo):
-        patch_id = (save.world, save.level, save.x // PATCH_SIZE, save.y // PATCH_SIZE)
+    @staticmethod
+    def patch_id_from_save(save: SaveInfo) -> tuple:
+        patch_id = PatchId(save.world, save.level, save.x // PATCH_SIZE, save.y // PATCH_SIZE)
+        return patch_id
 
-        if self._patch_seen_counts[patch_id] < self.max_saves_per_patch:
+    @staticmethod
+    def reservoir_id_from_save(save: SaveInfo) -> tuple:
+        reservoir_id = ReservoirId(save.world, save.level, save.x // PATCH_SIZE, save.y // PATCH_SIZE, save.prev_patch_id.patch_x, save.prev_patch_id.patch_y)
+        return reservoir_id
+
+    def add(self, save: SaveInfo):
+        patch_id = self.patch_id_from_save(save)
+        reservoir_id = self.reservoir_id_from_save(save)
+
+        if self._reservoir_seen_counts[reservoir_id] < self.max_saves_per_reservoir:
             # Reservoir is still small, add it.
-            self._saves_by_patch[patch_id].append(save)
+            self._saves_by_reservoir[reservoir_id].append(save)
 
         else:
             # Use traditional reservoir sampling.
             if False:
-                seen_count = self._patch_seen_counts[patch_id]
+                seen_count = self._reservoir_seen_counts[reservoir_id]
 
                 # Random chance of selecting an item in the reservoir.
                 k = random.randint(0, seen_count)
 
                 # Kick out the existing item in reservoir.
-                if k < self.max_saves_per_patch:
-                    self._saves_by_patch[patch_id][k] = save
+                if k < self.max_saves_per_reservoir:
+                    self._saves_by_reservoir[reservoir_id][k] = save
 
             # Replace the save that took the longest to reach this patch.
             if True:
                 # Find the save state with the most action steps.  We assume that it's better to
                 # get to a state with fewer action steps.
-                saves_in_patch = self._saves_by_patch[patch_id]
+                saves_in_patch = self._saves_by_reservoir[reservoir_id]
                 max_index, max_item = max(enumerate(saves_in_patch), key=lambda i_save: len(i_save[1].action_history))
 
                 # Replace the save state with the most action steps.  We assume that it's better to
@@ -308,17 +340,18 @@ class PatchReservoir:
                     saves_in_patch[max_index] = save
 
         # Update count.
+        self._reservoir_seen_counts[reservoir_id] += 1
         self._patch_seen_counts[patch_id] += 1
 
     def values(self) -> list[SaveInfo]:
         return [
             save
-            for saves in self._saves_by_patch.values()
+            for saves in self._saves_by_reservoir.values()
             for save in saves
         ]
 
     def __len__(self) -> int:
-        return len(self._saves_by_patch)
+        return len(self._saves_by_reservoir)
 
 
 def _get_min_speed() -> int:
@@ -425,7 +458,6 @@ _SPACE_R = 0
 # We don't know the patches_per_row or the patch_pixel_size.
 _HIST_ROWS, _HIST_COLS, _HIST_PIXEL_SIZE = _optimal_patch_layout(screen_width=240, screen_height=224, n_patches=_NUM_MAX_PATCHES)
 
-PatchId = tuple[int, int, int, int]
 
 def _build_patch_histogram_rgb(
     patch_id_and_count_pairs: list[PatchId, int],
@@ -438,8 +470,13 @@ def _build_patch_histogram_rgb(
 
     patch_histogram = np.zeros((hr + 1, hc + 1), dtype=np.float64)
 
+    if False:
+        patch_id_and_count_pairs = list(patch_id_and_count_pairs)
+        print(f"FIRST patch_id_and_count_pairs: {patch_id_and_count_pairs[0]}")
+        raise AssertionError("DEBUG")
+
     for save_patch_id, count in patch_id_and_count_pairs:
-        _patch_world, _patch_level, patch_x, patch_y = save_patch_id
+        patch_x, patch_y = save_patch_id.patch_x, save_patch_id.patch_y
 
         # What row of the level we're in.  Wrap around if past the end of the screen.
         wrap_i = patch_x // hc
@@ -462,7 +499,7 @@ def _build_patch_histogram_rgb(
     grid_rgb = np.stack([grid_g]*3, axis=-1)
 
     # Mark current patch.
-    _world, _level, px, py = current_patch
+    px, py = current_patch.patch_x, current_patch.patch_y
     wrap_i = px // hc
     patch_r = wrap_i * (_MAX_PATCHES_Y + _SPACE_R) + py
     patch_c = px % hc
@@ -581,7 +618,8 @@ def main():
     level_ticks = -1
     distance_x = 0
 
-    patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+    patch_id = PatchId(world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+    prev_patch_id = patch_id
 
     saves = PatchReservoir()
     saves.add(SaveInfo(
@@ -597,6 +635,7 @@ def main():
         visited_patches=visited_patches.copy(),
         visited_patches_x=visited_patches_x.copy(),
         action_history=action_history.copy(),
+        prev_patch_id=prev_patch_id,
     ))
 
     next_save_id += 1
@@ -631,7 +670,7 @@ def main():
         lives = life(ram)
         ticks_left = get_time_left(ram)
 
-        patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+        patch_id = PatchId(world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
         # Calculate derived states.
         ticks_used = max(1, level_ticks - ticks_left)
@@ -667,8 +706,6 @@ def main():
 
             # In AutoresetMode.DISABLED, we have to reset ourselves.
             # Reset only if we hit a termination state.  Otherwise, we can just reload.
-
-            # TODO(millman): don't actually need to reset?  Could just reload state each time.
             if termination:
                 if _AUTORESET_DISABLED := True:
                     resets_before = first_env.resets
@@ -738,7 +775,7 @@ def main():
             prev_level = level
             prev_x = x
             prev_lives = lives
-            prev_patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+            prev_patch_id = PatchId(world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
             level_ticks = save_info.level_ticks
 
@@ -817,6 +854,7 @@ def main():
                     visited_patches=visited_patches.copy(),
                     visited_patches_x=visited_patches_x.copy(),
                     action_history=action_history.copy(),
+                    prev_patch_id=prev_patch_id,
                 ))
                 next_save_id += 1
 
@@ -856,7 +894,7 @@ def main():
                 # What if we wait until we've hit the same state a few times in a row as a detection of if we're retracing ground?
                 if False:
                     # Find the trajectory that got to this state, but took the most actions.
-                    saves_in_patch = saves._saves_by_patch[patch_id]
+                    saves_in_patch = saves._saves_by_reservoir[patch_id]
                     if saves_in_patch:
                         # We've already been to this patch, get the slowest action history.
                         max_item = max(saves_in_patch, key=lambda save: len(save.action_history))
@@ -883,7 +921,8 @@ def main():
                         save_state=nes.save(),
                         visited_patches=visited_patches.copy(),
                         visited_patches_x=visited_patches_x.copy(),
-                        action_history=action_history.copy()
+                        action_history=action_history.copy(),
+                        prev_patch_id=prev_patch_id,
                     ))
                     next_save_id += 1
                     visited_patches.add(patch_id)
@@ -909,10 +948,13 @@ def main():
 
             # Histogram of number of saves in each patch reservoir.
             if True:
-                patch_id_and_count_pairs = (
-                    (patch_id, len(saves_in_patch))
-                    for patch_id, saves_in_patch in saves._saves_by_patch.items()
-                )
+                # Collect reservoirs into patches.
+                patch_id_to_count = Counter()
+                for reservoir_id, saves_in_reservoir in saves._saves_by_reservoir.items():
+                    patch_id = PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
+                    patch_id_to_count[patch_id] += len(saves_in_reservoir)
+
+                patch_id_and_count_pairs = patch_id_to_count.items()
 
                 img_rgb_240 = _build_patch_histogram_rgb(
                     patch_id_and_count_pairs,
