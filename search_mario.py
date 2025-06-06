@@ -6,7 +6,7 @@ import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import gymnasium as gym
 import numpy as np
@@ -17,7 +17,7 @@ import tyro
 from PIL import Image
 from torch.utils.tensorboard import SummaryWriter
 
-from super_mario_env_search import SuperMarioEnv, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses, get_time_left, life
+from super_mario_env_search import SuperMarioEnv, SCREEN_H, SCREEN_W, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses, get_time_left, life
 from super_mario_env_ram_hacks import encode_world_level
 
 from gymnasium.envs.registration import register
@@ -30,6 +30,7 @@ register(
 
 
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
+NdArrayRGB8 = np.ndarray[tuple[Literal[3]], np.dtype[np.uint8]]
 
 @dataclass
 class SaveInfo:
@@ -305,6 +306,78 @@ class PatchReservoir:
         return len(self._saves_by_patches)
 
 
+# Histogram visualization
+
+# Approximate the size of the histogram based on how many patches we need.
+_MAX_LEVEL_DIST = 6400
+_MAX_PATCHES_X = int(np.ceil(_MAX_LEVEL_DIST / PATCH_SIZE))
+_MAX_PATCHES_Y = int(np.ceil(240 / PATCH_SIZE))
+_NUM_MAX_PATCHES = _MAX_PATCHES_X * _MAX_PATCHES_Y
+_SPACE_R = 0
+
+# We'll wrap rows around if they hit the edge of the screen.
+# Figure out how many wraps we need by:
+#
+#   (actual_screen_w / pixel_size) * num_rows = (actual_screen_w / pixel_size) * (actual_screen_h / pixel_size)
+#
+#   patches_per_row * num_rows = patches_per_row * patches_per_col
+#
+#
+# We want the pixel size to be maximized, as long as everything fits on the screen.
+# When everything fits exactly,
+# We don't know the patches_per_row or the patch_pixel_size.
+_HIST_ROWS, _HIST_COLS, _HIST_PIXEL_SIZE = _optimal_patch_layout(screen_width=240, screen_height=224, n_patches=_NUM_MAX_PATCHES)
+
+PatchId = tuple[int, int, int, int]
+
+def _build_patch_histogram_rgb(
+    patch_id_and_count_pairs: list[PatchId, int],
+    current_patch: PatchId,
+    hist_rows: int,
+    hist_cols: int,
+    pixel_size: int,
+) -> NdArrayRGB8:
+    hr, hc = hist_rows, hist_cols
+
+    patch_histogram = np.zeros((hr + 1, hc + 1), dtype=np.float64)
+
+    for save_patch_id, count in patch_id_and_count_pairs:
+        _patch_world, _patch_level, patch_x, patch_y = save_patch_id
+
+        # What row of the level we're in.  Wrap around if past the end of the screen.
+        wrap_i = patch_x // hc
+
+        r = wrap_i * (_MAX_PATCHES_Y + _SPACE_R) + patch_y
+        c = patch_x % hc
+
+        try:
+            patch_histogram[r][c] = count
+        except IndexError:
+            print(f"PATCH LAYOUT: max_patches_x={_MAX_PATCHES_X} max_patches_y={_MAX_PATCHES_Y} pixel_size={pixel_size} hr={hr} hc={hc}")
+            print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
+            raise
+
+    #print(f"HISTOGRAM min={patch_histogram.min()} max={patch_histogram.max()}")
+
+    # Normalize counts to range (0, 255)
+    grid_f = patch_histogram
+    grid_g = (grid_f / grid_f.max() * 255).astype(np.uint8)
+    grid_rgb = np.stack([grid_g]*3, axis=-1)
+
+    # Mark current patch.
+    _world, _level, px, py = current_patch
+    wrap_i = px // hc
+    patch_r = wrap_i * (_MAX_PATCHES_Y + _SPACE_R) + py
+    patch_c = px % hc
+    grid_rgb[patch_r][patch_c] = (0, 255, 0)
+
+    # Convert to screen.
+    img_gray = Image.fromarray(grid_rgb, mode='RGB')
+    img_rgb_240 = img_gray.resize((SCREEN_W, SCREEN_H), resample=Image.NEAREST)
+
+    return img_rgb_240
+
+
 def main():
     args = tyro.cli(Args)
 
@@ -413,31 +486,6 @@ def main():
     next_save_id += 1
     force_terminate = False
     steps_since_load = 0
-
-    # Configure visualization.
-
-    # Approximate the size of the histogram based on how many patches we need.
-    max_level_dist = 6400
-    max_patches_x = int(np.ceil(max_level_dist / PATCH_SIZE))
-    max_patches_y = int(np.ceil(240 / PATCH_SIZE))
-
-    # We'll wrap rows around if they hit the edge of the screen.
-    # Figure out how many wraps we need by:
-    #
-    #   (actual_screen_w / pixel_size) * num_rows = (actual_screen_w / pixel_size) * (actual_screen_h / pixel_size)
-    #
-    #   patches_per_row * num_rows = patches_per_row * patches_per_col
-    #
-    #
-    # We want the pixel size to be maximized, as long as everything fits on the screen.
-    # When everything fits exactly,
-    # We don't know the patches_per_row or the patch_pixel_size.
-    hr, hc, pixel_size = _optimal_patch_layout(screen_width=240, screen_height=224, n_patches=max_patches_x * max_patches_y)
-
-    # print(f"PATCH LAYOUT: max_patches_x={max_patches_x} max_patches_y={max_patches_y} pixel_size={pixel_size} hr={hr} hc={hc} screen_w={screen_w} screen_h={screen_h}")
-
-    space_r = 0
-
 
     while True:
         # Remember previous states.
@@ -798,87 +846,36 @@ def main():
         # Visualize the distribution of save states.
         if args.visualize_save_states and now - last_vis_time > args.vis_freq_sec:
 
-            # Use number of saves as histogram.
+            # Histogram of number of saves in each patch reservoir.
             if True:
-                patch_histogram = np.zeros((hr + 1, hc + 1), dtype=np.float64)
-                for save_patch_id, saves_in_patch in saves._saves_by_patches.items():
-                    _patch_world, _patch_level, patch_x, patch_y = save_patch_id
+                patch_id_and_count_pairs = (
+                    (patch_id, len(saves_in_patch))
+                    for patch_id, saves_in_patch in saves._saves_by_patches.items()
+                )
 
-                    # What row of the level we're in.  Wrap around if past the end of the screen.
-                    wrap_i = patch_x // hc
-
-                    r = wrap_i * (max_patches_y + space_r) + patch_y
-                    c = patch_x % hc
-
-                    try:
-                        patch_histogram[r][c] = len(saves_in_patch)
-                    except IndexError:
-                        print(f"PATCH LAYOUT: max_patches_x={max_patches_x} max_patches_y={max_patches_y} pixel_size={pixel_size} hr={hr} hc={hc}")
-                        print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
-                        raise
-
-                #print(f"HISTOGRAM min={patch_histogram.min()} max={patch_histogram.max()}")
-
-                # Normalize counts to range (0, 255)
-                grid_f = patch_histogram
-                grid_g = (grid_f / grid_f.max() * 255).astype(np.uint8)
-                grid_rgb = np.stack([grid_g]*3, axis=-1)
-
-                # Mark current patch.
-                _world, _level, px, py = patch_id
-                wrap_i = px // hc
-                patch_r = wrap_i * (max_patches_y + space_r) + py
-                patch_c = px % hc
-                grid_rgb[patch_r][patch_c] = (0, 255, 0)
-
-                # print(f"HISTOGRAM_f min={patch_histogram.min()} max={patch_histogram.max()}")
-
-                # Convert to screen.
-                img_gray = Image.fromarray(grid_rgb, mode='RGB')
-                img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST)
+                img_rgb_240 = _build_patch_histogram_rgb(
+                    patch_id_and_count_pairs,
+                    current_patch=patch_id,
+                    hist_rows=_HIST_ROWS,
+                    hist_cols=_HIST_COLS,
+                    pixel_size=_HIST_PIXEL_SIZE,
+                )
 
                 screen.blit_image(img_rgb_240, screen_index=1)
 
-            # Use seen counts as histogram.
+            # Histogram of seen counts.
             if True:
-                patch_histogram = np.zeros((hr + 1, hc + 1), dtype=np.float64)
-                for save_patch_id, seen_counts in saves._patch_seen_counts.items():
-                    _patch_world, _patch_level, patch_x, patch_y = save_patch_id
+                patch_id_and_count_pairs = saves._patch_seen_counts.items()
 
-                    # What row of the level we're in.  Wrap around if past the end of the screen.
-                    wrap_i = patch_x // hc
+                img_rgb_240 = _build_patch_histogram_rgb(
+                    patch_id_and_count_pairs,
+                    current_patch=patch_id,
+                    hist_rows=_HIST_ROWS,
+                    hist_cols=_HIST_COLS,
+                    pixel_size=_HIST_PIXEL_SIZE,
+                )
 
-                    r = wrap_i * (max_patches_y + space_r) + patch_y
-                    c = patch_x % hc
-
-                    try:
-                        patch_histogram[r][c] = seen_counts
-                    except IndexError:
-                        print(f"PATCH LAYOUT: max_patches_x={max_patches_x} max_patches_y={max_patches_y} pixel_size={pixel_size} hr={hr} hc={hc}")
-                        print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
-                        raise
-
-                #print(f"HISTOGRAM min={patch_histogram.min()} max={patch_histogram.max()}")
-
-                # Normalize counts to range (0, 255)
-                grid_f = patch_histogram
-                grid_g = (grid_f / grid_f.max() * 255).astype(np.uint8)
-                grid_rgb = np.stack([grid_g]*3, axis=-1)
-
-                # Mark current patch.
-                _world, _level, px, py = patch_id
-                wrap_i = px // hc
-                patch_r = wrap_i * (max_patches_y + space_r) + py
-                patch_c = px % hc
-                grid_rgb[patch_r][patch_c] = (0, 255, 0)
-
-                # print(f"HISTOGRAM_f min={patch_histogram.min()} max={patch_histogram.max()}")
-
-                # Convert to screen.
-                img_gray = Image.fromarray(grid_rgb, mode='RGB')
-                img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST)
-
-                screen.blit_image(img_rgb_240, screen_index=3)
+                screen.blit_image(img_rgb_240, screen_index=1)
 
             screen.show()
 
