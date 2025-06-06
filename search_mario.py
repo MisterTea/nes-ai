@@ -460,6 +460,26 @@ def _build_patch_histogram_rgb(
     return img_rgb_240
 
 
+def _validate_save_state(save_info: SaveInfo, ram: NdArrayUint8):
+    world = get_world(ram)
+    level = get_level(ram)
+    x = get_x_pos(ram)
+    y = get_y_pos(ram)
+    lives = life(ram)
+    ticks_left = get_time_left(ram)
+
+    print(f"Validate save state:")
+    print(f"  world: {save_info.world} =? {world} -> {save_info.world == world}")
+    print(f"  level: {save_info.level} =? {level} -> {save_info.level == level}")
+    print(f"  x:     {save_info.x} =? {x} -> {save_info.x == x}")
+    print(f"  y:     {save_info.y} =? {y} -> {save_info.y == y}")
+    print(f"  lives: ??? =? {lives} -> ???")
+    assert save_info.world == world, f"Mismatched save state!"
+    assert save_info.level == level, f"Mismatched save state!"
+    assert save_info.x == x, f"Mismatched save state!"
+    assert save_info.y == y, f"Mismatched save state!"
+
+
 def main():
     args = tyro.cli(Args)
 
@@ -654,6 +674,7 @@ def main():
                     envs.step((controller,))
                     resets_after = first_env.resets
 
+                    # Stop once we've confirmed that a reset happened.
                     if resets_after > resets_before:
                         break
 
@@ -681,23 +702,13 @@ def main():
             ticks_left = get_time_left(ram)
 
             if save_info.world != world or save_info.level != level or save_info.x != x or save_info.y != y:
-                print(f"Validate save state:")
-                print(f"  world: {save_info.world} =? {world} -> {save_info.world == world}")
-                print(f"  level: {save_info.level} =? {level} -> {save_info.level == level}")
-                print(f"  x:     {save_info.x} =? {x} -> {save_info.x == x}")
-                print(f"  y:     {save_info.y} =? {y} -> {save_info.y == y}")
-                print(f"  lives: ??? =? {lives} -> ???")
-                assert save_info.world == world, f"Mismatched save state!"
-                assert save_info.level == level, f"Mismatched save state!"
-                assert save_info.x == x, f"Mismatched save state!"
-                assert save_info.y == y, f"Mismatched save state!"
+                _validate_save_state(save_info, ram)
 
             # Set prior frame values to current.  There is no difference at load.
-            prev_x = x
             prev_world = world
             prev_level = level
+            prev_x = x
             prev_lives = lives
-            steps_since_load = 0
             prev_patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
             level_ticks = save_info.level_ticks
@@ -714,6 +725,7 @@ def main():
                 print(f"Loaded save: save_id={save_info.save_id} level={_str_level(world, level)} level_ram={world}-{level}, x={x} y={y} lives={lives}")
                 _print_saves_list(saves_list)
 
+            steps_since_load = 0
             force_terminate = False
 
         # If we died, skip.
