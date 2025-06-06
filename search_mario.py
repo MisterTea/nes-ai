@@ -300,11 +300,11 @@ class PatchReservoir:
                 # Find the save state with the most action steps.  We assume that it's better to
                 # get to a state with fewer action steps.
                 saves_in_patch = self._saves_by_patch[patch_id]
-                max_index, max_item = max(enumerate(saves_in_patch), key=lambda i_save: i_save[1].ticks_left)
+                max_index, max_item = max(enumerate(saves_in_patch), key=lambda i_save: len(i_save[1].action_history))
 
                 # Replace the save state with the most action steps.  We assume that it's better to
                 # get to a state with fewer action steps.
-                if save.ticks_left < max_item.ticks_left:
+                if len(save.action_history) < len(max_item.action_history):
                     saves_in_patch[max_index] = save
 
         # Update count.
@@ -596,7 +596,7 @@ def main():
         save_state=nes.save(),
         visited_patches=visited_patches.copy(),
         visited_patches_x=visited_patches_x.copy(),
-        action_history=action_history,
+        action_history=action_history.copy(),
     ))
 
     next_save_id += 1
@@ -809,17 +809,17 @@ def main():
             # be possible to actually finish.
             #
             # Wait until we've used some ticks, so that the speed is meaningful.
-            if ticks_used > 20 and speed < min_speed:
+            if False:  # ticks_used > 20 and speed < min_speed:
                 print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
                 force_terminate = True
 
             # We want to ensure Mario is finding new states at a reasonable rate, otherwise it means that we're
             # going back over too much ground we've seen before.
-            elif ticks_used > 20 and patches_per_tick < min_patches_per_tick:
+            elif False:  # ticks_used > 20 and patches_per_tick < min_patches_per_tick:
                 print(f"Ending trajectory, patch discovery rate is too slow: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
                 force_terminate = True
 
-            elif False: # patch_id in visited_patches:
+            elif False:  # patch_id in visited_patches:
                 # TODO(millman): This doesn't work right, because we always start on the same patch.
                 #   Maybe need to consider transitioning patches?  But then, we'll always pick working off the frontier,
                 #   which isn't right either.
