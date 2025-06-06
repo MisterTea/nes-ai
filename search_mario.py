@@ -41,6 +41,7 @@ class SaveInfo:
     world: int
     level_ticks: int
     distance_x: int
+    ticks_left: int
     save_state: Any
     visited_patches: set
     visited_patches_x: set
@@ -272,7 +273,7 @@ class PatchReservoir:
 
     def __init__(self, max_saves_per_patch: int = 5):
         self.max_saves_per_patch = max_saves_per_patch
-        self._saves_by_patches = defaultdict(list)
+        self._saves_by_patch = defaultdict(list)
         self._patch_seen_counts = Counter()
 
     def add(self, save: SaveInfo):
@@ -280,17 +281,31 @@ class PatchReservoir:
 
         if self._patch_seen_counts[patch_id] < self.max_saves_per_patch:
             # Reservoir is still small, add it.
-            self._saves_by_patches[patch_id].append(save)
+            self._saves_by_patch[patch_id].append(save)
 
         else:
-            seen_count = self._patch_seen_counts[patch_id]
+            # Use traditional reservoir sampling.
+            if False:
+                seen_count = self._patch_seen_counts[patch_id]
 
-            # Random chance of selecting an item in the reservoir.
-            k = random.randint(0, seen_count)
+                # Random chance of selecting an item in the reservoir.
+                k = random.randint(0, seen_count)
 
-            # Kick out the existing item in reservoir.
-            if k < self.max_saves_per_patch:
-                self._saves_by_patches[patch_id][k] = save
+                # Kick out the existing item in reservoir.
+                if k < self.max_saves_per_patch:
+                    self._saves_by_patch[patch_id][k] = save
+
+            # Replace the save that took the longest to reach this patch.
+            if True:
+                # Find the save state with the most action steps.  We assume that it's better to
+                # get to a state with fewer action steps.
+                saves_in_patch = self._saves_by_patch[patch_id]
+                max_index, max_item = max(enumerate(saves_in_patch), key=lambda i_save: i_save[1].ticks_left)
+
+                # Replace the save state with the most action steps.  We assume that it's better to
+                # get to a state with fewer action steps.
+                if save.ticks_left < max_item.ticks_left:
+                    saves_in_patch[max_index] = save
 
         # Update count.
         self._patch_seen_counts[patch_id] += 1
@@ -298,12 +313,12 @@ class PatchReservoir:
     def values(self) -> list[SaveInfo]:
         return [
             save
-            for saves in self._saves_by_patches.values()
+            for saves in self._saves_by_patch.values()
             for save in saves
         ]
 
     def __len__(self) -> int:
-        return len(self._saves_by_patches)
+        return len(self._saves_by_patch)
 
 
 def _get_min_speed() -> int:
@@ -577,6 +592,7 @@ def main():
         world=world,
         level_ticks=level_ticks,
         distance_x=distance_x,
+        ticks_left=ticks_left,
         save_state=nes.save(),
         visited_patches=visited_patches.copy(),
         visited_patches_x=visited_patches_x.copy(),
@@ -780,6 +796,7 @@ def main():
                     world=world,
                     level_ticks=level_ticks,
                     distance_x=distance_x,
+                    ticks_left=ticks_left,
                     save_state=nes.save(),
                     visited_patches=visited_patches.copy(),
                     visited_patches_x=visited_patches_x.copy(),
@@ -835,6 +852,7 @@ def main():
                         world=world,
                         level_ticks=level_ticks,
                         distance_x=distance_x,
+                        ticks_left=ticks_left,
                         save_state=nes.save(),
                         visited_patches=visited_patches.copy(),
                         visited_patches_x=visited_patches_x.copy(),
@@ -866,7 +884,7 @@ def main():
             if True:
                 patch_id_and_count_pairs = (
                     (patch_id, len(saves_in_patch))
-                    for patch_id, saves_in_patch in saves._saves_by_patches.items()
+                    for patch_id, saves_in_patch in saves._saves_by_patch.items()
                 )
 
                 img_rgb_240 = _build_patch_histogram_rgb(
