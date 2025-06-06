@@ -14,6 +14,7 @@ import torch
 
 import tyro
 
+from PIL import Image
 from torch.utils.tensorboard import SummaryWriter
 
 from super_mario_env_search import SuperMarioEnv, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses, get_time_left, life
@@ -99,6 +100,11 @@ class Args:
     # Specific experiments
     reset_to_save_state: bool = False
     headless: bool = False
+    print_freq_sec: float = 1.0
+
+    # Visualization
+    visualize_save_states: bool = True
+    vis_freq_sec: float = 0.1
 
     # Algorithm specific arguments
     env_id: str = "smb-search-v0"
@@ -112,7 +118,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless
             raise RuntimeError("STOP")
         else:
             render_mode = "rgb" if headless else "human"
-            env = gym.make(env_id, render_mode=render_mode, world_level=(8, 1))
+            env = gym.make(env_id, render_mode=render_mode, world_level=(8, 1), screen_rc=(2,2))
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
 
@@ -241,6 +247,26 @@ def _str_level(world_ram: int, level_ram: int) -> str:
     return f"{world}-{level}"
 
 
+def _optimal_patch_layout(screen_width, screen_height, n_patches):
+    max_patch_size = 0
+    best_cols = best_rows = None
+
+    # Try all possible number of columns from 1 to n_patches (but can't exceed screen_width)
+    for n_cols in range(1, n_patches + 1):
+        patch_size = screen_width // n_cols
+        n_rows = int(np.ceil(n_patches / n_cols))
+        total_height = patch_size * n_rows
+
+        if total_height <= screen_height:
+            # Maximize patch size
+            if patch_size > max_patch_size:
+                max_patch_size = patch_size
+                best_cols = n_cols
+                best_rows = n_rows
+
+    return (best_rows, best_cols, max_patch_size)
+
+
 class PatchReservoir:
 
     def __init__(self, max_saves_per_patch: int = 5):
@@ -330,12 +356,14 @@ def main():
 
     first_env = envs.envs[0].unwrapped
     nes = first_env.nes
+    screen = first_env.screen
 
     # Global state.
     step = 0
     next_save_id = 0
     start_time = time.time()
     last_print_time = time.time()
+    last_vis_time = time.time()
     patches_histogram = Counter()
 
     # Per-trajectory state.  Resets after every death/level.
@@ -382,6 +410,31 @@ def main():
     next_save_id += 1
     force_terminate = False
     steps_since_load = 0
+
+    # Configure visualization.
+
+    # Approximate the size of the histogram based on how many patches we need.
+    max_level_dist = 6400
+    max_patches_x = int(np.ceil(max_level_dist / PATCH_SIZE))
+    max_patches_y = int(np.ceil(240 / PATCH_SIZE))
+
+    # We'll wrap rows around if they hit the edge of the screen.
+    # Figure out how many wraps we need by:
+    #
+    #   (actual_screen_w / pixel_size) * num_rows = (actual_screen_w / pixel_size) * (actual_screen_h / pixel_size)
+    #
+    #   patches_per_row * num_rows = patches_per_row * patches_per_col
+    #
+    #
+    # We want the pixel size to be maximized, as long as everything fits on the screen.
+    # When everything fits exactly,
+    # We don't know the patches_per_row or the patch_pixel_size.
+    hr, hc, pixel_size = _optimal_patch_layout(screen_width=240, screen_height=224, n_patches=max_patches_x * max_patches_y)
+
+    # print(f"PATCH LAYOUT: max_patches_x={max_patches_x} max_patches_y={max_patches_y} pixel_size={pixel_size} hr={hr} hc={hc} screen_w={screen_w} screen_h={screen_h}")
+
+    space_r = 0
+
 
     while True:
         # Remember previous states.
@@ -655,7 +708,7 @@ def main():
         #   * Novel states found (across all trajectories)
         #   * Novel states/sec
         now = time.time()
-        if now - last_print_time > 1.0:
+        if now - last_print_time > args.print_freq_sec:
             steps_per_sec = step / (now - start_time)
 
             ticks_left = get_time_left(ram)
@@ -668,6 +721,95 @@ def main():
 
             print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} ticks-used={ticks_used} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} patches_x/tick={patches_x_per_tick:.2f} steps_since_load={steps_since_load}")
             last_print_time = now
+
+        # Visualize the distribution of save states.
+        if args.visualize_save_states and now - last_vis_time > args.vis_freq_sec:
+
+            # Use number of saves as histogram.
+            if True:
+                patch_histogram = np.zeros((hr + 1, hc + 1), dtype=np.float64)
+                for save_patch_id, saves_in_patch in saves._saves_by_patches.items():
+                    _patch_world, _patch_level, patch_x, patch_y = save_patch_id
+
+                    # What row of the level we're in.  Wrap around if past the end of the screen.
+                    wrap_i = patch_x // hc
+
+                    r = wrap_i * (max_patches_y + space_r) + patch_y
+                    c = patch_x % hc
+
+                    try:
+                        patch_histogram[r][c] = len(saves_in_patch)
+                    except IndexError:
+                        print(f"PATCH LAYOUT: max_patches_x={max_patches_x} max_patches_y={max_patches_y} pixel_size={pixel_size} hr={hr} hc={hc}")
+                        print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
+                        raise
+
+                #print(f"HISTOGRAM min={patch_histogram.min()} max={patch_histogram.max()}")
+
+                # Normalize counts to range (0, 255)
+                grid_f = patch_histogram
+                grid_g = (grid_f / grid_f.max() * 255).astype(np.uint8)
+                grid_rgb = np.stack([grid_g]*3, axis=-1)
+
+                # Mark current patch.
+                _world, _level, px, py = patch_id
+                wrap_i = px // hc
+                patch_r = wrap_i * (max_patches_y + space_r) + py
+                patch_c = px % hc
+                grid_rgb[patch_r][patch_c] = (0, 255, 0)
+
+                # print(f"HISTOGRAM_f min={patch_histogram.min()} max={patch_histogram.max()}")
+
+                # Convert to screen.
+                img_gray = Image.fromarray(grid_rgb, mode='RGB')
+                img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST)
+
+                screen.blit_image(img_rgb_240, screen_index=1)
+
+            # Use seen counts as histogram.
+            if True:
+                patch_histogram = np.zeros((hr + 1, hc + 1), dtype=np.float64)
+                for save_patch_id, seen_counts in saves._patch_seen_counts.items():
+                    _patch_world, _patch_level, patch_x, patch_y = save_patch_id
+
+                    # What row of the level we're in.  Wrap around if past the end of the screen.
+                    wrap_i = patch_x // hc
+
+                    r = wrap_i * (max_patches_y + space_r) + patch_y
+                    c = patch_x % hc
+
+                    try:
+                        patch_histogram[r][c] = seen_counts
+                    except IndexError:
+                        print(f"PATCH LAYOUT: max_patches_x={max_patches_x} max_patches_y={max_patches_y} pixel_size={pixel_size} hr={hr} hc={hc}")
+                        print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
+                        raise
+
+                #print(f"HISTOGRAM min={patch_histogram.min()} max={patch_histogram.max()}")
+
+                # Normalize counts to range (0, 255)
+                grid_f = patch_histogram
+                grid_g = (grid_f / grid_f.max() * 255).astype(np.uint8)
+                grid_rgb = np.stack([grid_g]*3, axis=-1)
+
+                # Mark current patch.
+                _world, _level, px, py = patch_id
+                wrap_i = px // hc
+                patch_r = wrap_i * (max_patches_y + space_r) + py
+                patch_c = px % hc
+                grid_rgb[patch_r][patch_c] = (0, 255, 0)
+
+                # print(f"HISTOGRAM_f min={patch_histogram.min()} max={patch_histogram.max()}")
+
+                # Convert to screen.
+                img_gray = Image.fromarray(grid_rgb, mode='RGB')
+                img_rgb_240 = img_gray.resize((240, 224), resample=Image.NEAREST)
+
+                screen.blit_image(img_rgb_240, screen_index=3)
+
+            screen.show()
+
+            last_vis_time = now
 
         step += 1
         steps_since_load += 1
