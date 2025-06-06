@@ -698,6 +698,8 @@ def main():
             prev_level = level
             prev_lives = lives
             steps_since_load = 0
+            prev_patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+
             level_ticks = save_info.level_ticks
 
             # Update derived state.
