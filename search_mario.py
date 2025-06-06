@@ -385,6 +385,8 @@ def main():
     distance_x = 0
     lives = life(ram)
 
+    patch_id = (world, level, x, y)
+
     print(f"LIVES AT START: {life(ram)}")
 
     if False: # x >= 65500:
@@ -438,9 +440,11 @@ def main():
 
     while True:
         # Remember previous states.
+        prev_world = world
         prev_level = level
         prev_x = x
         prev_lives = lives
+        prev_patch_id = patch_id
 
         # Select an action, save in action history.
         controller = _flip_buttons(controller, flip_prob=0.025, ignore_button_mask=_MASK_START_AND_SELECT)
@@ -457,11 +461,18 @@ def main():
         y = get_y_pos(ram)
         lives = life(ram)
 
+        patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+
         action_history.append(controller)
 
         # If we get teleported, or if the level boundary is discontinuous, the change in x position isn't meaningful.
         if abs(x - prev_x) > 50:
-            print(f"Discountinuous x position: {prev_x} -> {x}")
+            if level != prev_level:
+                print(f"Discountinuous x position, level change: {prev_world},{prev_level} -> {world},{level}, x: {prev_x} -> {x}")
+            elif lives != prev_lives:
+                print(f"Discontinuous x position, died, lives: {prev_lives} -> {lives}")
+            else:
+                print(f"Discountinuous x position: {prev_x} -> {x}")
         else:
             distance_x += x - prev_x
 
@@ -502,7 +513,7 @@ def main():
             y = get_y_pos(ram)
             lives = life(ram)
 
-            if True:
+            if save_info.world != world or save_info.level != level or save_info.x != x or save_info.y != y:
                 print(f"Validate save state:")
                 print(f"  world: {save_info.world} =? {world} -> {save_info.world == world}")
                 print(f"  level: {save_info.level} =? {level} -> {save_info.level == level}")
@@ -528,7 +539,7 @@ def main():
             patches_per_tick = len(visited_patches) / ticks_used
 
             if True:
-                print(f"Loaded save: save_id={save_info.save_id} level={_str_level(world, level)} x={x} y={y} lives={lives}")
+                print(f"Loaded save: save_id={save_info.save_id} level={_str_level(world, level)} level_ram={world}-{level}, x={x} y={y} lives={lives}")
                 _print_saves_list(saves_list)
 
             force_terminate = False
@@ -544,14 +555,41 @@ def main():
         else:
             # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
             # Also dump state histogram.
-            if level != prev_level:
-                print(f"Starting level: {_str_level(world, level)}")
+            if world != prev_world or level != prev_level:
+                now = time.time()
 
-                assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
+                # Print before-level-end info.
+                if True:
+                    ticks_left = get_time_left(ram)
+                    ticks_used = max(1, level_ticks - ticks_left)
 
+                    speed = distance_x / ticks_used
+                    patches_per_tick = len(visited_patches) / ticks_used
+                    patches_x_per_tick = len(visited_patches_x) / ticks_used
+
+                    print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} ticks-used={ticks_used} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} patches_x/tick={patches_x_per_tick:.2f} steps_since_load={steps_since_load}")
+
+                # Clear state.
                 visited_patches = set()
                 visited_patches_x = set()
+
                 distance_x = 0
+                level_ticks = get_time_left(ram)
+
+                # Print after-level-start info.
+                if True:
+                    print(f"Starting level: {_str_level(world, level)}")
+
+                    ticks_left = get_time_left(ram)
+                    ticks_used = max(1, level_ticks - ticks_left)
+
+                    speed = distance_x / ticks_used
+                    patches_per_tick = len(visited_patches) / ticks_used
+                    patches_x_per_tick = len(visited_patches_x) / ticks_used
+
+                    print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} ticks-used={ticks_used} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} patches_x/tick={patches_x_per_tick:.2f} steps_since_load={steps_since_load}")
+
+                assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
 
                 if False: # x >= 65500:
                     print("SOMETHING WENT WRONG WITH CURRENT STATE")
@@ -573,7 +611,7 @@ def main():
                     visited_patches_x=visited_patches_x.copy(),
                 ))
                 next_save_id += 1
-                level_ticks = get_time_left(ram)
+
 
             # If time left is too short, this creates a bad feedback loop because we can keep
             # dying due to timer.  That would encourage the agent to finish quick, but it may not
@@ -663,9 +701,7 @@ def main():
                 # We were already here, resample.
                 print(f"Ending trajectory, revisited state: x={x} ticks_left={ticks_left} distance={distance_x} ratio={speed:.4f}")
                 force_terminate = True
-            else:
-                patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
-
+            elif patch_id != prev_patch_id:
                 valid_lives = lives > 1 and lives < 100
                 valid_x = True  # x < 65500
 
@@ -698,6 +734,9 @@ def main():
 
                     patch_x_id = (world, level, x // PATCH_SIZE)
                     visited_patches_x.add(patch_x_id)
+
+            else:
+                assert patch_id == prev_patch_id, f"What happened????"
 
             patches_histogram[patch_id] += 1
 
