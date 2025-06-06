@@ -851,7 +851,26 @@ def main():
                     print(f"Something is wrong with the lives, don't save this state: level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} lives={lives} steps_since_load={steps_since_load}")
                     raise AssertionError("STOP")
 
-                if valid_lives and valid_x:
+                # Can't avoid visiting a state, because if we jump up and down, we'll get back to the same
+                # state we were just on.  TODO(millman): to make this work, need to keep track of frontier?  Otherwise we end up sampling non-sense trajectories?
+                # What if we wait until we've hit the same state a few times in a row as a detection of if we're retracing ground?
+                if False:
+                    # Find the trajectory that got to this state, but took the most actions.
+                    saves_in_patch = saves._saves_by_patch[patch_id]
+                    if saves_in_patch:
+                        # We've already been to this patch, get the slowest action history.
+                        max_item = max(saves_in_patch, key=lambda save: len(save.action_history))
+                        max_action_history = len(max_item.action_history)
+                    else:
+                        # We haven't been to this patch, use a virtual history that is slower than the current history.
+                        max_action_history = len(action_history) + 1
+
+                    # Stop this trajectory if we've already arrived at this state, but with more actions than other trajectories.
+                    if len(action_history) >= max_action_history:
+                        print(f"Ending trajectory, revisited state: actions {len(action_history)} > {len(max_item.action_history)}: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
+                        force_terminate = True
+
+                else:
                     saves.add(SaveInfo(
                         save_id=next_save_id,
                         x=x,
