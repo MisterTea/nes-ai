@@ -185,7 +185,7 @@ def _weight_exp(N: int, beta: float = 0.3) -> np.array:
     return weights
 
 
-PATCH_SIZE = 20
+PATCH_SIZE = 10
 
 
 def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
@@ -652,7 +652,6 @@ def main():
         prev_level = level
         prev_x = x
         prev_lives = lives
-        prev_patch_id = patch_id
 
         # Select an action, save in action history.
         controller = _flip_buttons(controller, flip_prob=0.025, ignore_button_mask=_MASK_START_AND_SELECT)
@@ -752,8 +751,9 @@ def main():
             controller[:] = nes.controller1.is_pressed[:]
 
             # Flip the buttons with some probability.  If we're loading a state, we don't want to
-            # be required to use the same action state that was tried before.
-            controller = _flip_buttons(controller, flip_prob=0.025, ignore_button_mask=_MASK_START_AND_SELECT)
+            # be required to use the same action state that was tried before.  To get faster coverage
+            # We flip buttons here with much higher probability than during a trajectory.
+            controller = _flip_buttons(controller, flip_prob=0.3, ignore_button_mask=_MASK_START_AND_SELECT)
 
             visited_patches = save_info.visited_patches.copy()
             visited_patches_x = save_info.visited_patches_x.copy()
@@ -775,7 +775,8 @@ def main():
             prev_level = level
             prev_x = x
             prev_lives = lives
-            prev_patch_id = PatchId(world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+            patch_id = PatchId(world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+            prev_patch_id = save_info.prev_patch_id
 
             level_ticks = save_info.level_ticks
 
@@ -796,7 +797,7 @@ def main():
 
         # Stop after some fixed number of steps.  This will force the sampling logic to run more often,
         # which means we won't waste as much time running through old states.
-        elif steps_since_load > 250:
+        elif steps_since_load > 350:
             print(f"Ending trajectory, max steps for trajectory: {steps_since_load}: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
             force_terminate = True
 
@@ -929,6 +930,8 @@ def main():
 
                     patch_x_id = (world, level, x // PATCH_SIZE)
                     visited_patches_x.add(patch_x_id)
+
+                prev_patch_id = patch_id
 
             else:
                 assert patch_id == prev_patch_id, f"What happened????"
