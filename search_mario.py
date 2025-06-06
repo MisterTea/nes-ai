@@ -666,19 +666,25 @@ def main():
                 print("REACHED A NEW WORLD, BUT ALSO TERMINATED?")
 
             # In AutoresetMode.DISABLED, we have to reset ourselves.
-            if _AUTORESET_DISABLED := True:
-                resets_before = first_env.resets
-                envs.reset()
+            # Reset only if we hit a termination state.  Otherwise, we can just reload.
 
-                # Don't count this reset by us, we're trying to find where other things are calling reset.
-                first_env.resets -= 1
+            # TODO(millman): don't actually need to reset?  Could just reload state each time.
+            if termination:
+                if _AUTORESET_DISABLED := True:
+                    resets_before = first_env.resets
+                    envs.reset()
 
-                resets_after = first_env.resets
+                    # Don't count this reset by us, we're trying to find where other things are calling reset.
+                    first_env.resets -= 1
+
+                    resets_after = first_env.resets
+                else:
+                    # Step again so that the environment reset happens before we load.
+                    resets_before = first_env.resets
+                    envs.step((controller,))
+                    resets_after = first_env.resets
             else:
-                # Step again so that the environment reset happens before we load.
-                resets_before = first_env.resets
-                envs.step((controller,))
-                resets_after = first_env.resets
+                resets_after = resets_before = first_env.resets
 
             # Check that stepping after termination resets appropriately.
             if resets_after == resets_before and level != prev_level:
@@ -838,6 +844,7 @@ def main():
                     # TODO(millman): how did we get into a weird x state?  Happens on 4-4.
                     print(f"RAM values: ram[0x006D]={ram[0x006D]=} * 256 + ram[0x0086]={ram[0x0086]=}")
                     print(f"Something is wrong with the x position, don't save this state: level={_str_level(world, level)} x={x} y={y} lives={lives} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
+                    raise AssertionError("STOP")
 
                 if not valid_lives:
                     # TODO(millman): how did we get to a state where we don't have full lives?
