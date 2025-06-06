@@ -552,16 +552,19 @@ def main():
 
     # Start searching the Mario game tree.
     envs.reset()
-    envs.step((controller,))
 
     ram = nes.ram()
-    world = get_world(ram)
-    level = get_level(ram)
-    x = get_x_pos(ram)
-    y = get_y_pos(ram)
-    level_ticks = get_time_left(ram)
+
+    # Initialize to invalid values.  The first step of the loop should act as a new level.
+    world = -1
+    level = -1
+    x = -1
+    y = -1
+    lives = -1
+    ticks_left = -1
+
+    level_ticks = -1
     distance_x = 0
-    lives = life(ram)
 
     patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
