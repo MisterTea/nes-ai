@@ -520,7 +520,6 @@ def main():
     start_time = time.time()
     last_print_time = time.time()
     last_vis_time = time.time()
-    patches_histogram = Counter()
 
     min_speed = _get_min_speed()
     min_patches_per_tick = _get_min_patches_per_tick()
@@ -832,8 +831,6 @@ def main():
 
             else:
                 assert patch_id == prev_patch_id, f"What happened????"
-
-            patches_histogram[patch_id] += 1
 
         # Print stats every second:
         #   * Current position: (x, y)
