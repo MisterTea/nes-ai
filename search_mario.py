@@ -543,7 +543,7 @@ def main():
     distance_x = 0
     lives = life(ram)
 
-    patch_id = (world, level, x, y)
+    patch_id = (world, level, x // PATCH_SIZE, y // PATCH_SIZE)
 
     saves = PatchReservoir()
     saves.add(SaveInfo(
