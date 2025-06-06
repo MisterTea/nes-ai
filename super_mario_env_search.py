@@ -123,12 +123,15 @@ class SuperMarioEnv(gym.Env):
         world_level: tuple[int, int] | None = None,
     ):
         self.resets = 0
+        self.steps = 0
 
         self.render_mode = render_mode
         self.render_fps = render_fps
 
         # Screen setup.  2 Screens, 1 next to the other.
         self.screen = SimpleScreenRxC((SCREEN_W, SCREEN_H), scale=1, rows=screen_rc[0], cols=screen_rc[1])
+
+        self.world_level = world_level
 
         self.clock = None
 
@@ -189,6 +192,11 @@ class SuperMarioEnv(gym.Env):
         return {}
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+        print(f"RESETTING ENVIRONMENT: resets={self.resets} world_level={self.world_level} steps={self.steps}")
+
+        if self.resets >= 2:
+            raise AssertionError("SHOULDNT HAVE RESET")
+
         self.resets += 1
 
         # TODO(millman): fix seed, etc.
@@ -214,6 +222,8 @@ class SuperMarioEnv(gym.Env):
         return observation, info
 
     def step(self, controller_presses: NdArrayUint8):
+        self.steps += 1
+
         ram = self.nes.ram()
         prev_lives = life(ram)
 

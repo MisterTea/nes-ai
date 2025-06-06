@@ -352,6 +352,7 @@ def main():
     # env setup
     envs = gym.vector.SyncVectorEnv(
         [make_env(args.env_id, 0, args.capture_video, run_name, args.headless)],
+        autoreset_mode=gym.vector.AutoresetMode.DISABLED,
     )
 
     first_env = envs.envs[0].unwrapped
@@ -490,8 +491,41 @@ def main():
 
         # If we died, reload from a gamestate based on recency heuristic.
         if termination or force_terminate:
-            # Step again so that the environment reset happens before we load.
-            envs.step((controller,))
+            # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
+            # Also dump state histogram.
+            if world != prev_world or level != prev_level:
+                print("REACHED A NEW WORLD, BUT ALSO TERMINATED?")
+
+            # In AutoresetMode.DISABLED, we have to reset ourselves.
+            if _AUTORESET_DISABLED := True:
+                resets_before = first_env.resets
+                envs.reset()
+
+                # Don't count this reset by us, we're trying to find where other things are calling reset.
+                first_env.resets -= 1
+
+                resets_after = first_env.resets
+            else:
+                # Step again so that the environment reset happens before we load.
+                resets_before = first_env.resets
+                envs.step((controller,))
+                resets_after = first_env.resets
+
+            # Check that stepping after termination resets appropriately.
+            if resets_after == resets_before and level != prev_level:
+                print("FAILED TO RESET AFTER TERMINATION ON LEVEL CHANGE, step a few more times")
+                for i in range(100):
+                    world = get_world(ram)
+                    level = get_level(ram)
+                    x = get_x_pos(ram)
+                    y = get_y_pos(ram)
+                    print(f"  Stepping {i}: world={world} level={level} x={x} y={y}")
+                    resets_before = first_env.resets
+                    envs.step((controller,))
+                    resets_after = first_env.resets
+
+                    if resets_after > resets_before:
+                        break
 
             # Collect saves.
             saves_list = saves.values()

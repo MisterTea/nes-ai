@@ -15,6 +15,56 @@ def _skip_change_area(ram: NdArrayUint8):
         ram[0x06DE] = 1
 
 
+def _is_world_over(ram: NdArrayUint8):
+    """Return a boolean determining if the world is over."""
+    # 0x0770 contains GamePlay mode:
+    # 0 => Demo
+    # 1 => Standard
+    # 2 => End of world
+    return ram[0x0770] == 2
+
+
+def _read_mem_range(ram: NdArrayUint8, address, length) -> int:
+    """
+    Read a range of bytes where each byte is a 10's place figure.
+
+    Args:
+        address (int): the address to read from as a 16 bit integer
+        length: the number of sequential bytes to read
+
+    Note:
+        this method is specific to Mario where three GUI values are stored
+        in independent memory slots to save processing time
+        - score has 6 10's places
+        - coins has 2 10's places
+        - time has 3 10's places
+
+    Returns:
+        the integer value of this 10's place representation
+
+    """
+    return int(''.join(map(str, ram[address:address + length])))
+
+
+def _time(ram: NdArrayUint8) -> int:
+    """Return the time left (0 to 999)."""
+    # time is represented as a figure with 3 10's places
+    return _read_mem_range(ram, 0x07f8, 3)
+
+
+def _skip_end_of_world(nes: Any):
+    """Skip the cutscene that plays at the end of a world."""
+    ram = nes.ram()
+
+    if _is_world_over(ram):
+        # get the current game time to reference
+        time = _time(ram)
+        # loop until the time is different
+        while _time(ram) == time:
+            # frame advance with NOP
+            nes.run_frame()
+
+
 def _get_player_state(ram: NdArrayUint8) -> np.uint8:
     """
     0x00 - Leftmost of screen
@@ -116,8 +166,7 @@ def skip_after_step(nes: Any):
         _kill_mario(ram)
 
     # skip world change scenes (must call before other skip methods)
-    # if not self.is_single_stage_env:
-    #     self._skip_end_of_world()
+    _skip_end_of_world(nes)
 
     # skip area change (i.e. enter pipe, flag get, etc.)
     _skip_change_area(ram)
