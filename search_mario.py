@@ -802,23 +802,6 @@ def main():
     prev_patch_id = patch_id
 
     saves = PatchReservoir()
-    saves.add(SaveInfo(
-        save_id=next_save_id,
-        x=x,
-        y=y,
-        level=level,
-        world=world,
-        level_ticks=level_ticks,
-        distance_x=distance_x,
-        ticks_left=ticks_left,
-        save_state=nes.save(),
-        visited_patches=visited_patches.copy(),
-        visited_patches_x=visited_patches_x.copy(),
-        action_history=action_history.copy(),
-        prev_patch_id=prev_patch_id,
-    ))
-
-    next_save_id += 1
     force_terminate = False
     steps_since_load = 0
 
