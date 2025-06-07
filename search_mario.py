@@ -860,9 +860,11 @@ def main():
         # If we get teleported, or if the level boundary is discontinuous, the change in x position isn't meaningful.
         if abs(x - prev_x) > 50:
             if level != prev_level:
-                print(f"Discountinuous x position, level change: {prev_world},{prev_level} -> {world},{level}, x: {prev_x} -> {x}")
+                # print(f"Discountinuous x position, level change: {prev_world},{prev_level} -> {world},{level}, x: {prev_x} -> {x}")
+                pass
             elif lives != prev_lives:
-                print(f"Discontinuous x position, died, lives: {prev_lives} -> {lives}")
+                # print(f"Discontinuous x position, died, lives: {prev_lives} -> {lives}")
+                pass
             else:
                 print(f"Discountinuous x position: {prev_x} -> {x}")
         else:
@@ -883,43 +885,24 @@ def main():
             # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
             # Also dump state histogram.
             if world != prev_world or level != prev_level:
-                print("REACHED A NEW WORLD, BUT ALSO TERMINATED?")
+                raise AssertionError("Reached a new world ({prev_world}-{prev_level} -> {world}-{level}), but also terminated?")
 
             # In AutoresetMode.DISABLED, we have to reset ourselves.
             # Reset only if we hit a termination state.  Otherwise, we can just reload.
             if termination:
-                if _AUTORESET_DISABLED := True:
-                    resets_before = first_env.resets
-                    envs.reset()
+                resets_before = first_env.resets
+                envs.reset()
 
-                    # Don't count this reset by us, we're trying to find where other things are calling reset.
-                    first_env.resets -= 1
+                # Don't count this reset by us, we're trying to find where other things are calling reset.
+                first_env.resets -= 1
 
-                    resets_after = first_env.resets
-                else:
-                    # Step again so that the environment reset happens before we load.
-                    resets_before = first_env.resets
-                    envs.step((controller,))
-                    resets_after = first_env.resets
-            else:
-                resets_after = resets_before = first_env.resets
+                resets_after = first_env.resets
 
-            # Check that stepping after termination resets appropriately.
-            if resets_after == resets_before and level != prev_level:
-                print("FAILED TO RESET AFTER TERMINATION ON LEVEL CHANGE, step a few more times")
-                for i in range(100):
-                    world = get_world(ram)
-                    level = get_level(ram)
-                    x = get_x_pos(ram)
-                    y = get_y_pos(ram)
-                    print(f"  Stepping {i}: world={world} level={level} x={x} y={y}")
-                    resets_before = first_env.resets
-                    envs.step((controller,))
-                    resets_after = first_env.resets
+                # Check that stepping after termination resets appropriately.
+                if resets_after == resets_before and level != prev_level:
+                    raise AssertionError("Failed to reset on level change")
 
-                    # Stop once we've confirmed that a reset happened.
-                    if resets_after > resets_before:
-                        break
+            # Start reload process.
 
             # Choose save.
             save_info = _choose_save(saves)
@@ -986,7 +969,7 @@ def main():
 
         # Stop after some fixed number of steps.  This will force the sampling logic to run more often,
         # which means we won't waste as much time running through old states.
-        elif steps_since_load > 350:
+        elif steps_since_load >= 350:
             print(f"Ending trajectory, max steps for trajectory: {steps_since_load}: x={x} ticks_left={ticks_left}")
             force_terminate = True
 
@@ -1018,6 +1001,7 @@ def main():
 
                 print(f"Starting level: {_str_level(world, level)}")
 
+                # Update derived state.
                 ticks_used = max(1, level_ticks - ticks_left)
 
                 # Print after-level-start info.
@@ -1119,7 +1103,7 @@ def main():
                 prev_patch_id = patch_id
 
             else:
-                assert patch_id == prev_patch_id, f"What happened????"
+                assert patch_id == prev_patch_id, f"Missed case of transitioning patches: {patch_id} != {prev_patch_id}"
 
         # Print stats every second:
         #   * Current position: (x, y)
@@ -1135,39 +1119,38 @@ def main():
         if args.vis_freq_sec > 0 and now - last_vis_time > args.vis_freq_sec:
 
             # Histogram of number of saves in each patch reservoir.
-            if True:
-                # Collect reservoirs into patches.
-                patch_id_to_count = Counter()
-                for reservoir_id, saves_in_reservoir in saves._saves_by_reservoir.items():
-                    patch_id = PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
-                    patch_id_to_count[patch_id] += len(saves_in_reservoir)
+            # Collect reservoirs into patches.
+            patch_id_to_count = Counter()
+            for reservoir_id, saves_in_reservoir in saves._saves_by_reservoir.items():
+                patch_id = PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
+                patch_id_to_count[patch_id] += len(saves_in_reservoir)
 
-                patch_id_and_count_pairs = patch_id_to_count.items()
+            patch_id_and_count_pairs = patch_id_to_count.items()
 
-                img_rgb_240 = _build_patch_histogram_rgb(
-                    patch_id_and_count_pairs,
-                    current_patch=patch_id,
-                    hist_rows=_HIST_ROWS,
-                    hist_cols=_HIST_COLS,
-                    pixel_size=_HIST_PIXEL_SIZE,
-                )
+            img_rgb_240 = _build_patch_histogram_rgb(
+                patch_id_and_count_pairs,
+                current_patch=patch_id,
+                hist_rows=_HIST_ROWS,
+                hist_cols=_HIST_COLS,
+                pixel_size=_HIST_PIXEL_SIZE,
+            )
 
-                screen.blit_image(img_rgb_240, screen_index=1)
+            screen.blit_image(img_rgb_240, screen_index=1)
 
             # Histogram of seen counts.
-            if True:
-                patch_id_and_count_pairs = saves._patch_seen_counts.items()
+            patch_id_and_count_pairs = saves._patch_seen_counts.items()
 
-                img_rgb_240 = _build_patch_histogram_rgb(
-                    patch_id_and_count_pairs,
-                    current_patch=patch_id,
-                    hist_rows=_HIST_ROWS,
-                    hist_cols=_HIST_COLS,
-                    pixel_size=_HIST_PIXEL_SIZE,
-                )
+            img_rgb_240 = _build_patch_histogram_rgb(
+                patch_id_and_count_pairs,
+                current_patch=patch_id,
+                hist_rows=_HIST_ROWS,
+                hist_cols=_HIST_COLS,
+                pixel_size=_HIST_PIXEL_SIZE,
+            )
 
-                screen.blit_image(img_rgb_240, screen_index=3)
+            screen.blit_image(img_rgb_240, screen_index=3)
 
+            # Update display.
             screen.show()
 
             last_vis_time = now
