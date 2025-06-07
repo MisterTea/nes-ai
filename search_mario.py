@@ -40,6 +40,13 @@ class PatchId:
     patch_x: int
     patch_y: int
 
+    def __post_init__(self):
+        # Convert value from np.uint8 to int.
+        object.__setattr__(self, 'world', int(self.world))
+        object.__setattr__(self, 'level', int(self.level))
+        object.__setattr__(self, 'patch_x', int(self.patch_x))
+        object.__setattr__(self, 'patch_y', int(self.patch_y))
+
 
 @dataclass(frozen=True)
 class SaveInfo:
@@ -56,6 +63,13 @@ class SaveInfo:
     visited_patches_x: set
     action_history: list
     prev_patch_id: PatchId
+
+    def __post_init__(self):
+        # Convert value from np.uint8 to int.
+        object.__setattr__(self, 'world', int(self.world))
+        object.__setattr__(self, 'level', int(self.level))
+        object.__setattr__(self, 'x', int(self.x))
+        object.__setattr__(self, 'y', int(self.y))
 
 
 @dataclass
@@ -477,21 +491,69 @@ def _build_patch_histogram_rgb(
         print(f"FIRST patch_id_and_count_pairs: {patch_id_and_count_pairs[0]}")
         raise AssertionError("DEBUG")
 
+    special_section_offsets = {}
+    next_special_section_id = [0]
+
+    # Sometimes we get a discontinuous jump, like:
+    #   Discountinuous x position: 1013 -> 65526
+    #
+    # Seems to happen when crossing boundaries in discontinuous levels like 4-4.
+    def _calc_c_for_special_section(check_patch_x: PatchId, hr: int, hc: int):
+        # print(f"REWRITING SPECIAL SECTION: patch={check_patch_x.patch_x},{check_patch_x.patch_y} hr={hr} hc={hc}")
+
+        # The section here is the 255-width pixel section that the level is divided into.
+        # Also called "screen" in the memory map.
+        x = check_patch_x.patch_x * PATCH_SIZE
+
+        section_x = (x // 256) * 256
+        section_patch_x = section_x // PATCH_SIZE
+
+        offset_x = x - section_x
+        offset_patch_x = offset_x // PATCH_SIZE
+
+        # Determine how many full-screen offsets we need from the edge of the histogram.
+        if section_patch_x not in special_section_offsets:
+            special_section_offsets[section_patch_x] = next_special_section_id[0]
+            next_special_section_id[0] += 1
+
+        section_id = special_section_offsets[section_patch_x]
+        patches_in_section = 256 // PATCH_SIZE
+
+        # Calculate the starting patch of the section.
+        section_c = hc - (1 + section_id) * patches_in_section
+
+        # Calculate how much offset we need from the start of the section.
+        # Rewrite the x and y position, for display into this after-level section.
+        c = section_c + offset_patch_x
+
+        # print(f"REWRITING SPECIAL SECTION: patch={check_patch_x.patch_x},{check_patch_x.patch_y} hr={hr} hc={hc} -> c={c}")
+
+        return c
+
+
     for save_patch_id, count in patch_id_and_count_pairs:
         patch_x, patch_y = save_patch_id.patch_x, save_patch_id.patch_y
 
-        # What row of the level we're in.  Wrap around if past the end of the screen.
-        wrap_i = patch_x // hc
+        # For display purposes only, if we're at one of the special offscreen locations,
+        # Use an offset, but still show it in the histogram.
+        if patch_x <= _MAX_PATCHES_X:
+            # What row of the level we're in.  Wrap around if past the end of the screen.
+            wrap_i = patch_x // hc
 
-        r = wrap_i * (_MAX_PATCHES_Y + _SPACE_R) + patch_y
-        c = patch_x % hc
+            r = wrap_i * (_MAX_PATCHES_Y + _SPACE_R) + patch_y
+            c = patch_x % hc
+        else:
+            # Special case, we're past the end of the level for some special section.
+            r = hr - _MAX_PATCHES_Y + patch_y
+            c = _calc_c_for_special_section(save_patch_id, hr=hr, hc=hc)
 
         try:
             patch_histogram[r][c] = count
         except IndexError:
             print(f"PATCH LAYOUT: max_patches_x={_MAX_PATCHES_X} max_patches_y={_MAX_PATCHES_Y} pixel_size={pixel_size} hr={hr} hc={hc}")
             print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
-            raise
+
+            patch_histogram[hr][hc] += 1
 
     #print(f"HISTOGRAM min={patch_histogram.min()} max={patch_histogram.max()}")
 
@@ -501,11 +563,23 @@ def _build_patch_histogram_rgb(
     grid_rgb = np.stack([grid_g]*3, axis=-1)
 
     # Mark current patch.
-    px, py = current_patch.patch_x, current_patch.patch_y
-    wrap_i = px // hc
-    patch_r = wrap_i * (_MAX_PATCHES_Y + _SPACE_R) + py
-    patch_c = px % hc
-    grid_rgb[patch_r][patch_c] = (0, 255, 0)
+    if current_patch.patch_x <= _MAX_PATCHES_X:
+        px, py = current_patch.patch_x, current_patch.patch_y
+        wrap_i = px // hc
+        patch_r = wrap_i * (_MAX_PATCHES_Y + _SPACE_R) + py
+        patch_c = px % hc
+    else:
+        # Special case, we're past the end of the level for some special section.
+        patch_r = hr - _MAX_PATCHES_Y + current_patch.patch_y
+        patch_c = _calc_c_for_special_section(current_patch, hr=hr, hc=hc)
+
+    try:
+        grid_rgb[patch_r][patch_c] = (0, 255, 0)
+    except IndexError:
+        print(f"PATCH LAYOUT: max_patches_x={_MAX_PATCHES_X} max_patches_y={_MAX_PATCHES_Y} pixel_size={pixel_size} hr={hr} hc={hc}")
+        print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
+
+        grid_rgb[hr][hc] = (0, 255, 0)
 
     # Convert to screen.
     img_gray = Image.fromarray(grid_rgb, mode='RGB')
