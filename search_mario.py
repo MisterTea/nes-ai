@@ -132,7 +132,7 @@ class Args:
     start_level: int = 4
 
     # Visualization
-    vis_freq_sec: float = 0.1
+    vis_freq_sec: float = 0.15
 
     # Algorithm specific arguments
     env_id: str = "smb-search-v0"
@@ -222,6 +222,7 @@ class PatchReservoir:
         self._reservoir_seen_counts = Counter()
         self._patch_seen_counts = Counter()
         self._reservoir_refreshed = set()
+        self._reservoir_count_since_refresh = Counter()
 
     @staticmethod
     def patch_id_from_save(save: SaveInfo) -> tuple:
@@ -273,9 +274,13 @@ class PatchReservoir:
                     # Mark this patch as newly refreshed.
                     self._reservoir_refreshed.add(reservoir_id)
 
+                    # Don't increment since it was replaced.
+                    self._reservoir_count_since_refresh[reservoir_id] -= 1
+
         # Update count.
         self._reservoir_seen_counts[reservoir_id] += 1
         self._patch_seen_counts[patch_id] += 1
+        self._reservoir_count_since_refresh[reservoir_id] += 1
 
     def values(self) -> list[SaveInfo]:
         return [
@@ -345,7 +350,7 @@ def _choose_save(saves_reservoir: PatchReservoir) -> SaveInfo:
         # Choose uniformly across y dimension.
         sample = random.choice(saves_by_patch[chosen_patch_x])
 
-    if True:
+    if False:
         # Organize into 3 buckets:
         #   1.  Newly visited patches.
         #   2.  Newly refreshed patches (i.e. got to the patch in a faster time).
@@ -394,6 +399,71 @@ def _choose_save(saves_reservoir: PatchReservoir) -> SaveInfo:
         sample = random.choice(saves_by_patch[chosen_patch_x])
 
         # TODO(millman): return weights for all patches?, for visualization
+
+    if True:
+        # Use Boltzmann Exploration.
+        #
+        # Maybe upgrade to Boltzmann-Gumbel explortation later?:
+        # https://proceedings.neurips.cc/paper_files/paper/2017/file/b299ad862b6f12cb57679f0538eca514-Paper.pdf
+
+        # Focus on the least-visited patches, independent of anything else.  We can think about the
+        # exploration problem as wanting full coverage -- we have no reward or other idea about how
+        # we should expand states.
+        if True:
+            reservoir_id_list = saves_reservoir._reservoir_count_since_refresh.keys()
+
+            counts = np.fromiter(saves_reservoir._reservoir_count_since_refresh.values(), dtype=np.int64)
+
+            # Boltzmann-exploration weighting.
+            beta = 1.0
+            weights = beta * np.exp(-counts)
+
+            # Normalize by number of saves in each patch.  Note that multiple reservoir_id may map
+            # into the same patch.
+            patch_id_list = [
+                PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
+                for reservoir_id in reservoir_id_list
+            ]
+
+            # Count the number of items in each patch.
+            patch_id_to_count = Counter()
+            for i, patch_id in enumerate(patch_id_list):
+                patch_id_to_count[patch_id] += 1
+
+            # Build normalizing list for weights.
+            patch_counts = np.zeros(len(patch_id_list))
+            for i, patch_id in enumerate(patch_id_list):
+                patch_counts[i] = patch_id_to_count[patch_id]
+
+            # Normalize weight by the number of items in the patch.
+            weights /= patch_counts
+
+            # Normalize to sum to 1.
+            weights /= sum(weights)
+
+            # Pick save.
+            save_indicies = np.arange(len(saves))
+            chosen_save_index = np.random.choice(save_indicies, p=weights)
+
+            sample = saves[chosen_save_index]
+
+        # Focus on the least-visited reservoir buckets.  Don't aggregate into patches.
+        if False:
+            counts = [
+                # saves_reservoir._reservoir_count_since_refresh[saves_reservoir.reservoir_id_from_save(s)]
+                saves_reservoir._reservoir_seen_counts[saves_reservoir.reservoir_id_from_save(s)]
+                for s in saves
+            ]
+
+            # Boltzmann-exploration weighting.
+            beta = 1.0
+            weights = np.exp(beta * -np.asarray(counts))
+            weights /= weights.sum()
+
+            save_indicies = np.arange(len(saves))
+            chosen_save_index = np.random.choice(save_indicies, p=weights)
+
+            sample = saves[chosen_save_index]
 
     return sample
 
@@ -1117,7 +1187,6 @@ def main():
                 hist_cols=_HIST_COLS,
                 pixel_size=_HIST_PIXEL_SIZE,
             )
-
             screen.blit_image(img_rgb_240, screen_index=1)
 
             # Histogram of seen counts.
@@ -1130,8 +1199,38 @@ def main():
                 hist_cols=_HIST_COLS,
                 pixel_size=_HIST_PIXEL_SIZE,
             )
-
             screen.blit_image(img_rgb_240, screen_index=3)
+
+            # Histogram of sampling weight.
+            reservoir_id_list = saves._reservoir_count_since_refresh.keys()
+            counts = np.fromiter(saves._reservoir_count_since_refresh.values(), dtype=np.int64)
+
+            # Boltzmann-exploration weighting.
+            beta = 1.0
+            weights = beta * np.exp(-counts)
+            weights /= sum(weights)
+
+            patch_id_to_count = Counter()
+            patch_id_to_weight = Counter()
+            for i, reservoir_id in enumerate(reservoir_id_list):
+                p_id = PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
+                patch_id_to_weight[p_id] += weights[i]
+                patch_id_to_count[p_id] += 1
+
+            # Normalize weight by the number of items in the patch.
+            for p_id, count in patch_id_to_count.items():
+                patch_id_to_weight[p_id] /= count
+
+            patch_id_and_weight_pairs = patch_id_to_weight.items()
+
+            img_rgb_240 = _build_patch_histogram_rgb(
+                patch_id_and_weight_pairs,
+                current_patch=patch_id,
+                hist_rows=_HIST_ROWS,
+                hist_cols=_HIST_COLS,
+                pixel_size=_HIST_PIXEL_SIZE,
+            )
+            screen.blit_image(img_rgb_240, screen_index=2)
 
             # Update display.
             screen.show()
