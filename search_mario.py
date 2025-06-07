@@ -670,6 +670,46 @@ def _validate_save_state(save_info: SaveInfo, ram: NdArrayUint8):
     assert save_info.y == y, f"Mismatched save state!"
 
 
+def _print_info(
+    dt: float,
+    world: int,
+    level: int,
+    x: int,
+    y: int,
+    ticks_left: int,
+    ticks_used: int,
+    saves: PatchReservoir,
+    visited_patches: set[Any],
+    visited_patches_x: set[Any],
+    distance_x: int,
+    min_speed: float,
+    step: int,
+    steps_since_load: int,
+):
+    steps_per_sec = step / dt
+
+    speed = distance_x / ticks_used
+    patches_per_tick = len(visited_patches) / ticks_used
+    patches_x_per_tick = len(visited_patches_x) / ticks_used
+
+    # screen_x = ram[0x006D]
+    # level_screen_x = ram[0x071A]
+    # screen_pos = ram[0x0086]
+
+    print(
+        f"{_seconds_to_hms(dt)} "
+        f"level={_str_level(world, level)} "
+        f"x={x} y={y} ticks-left={ticks_left} "
+        f"ticks-used={ticks_used} "
+        f"states={len(saves)} "
+        f"visited={len(visited_patches)} "
+        f"steps/sec={steps_per_sec:.4f} "
+        f"speed={speed:.2f} "
+        f"(required={min_speed:.2f}) "
+        f"patches/tick={patches_per_tick:.2f} "
+        f"patches_x/tick={patches_x_per_tick:.2f} "
+        f"steps_since_load={steps_since_load}")
+
 def main():
     args = tyro.cli(Args)
 
@@ -929,8 +969,19 @@ def main():
             patches_x_per_tick = len(visited_patches_x) / ticks_used
 
             if True:
-                print(f"Loaded save: save_id={save_info.save_id} level={_str_level(world, level)} level_ram={world}-{level}, x={x} y={y} lives={lives}")
-                _print_saves_list(saves.values())
+                saves_list = saves.values()
+                save_i = saves_list.index(save_info)
+                weight = save_i
+
+                # Hyperbolic weight.
+                N = len(saves_list)
+                c = 0.0
+                weight = 1.0 / (N - save_i + c)
+
+                print(f"Loaded save: [{save_i}] {weight:.4f}x: save_id={save_info.save_id} level={_str_level(world, level)}, x={x} y={y} lives={lives}")
+
+                if False:
+                    _print_saves_list(saves.values())
 
             steps_since_load = 0
             force_terminate = False
@@ -955,7 +1006,7 @@ def main():
             if world != prev_world or level != prev_level:
                 # Print before-level-end info.
                 if True:
-                    print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} ticks-used={ticks_used} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} patches_x/tick={patches_x_per_tick:.2f} steps_since_load={steps_since_load}")
+                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, visited_patches=visited_patches, visited_patches_x=visited_patches_x, distance_x=distance_x, min_speed=min_speed, step=step, steps_since_load=steps_since_load)
 
                 # Set number of ticks in level to the current ticks.
                 level_ticks = get_time_left(ram)
@@ -967,17 +1018,13 @@ def main():
 
                 distance_x = 0
 
+                print(f"Starting level: {_str_level(world, level)}")
+
+                ticks_used = max(1, level_ticks - ticks_left)
+
                 # Print after-level-start info.
                 if True:
-                    print(f"Starting level: {_str_level(world, level)}")
-
-                    ticks_used = max(1, level_ticks - ticks_left)
-
-                    speed = distance_x / ticks_used
-                    patches_per_tick = len(visited_patches) / ticks_used
-                    patches_x_per_tick = len(visited_patches_x) / ticks_used
-
-                    print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} ticks-used={ticks_used} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} patches_x/tick={patches_x_per_tick:.2f} steps_since_load={steps_since_load}")
+                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, visited_patches=visited_patches, visited_patches_x=visited_patches_x, distance_x=distance_x, min_speed=min_speed, step=step, steps_since_load=steps_since_load)
 
                 assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
 
@@ -1083,7 +1130,7 @@ def main():
         #   * Novel states found (across all trajectories)
         #   * Novel states/sec
         if args.print_freq_sec > 0 and now - last_print_time > args.print_freq_sec:
-            print(f"{_seconds_to_hms(now-start_time)} level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} ticks-used={ticks_used} states={len(saves)} visited={len(visited_patches)} steps/sec={steps_per_sec:.4f} speed={speed:.2f} (required={min_speed:.2f}) patches/tick={patches_per_tick:.2f} patches_x/tick={patches_x_per_tick:.2f} steps_since_load={steps_since_load}")
+            _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, visited_patches=visited_patches, visited_patches_x=visited_patches_x, distance_x=distance_x, min_speed=min_speed, step=step, steps_since_load=steps_since_load)
             last_print_time = now
 
         # Visualize the distribution of save states.

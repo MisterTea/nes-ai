@@ -192,7 +192,7 @@ class SuperMarioEnv(gym.Env):
         return {}
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
-        print(f"RESETTING ENVIRONMENT: resets={self.resets} world_level={self.world_level} steps={self.steps}")
+        # print(f"RESETTING ENVIRONMENT: resets={self.resets} world_level={self.world_level} steps={self.steps}")
 
         if self.resets >= 2:
             raise AssertionError("SHOULDNT HAVE RESET")
