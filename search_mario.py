@@ -204,7 +204,94 @@ def _weight_exp(N: int, beta: float = 0.3) -> np.array:
 PATCH_SIZE = 10
 
 
-def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
+@dataclass(frozen=True)
+class ReservoirId:
+    world: int
+    level: int
+    patch_x: int
+    patch_y: int
+    prev_patch_x: int
+    prev_patch_y: int
+
+
+class PatchReservoir:
+
+    def __init__(self, max_saves_per_reservoir: int = 1):
+        self.max_saves_per_reservoir = max_saves_per_reservoir
+        self._saves_by_reservoir = defaultdict(list)
+        self._reservoir_seen_counts = Counter()
+        self._patch_seen_counts = Counter()
+        self._reservoir_refreshed = set()
+
+    @staticmethod
+    def patch_id_from_save(save: SaveInfo) -> tuple:
+        patch_id = PatchId(save.world, save.level, save.x // PATCH_SIZE, save.y // PATCH_SIZE)
+        return patch_id
+
+    @staticmethod
+    def reservoir_id_from_save(save: SaveInfo) -> tuple:
+        reservoir_id = ReservoirId(save.world, save.level, save.x // PATCH_SIZE, save.y // PATCH_SIZE, save.prev_patch_id.patch_x, save.prev_patch_id.patch_y)
+        return reservoir_id
+
+    @staticmethod
+    def reservoir_id_from_state(world: int, level: int, patch_id: PatchId, prev_patch_id: PatchId) -> ReservoirId:
+        reservoir_id = ReservoirId(world, level, patch_id.patch_x, patch_id.patch_y, prev_patch_id.patch_x, prev_patch_id.patch_y)
+        return reservoir_id
+
+    def add(self, save: SaveInfo):
+        patch_id = self.patch_id_from_save(save)
+        reservoir_id = self.reservoir_id_from_save(save)
+
+        if self._reservoir_seen_counts[reservoir_id] < self.max_saves_per_reservoir:
+            # Reservoir is still small, add it.
+            self._saves_by_reservoir[reservoir_id].append(save)
+
+        else:
+            # Use traditional reservoir sampling.
+            if False:
+                seen_count = self._reservoir_seen_counts[reservoir_id]
+
+                # Random chance of selecting an item in the reservoir.
+                k = random.randint(0, seen_count)
+
+                # Kick out the existing item in reservoir.
+                if k < self.max_saves_per_reservoir:
+                    self._saves_by_reservoir[reservoir_id][k] = save
+
+            # Replace the save that took the longest to reach this patch.
+            if True:
+                # Find the save state with the most action steps.  We assume that it's better to
+                # get to a state with fewer action steps.
+                saves_in_patch = self._saves_by_reservoir[reservoir_id]
+                max_index, max_item = max(enumerate(saves_in_patch), key=lambda i_save: len(i_save[1].action_history))
+
+                # Replace the save state with the most action steps.  We assume that it's better to
+                # get to a state with fewer action steps.
+                if len(save.action_history) < len(max_item.action_history):
+                    saves_in_patch[max_index] = save
+
+                    # Mark this patch as newly refreshed.
+                    self._reservoir_refreshed.add(reservoir_id)
+
+        # Update count.
+        self._reservoir_seen_counts[reservoir_id] += 1
+        self._patch_seen_counts[patch_id] += 1
+
+    def values(self) -> list[SaveInfo]:
+        return [
+            save
+            for saves in self._saves_by_reservoir.values()
+            for save in saves
+        ]
+
+    def __len__(self) -> int:
+        return len(self._saves_by_reservoir)
+
+
+def _choose_save(saves_reservoir: PatchReservoir) -> SaveInfo:
+    # Collect saves.
+    saves = saves_reservoir.values()
+
     if False:
         # Uniform random
         return random.choice(saves)
@@ -239,7 +326,7 @@ def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
         weights = _weight_hyperbolic(len(saves_ordered_by_patches))
         sample = np.random.choice(saves_ordered_by_patches, p=weights)
 
-    if True:
+    if False:
         # Cluster patches along x dimension.
         saves_by_patch = {}
         for s in saves:
@@ -257,6 +344,56 @@ def _choose_save(saves: list[SaveInfo]) -> SaveInfo:
 
         # Choose uniformly across y dimension.
         sample = random.choice(saves_by_patch[chosen_patch_x])
+
+    if True:
+        # Organize into 3 buckets:
+        #   1.  Newly visited patches.
+        #   2.  Newly refreshed patches (i.e. got to the patch in a faster time).
+        #   3.  Everything else.
+        #
+        # Within each bucket, prefer the states with more visited_patches_x, which corresponds to
+        # progress.
+        saves_by_patch_new = []
+        saves_by_patch_refreshed = []
+        saves_by_patch_other = []
+        for s in saves:
+            reservoir_id = saves_reservoir.reservoir_id_from_save(s)
+            if saves_reservoir._reservoir_seen_counts[reservoir_id] == 1:
+                # Newly visited, only encountered this patch only once.
+                saves_by_patch_new.append(s)
+            elif reservoir_id in saves_reservoir._reservoir_refreshed:
+                # Newly refreshed.
+                saves_by_patch_refreshed.append(s)
+            else:
+                saves_by_patch_other.append(s)
+
+        # Pick bucket in priority order.
+        if saves_by_patch_new:
+            saves_bucket = saves_by_patch_new
+        elif saves_by_patch_new:
+            saves_bucket = saves_by_patch_refreshed
+        else:
+            saves_bucket = saves_by_patch_other
+
+        # Cluster patches along x dimension.
+        saves_by_patch = {}
+        for s in saves_bucket:
+            patchx_id = (s.world, s.level, len(s.visited_patches_x))
+            saves_by_patch.setdefault(patchx_id, []).append(s)
+
+        # Select a patch location.
+        patches = sorted(saves_by_patch.keys())
+
+        # Choose across x dimension.
+        weights = _weight_hyperbolic(len(patches))
+        patch_indices = np.arange(len(patches))
+        chosen_patch_x_index = np.random.choice(patch_indices, p=weights)
+        chosen_patch_x = patches[chosen_patch_x_index]
+
+        # Choose uniformly across y dimension.
+        sample = random.choice(saves_by_patch[chosen_patch_x])
+
+        # TODO(millman): return weights for all patches?, for visualization
 
     return sample
 
@@ -293,81 +430,6 @@ def _optimal_patch_layout(screen_width, screen_height, n_patches):
                 best_rows = n_rows
 
     return (best_rows, best_cols, max_patch_size)
-
-
-@dataclass(frozen=True)
-class ReservoirId:
-    world: int
-    level: int
-    patch_x: int
-    patch_y: int
-    prev_patch_x: int
-    prev_patch_y: int
-
-
-class PatchReservoir:
-
-    def __init__(self, max_saves_per_reservoir: int = 1):
-        self.max_saves_per_reservoir = max_saves_per_reservoir
-        self._saves_by_reservoir = defaultdict(list)
-        self._reservoir_seen_counts = Counter()
-        self._patch_seen_counts = Counter()
-
-    @staticmethod
-    def patch_id_from_save(save: SaveInfo) -> tuple:
-        patch_id = PatchId(save.world, save.level, save.x // PATCH_SIZE, save.y // PATCH_SIZE)
-        return patch_id
-
-    @staticmethod
-    def reservoir_id_from_save(save: SaveInfo) -> tuple:
-        reservoir_id = ReservoirId(save.world, save.level, save.x // PATCH_SIZE, save.y // PATCH_SIZE, save.prev_patch_id.patch_x, save.prev_patch_id.patch_y)
-        return reservoir_id
-
-    def add(self, save: SaveInfo):
-        patch_id = self.patch_id_from_save(save)
-        reservoir_id = self.reservoir_id_from_save(save)
-
-        if self._reservoir_seen_counts[reservoir_id] < self.max_saves_per_reservoir:
-            # Reservoir is still small, add it.
-            self._saves_by_reservoir[reservoir_id].append(save)
-
-        else:
-            # Use traditional reservoir sampling.
-            if False:
-                seen_count = self._reservoir_seen_counts[reservoir_id]
-
-                # Random chance of selecting an item in the reservoir.
-                k = random.randint(0, seen_count)
-
-                # Kick out the existing item in reservoir.
-                if k < self.max_saves_per_reservoir:
-                    self._saves_by_reservoir[reservoir_id][k] = save
-
-            # Replace the save that took the longest to reach this patch.
-            if True:
-                # Find the save state with the most action steps.  We assume that it's better to
-                # get to a state with fewer action steps.
-                saves_in_patch = self._saves_by_reservoir[reservoir_id]
-                max_index, max_item = max(enumerate(saves_in_patch), key=lambda i_save: len(i_save[1].action_history))
-
-                # Replace the save state with the most action steps.  We assume that it's better to
-                # get to a state with fewer action steps.
-                if len(save.action_history) < len(max_item.action_history):
-                    saves_in_patch[max_index] = save
-
-        # Update count.
-        self._reservoir_seen_counts[reservoir_id] += 1
-        self._patch_seen_counts[patch_id] += 1
-
-    def values(self) -> list[SaveInfo]:
-        return [
-            save
-            for saves in self._saves_by_reservoir.values()
-            for save in saves
-        ]
-
-    def __len__(self) -> int:
-        return len(self._saves_by_reservoir)
 
 
 def _get_min_speed() -> int:
@@ -767,6 +829,11 @@ def main():
         else:
             distance_x += x - prev_x
 
+        # Mark current patch as visted.
+        reservoir_id = saves.reservoir_id_from_state(world=world, level=level, patch_id=patch_id, prev_patch_id=prev_patch_id)
+        if reservoir_id in saves._reservoir_refreshed:
+            saves._reservoir_refreshed.remove(reservoir_id)
+
         # TODO(millman): something is broken with the termination flag?
         if lives < prev_lives and not termination:
             print(f"Lost a life: x={x} ticks_left={ticks_left} distance={distance_x}")
@@ -815,11 +882,8 @@ def main():
                     if resets_after > resets_before:
                         break
 
-            # Collect saves.
-            saves_list = saves.values()
-
             # Choose save.
-            save_info = _choose_save(saves_list)
+            save_info = _choose_save(saves)
 
             # Reload and re-initialize.
             nes.load(save_info.save_state)
@@ -866,7 +930,7 @@ def main():
 
             if True:
                 print(f"Loaded save: save_id={save_info.save_id} level={_str_level(world, level)} level_ram={world}-{level}, x={x} y={y} lives={lives}")
-                _print_saves_list(saves_list)
+                _print_saves_list(saves.values())
 
             steps_since_load = 0
             force_terminate = False
