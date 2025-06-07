@@ -114,6 +114,8 @@ class Args:
     reset_to_save_state: bool = False
     headless: bool = False
     print_freq_sec: float = 1.0
+    start_world: int = 4
+    start_level: int = 4
 
     # Visualization
     vis_freq_sec: float = 0.1
@@ -122,7 +124,7 @@ class Args:
     env_id: str = "smb-search-v0"
 
 
-def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless: bool):
+def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless: bool, world_level: tuple[int, int]):
     def thunk():
         if capture_video and idx == 0:
             env = gym.make(env_id, render_mode="rgb_array")
@@ -130,7 +132,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless
             raise RuntimeError("STOP")
         else:
             render_mode = "rgb" if headless else "human"
-            env = gym.make(env_id, render_mode=render_mode, world_level=(8, 4), screen_rc=(2,2))
+            env = gym.make(env_id, render_mode=render_mode, world_level=world_level, screen_rc=(2,2))
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
 
@@ -578,7 +580,7 @@ def main():
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, 0, args.capture_video, run_name, args.headless)],
+        [make_env(args.env_id, 0, args.capture_video, run_name, args.headless, (args.start_world, args.start_level))],
         autoreset_mode=gym.vector.AutoresetMode.DISABLED,
     )
 
