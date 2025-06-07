@@ -688,9 +688,9 @@ def _print_info(
 ):
     steps_per_sec = step / dt
 
-    speed = distance_x / ticks_used
-    patches_per_tick = len(visited_patches) / ticks_used
-    patches_x_per_tick = len(visited_patches_x) / ticks_used
+    # speed = distance_x / ticks_used
+    # patches_per_tick = len(visited_patches) / ticks_used
+    # patches_x_per_tick = len(visited_patches_x) / ticks_used
 
     # screen_x = ram[0x006D]
     # level_screen_x = ram[0x071A]
@@ -699,16 +699,18 @@ def _print_info(
     print(
         f"{_seconds_to_hms(dt)} "
         f"level={_str_level(world, level)} "
-        f"x={x} y={y} ticks-left={ticks_left} "
-        f"ticks-used={ticks_used} "
+        f"x={x} y={y} ticks_left={ticks_left} "
+        f"ticks_used={ticks_used} "
         f"states={len(saves)} "
-        f"visited={len(visited_patches)} "
+        # f"visited={len(visited_patches)} "
+        # f"visited_x={len(visited_patches_x)} "
         f"steps/sec={steps_per_sec:.4f} "
-        f"speed={speed:.2f} "
-        f"(required={min_speed:.2f}) "
-        f"patches/tick={patches_per_tick:.2f} "
-        f"patches_x/tick={patches_x_per_tick:.2f} "
+        # f"speed={speed:.2f} "
+        # f"(required={min_speed:.2f}) "
+        # f"patches/tick={patches_per_tick:.2f} "
+        # f"patches_x/tick={patches_x_per_tick:.2f} "
         f"steps_since_load={steps_since_load}")
+
 
 def main():
     args = tyro.cli(Args)
@@ -854,9 +856,6 @@ def main():
 
         speed = distance_x / ticks_used
         patches_per_tick = len(visited_patches) / ticks_used
-        patches_x_per_tick = len(visited_patches_x) / ticks_used
-
-        steps_per_sec = step / (now - start_time)
 
         # If we get teleported, or if the level boundary is discontinuous, the change in x position isn't meaningful.
         if abs(x - prev_x) > 50:
@@ -966,7 +965,6 @@ def main():
 
             speed = distance_x / ticks_used
             patches_per_tick = len(visited_patches) / ticks_used
-            patches_x_per_tick = len(visited_patches_x) / ticks_used
 
             if True:
                 saves_list = saves.values()
@@ -989,12 +987,12 @@ def main():
         # Stop after some fixed number of steps.  This will force the sampling logic to run more often,
         # which means we won't waste as much time running through old states.
         elif steps_since_load > 350:
-            print(f"Ending trajectory, max steps for trajectory: {steps_since_load}: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
+            print(f"Ending trajectory, max steps for trajectory: {steps_since_load}: x={x} ticks_left={ticks_left}")
             force_terminate = True
 
         # If we died, skip.
         elif lives < prev_lives:
-            print(f"Lost a life: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
+            print(f"Lost a life: x={x} ticks_left={ticks_left}")
             force_terminate = True
 
         # If we made progress, save state.
