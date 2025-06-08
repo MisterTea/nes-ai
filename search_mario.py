@@ -55,6 +55,7 @@ class SaveInfo:
     ticks_left: int
     save_state: Any
     action_history: list
+    state_history: list
     prev_patch_id: PatchId
 
     def __post_init__(self):
@@ -123,6 +124,8 @@ class Args:
     print_freq_sec: float = 1.0
     start_world: int = 8
     start_level: int = 4
+    max_trajectory_steps: int = 200
+    patch_size: int = 10
 
     # Visualization
     vis_freq_sec: float = 0.15
@@ -186,10 +189,6 @@ def _weight_hyperbolic(N: int) -> np.array:
 
     return weights
 
-
-PATCH_SIZE = 10
-
-
 @dataclass(frozen=True)
 class ReservoirId:
     patch_x: int
@@ -200,7 +199,8 @@ class ReservoirId:
 
 class PatchReservoir:
 
-    def __init__(self, max_saves_per_reservoir: int = 1):
+    def __init__(self, patch_size: int, max_saves_per_reservoir: int = 1):
+        self.patch_size = patch_size
         self.max_saves_per_reservoir = max_saves_per_reservoir
 
         self._reservoir_to_saves = defaultdict(list)
@@ -211,14 +211,12 @@ class PatchReservoir:
         self._reservoir_seen_counts = Counter()
         self._reservoir_count_since_refresh = Counter()
 
-    @staticmethod
-    def patch_id_from_save(save: SaveInfo) -> tuple:
-        patch_id = PatchId(save.x // PATCH_SIZE, save.y // PATCH_SIZE)
+    def patch_id_from_save(self, save: SaveInfo) -> tuple:
+        patch_id = PatchId(save.x // self.patch_size, save.y // self.patch_size)
         return patch_id
 
-    @staticmethod
-    def reservoir_id_from_save(save: SaveInfo) -> tuple:
-        reservoir_id = ReservoirId(save.x // PATCH_SIZE, save.y // PATCH_SIZE, save.prev_patch_id.patch_x, save.prev_patch_id.patch_y)
+    def reservoir_id_from_save(self, save: SaveInfo) -> tuple:
+        reservoir_id = ReservoirId(save.x // self.patch_size, save.y // self.patch_size, save.prev_patch_id.patch_x, save.prev_patch_id.patch_y)
         return reservoir_id
 
     def add(self, save: SaveInfo):
@@ -294,8 +292,14 @@ def _choose_save(saves_reservoir: PatchReservoir, rng: Any) -> SaveInfo:
 
     # Pick patch by Boltzmann-explortation exponential weighting of count.
     patch_counts = np.fromiter(patch_id_to_count.values(), dtype=np.float64)
+    # Include weighting based on x position.
+    order_counts = np.sqrt(np.arange(len(patch_id_to_count)))
+
+    combined_counts = -patch_counts + order_counts
+    combined_counts -= combined_counts.max()
+
     beta = 1.0
-    patch_weights = np.exp(beta * -patch_counts)
+    patch_weights = np.exp(beta * combined_counts + 1)
     patch_weights /= patch_weights.sum()
 
     # Pick patch.
@@ -325,6 +329,61 @@ def _choose_save(saves_reservoir: PatchReservoir, rng: Any) -> SaveInfo:
     sample = saves_list[0]
 
     return sample, list(zip(patch_id_list, patch_weights))
+
+
+def _choose_save_from_history(saves: list[SaveInfo], saves_reservoir: PatchReservoir, rng: Any) -> SaveInfo:
+    # Determine how many times we've tried the patch that the save is in.
+
+    save_counts = np.asarray([
+        saves_reservoir._patch_seen_counts[saves_reservoir.patch_id_from_save(s)]
+        for s in saves
+    ], dtype=np.float64)
+
+    order_counts = np.arange(len(saves), dtype=np.float64)
+
+    # Weight the save by a combination of exponential decay and visit counts.
+    if False:
+        log_probs = -save_counts + order_counts
+
+        # Subtract max to avoid overflow.
+        log_probs -= log_probs.max()
+
+        beta = 0.3
+        probs = np.exp(beta * log_probs)
+        probs /= probs.sum()
+
+    # Weight the save by a combination of quadratic decay and visit counts.
+    if True:
+        combined_counts = -save_counts + order_counts
+
+        # Subtract min to avoid negative values.
+        combined_counts -= combined_counts.min()
+
+        probs = np.square(combined_counts + 1)
+        probs /= probs.sum()
+
+    if False:
+        combined_counts = -save_counts + order_counts
+
+        # Subtract min to avoid negative values.
+        combined_counts -= combined_counts.min()
+
+        # Weights: highest at the end, slow decay toward the beginning
+        # Formula: w_i ∝ 1 / (N - i + c)
+        N = combined_counts.max()
+        probs = 1.0 / (N - combined_counts + 1)
+
+        probs /= probs.sum()
+
+    chosen_save_index = rng.choice(len(saves), p=probs)
+    sample = saves[chosen_save_index]
+
+    patch_id_and_weight_pairs = [
+        (saves_reservoir.patch_id_from_save(s), w)
+        for s, w in zip(saves, probs)
+    ]
+
+    return sample, patch_id_and_weight_pairs
 
 
 def _flip_buttons(controller_presses: NdArrayUint8, flip_prob: float, ignore_button_mask: NdArrayUint8) -> NdArrayUint8:
@@ -361,33 +420,12 @@ def _optimal_patch_layout(screen_width, screen_height, n_patches):
     return (best_rows, best_cols, max_patch_size)
 
 
-# Histogram visualization
-
-# Approximate the size of the histogram based on how many patches we need.
-_MAX_LEVEL_DIST = 6400
-_MAX_PATCHES_X = int(np.ceil(_MAX_LEVEL_DIST / PATCH_SIZE))
-_MAX_EXTRA_PATCHES_X = 5
-_MAX_PATCHES_Y = int(np.ceil(240 / PATCH_SIZE))
-_NUM_MAX_PATCHES = _MAX_PATCHES_X * _MAX_PATCHES_Y
-_SPACE_R = 0
-
-# We'll wrap rows around if they hit the edge of the screen.
-# Figure out how many wraps we need by:
-#
-#   (actual_screen_w / pixel_size) * num_rows = (actual_screen_w / pixel_size) * (actual_screen_h / pixel_size)
-#
-#   patches_per_row * num_rows = patches_per_row * patches_per_col
-#
-#
-# We want the pixel size to be maximized, as long as everything fits on the screen.
-# When everything fits exactly,
-# We don't know the patches_per_row or the patch_pixel_size.
-_HIST_ROWS, _HIST_COLS, _HIST_PIXEL_SIZE = _optimal_patch_layout(screen_width=240, screen_height=224, n_patches=_NUM_MAX_PATCHES)
-
-
 def _build_patch_histogram_rgb(
     patch_id_and_count_pairs: list[PatchId, int],
     current_patch: PatchId,
+    patch_size: int,
+    max_patch_x: int,
+    max_patch_y: int,
     hist_rows: int,
     hist_cols: int,
     pixel_size: int,
@@ -414,13 +452,13 @@ def _build_patch_histogram_rgb(
 
         # The section here is the 255-width pixel section that the level is divided into.
         # Also called "screen" in the memory map.
-        x = check_patch_x.patch_x * PATCH_SIZE
+        x = check_patch_x.patch_x * patch_size
 
         section_x = (x // 256) * 256
-        section_patch_x = section_x // PATCH_SIZE
+        section_patch_x = section_x // patch_size
 
         offset_x = x - section_x
-        offset_patch_x = offset_x // PATCH_SIZE
+        offset_patch_x = offset_x // patch_size
 
         # Determine how many full-screen offsets we need from the edge of the histogram.
         if section_patch_x not in special_section_offsets:
@@ -428,7 +466,7 @@ def _build_patch_histogram_rgb(
             next_special_section_id[0] += 1
 
         section_id = special_section_offsets[section_patch_x]
-        patches_in_section = 256 // PATCH_SIZE
+        patches_in_section = 256 // patch_size
 
         # Calculate the starting patch of the section.
         section_c = hc - (1 + section_id) * patches_in_section
@@ -447,21 +485,21 @@ def _build_patch_histogram_rgb(
 
         # For display purposes only, if we're at one of the special offscreen locations,
         # Use an offset, but still show it in the histogram.
-        if patch_x <= _MAX_PATCHES_X:
+        if patch_x <= max_patch_x:
             # What row of the level we're in.  Wrap around if past the end of the screen.
             wrap_i = patch_x // hc
 
-            r = wrap_i * (_MAX_PATCHES_Y + _SPACE_R) + patch_y
+            r = wrap_i * (max_patch_y + _SPACE_R) + patch_y
             c = patch_x % hc
         else:
             # Special case, we're past the end of the level for some special section.
-            r = hr - _MAX_PATCHES_Y + patch_y
+            r = hr - max_patch_y + patch_y
             c = _calc_c_for_special_section(save_patch_id, hr=hr, hc=hc)
 
         try:
             patch_histogram[r][c] = count
         except IndexError:
-            print(f"PATCH LAYOUT: max_patches_x={_MAX_PATCHES_X} max_patches_y={_MAX_PATCHES_Y} pixel_size={pixel_size} hr={hr} hc={hc}")
+            print(f"PATCH LAYOUT: max_patches_x={max_patch_x} max_patches_y={max_patch_y} pixel_size={pixel_size} hr={hr} hc={hc}")
             print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
 
             patch_histogram[hr][hc] += 1
@@ -474,20 +512,20 @@ def _build_patch_histogram_rgb(
     grid_rgb = np.stack([grid_g]*3, axis=-1)
 
     # Mark current patch.
-    if current_patch.patch_x <= _MAX_PATCHES_X:
+    if current_patch.patch_x <= max_patch_x:
         px, py = current_patch.patch_x, current_patch.patch_y
         wrap_i = px // hc
-        patch_r = wrap_i * (_MAX_PATCHES_Y + _SPACE_R) + py
+        patch_r = wrap_i * (max_patch_y + _SPACE_R) + py
         patch_c = px % hc
     else:
         # Special case, we're past the end of the level for some special section.
-        patch_r = hr - _MAX_PATCHES_Y + current_patch.patch_y
+        patch_r = hr - max_patch_y + current_patch.patch_y
         patch_c = _calc_c_for_special_section(current_patch, hr=hr, hc=hc)
 
     try:
         grid_rgb[patch_r][patch_c] = (0, 255, 0)
     except IndexError:
-        print(f"PATCH LAYOUT: max_patches_x={_MAX_PATCHES_X} max_patches_y={_MAX_PATCHES_Y} pixel_size={pixel_size} hr={hr} hc={hc}")
+        print(f"PATCH LAYOUT: max_patches_x={max_patch_x} max_patches_y={max_patch_y} pixel_size={pixel_size} hr={hr} hc={hc}")
         print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
 
         grid_rgb[hr][hc] = (0, 255, 0)
@@ -547,6 +585,10 @@ def _print_info(
         f"steps_since_load={steps_since_load}")
 
 
+_MAX_LEVEL_DIST = 6400
+_SPACE_R = 0
+
+
 def main():
     args = tyro.cli(Args)
 
@@ -590,6 +632,7 @@ def main():
     # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
+    rng = np.random.default_rng()
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
@@ -601,9 +644,8 @@ def main():
     nes = first_env.nes
     screen = first_env.screen
 
-    rng = np.random.default_rng()
-
     # Global state.
+    patch_size = args.patch_size
     step = 0
     next_save_id = 0
     start_time = time.time()
@@ -612,7 +654,29 @@ def main():
 
     # Per-trajectory state.  Resets after every death/level.
     action_history = []
+    state_history = []
     controller = _to_controller_presses([])
+
+    # Histogram visualization.
+
+    # Approximate the size of the histogram based on how many patches we need.
+    _MAX_PATCHES_X = int(np.ceil(_MAX_LEVEL_DIST / patch_size))
+    _MAX_EXTRA_PATCHES_X = 5
+    _MAX_PATCHES_Y = int(np.ceil(240 / patch_size))
+    _NUM_MAX_PATCHES = _MAX_PATCHES_X * _MAX_PATCHES_Y
+
+    # We'll wrap rows around if they hit the edge of the screen.
+    # Figure out how many wraps we need by:
+    #
+    #   (actual_screen_w / pixel_size) * num_rows = (actual_screen_w / pixel_size) * (actual_screen_h / pixel_size)
+    #
+    #   patches_per_row * num_rows = patches_per_row * patches_per_col
+    #
+    #
+    # We want the pixel size to be maximized, as long as everything fits on the screen.
+    # When everything fits exactly,
+    # We don't know the patches_per_row or the patch_pixel_size.
+    _HIST_ROWS, _HIST_COLS, _HIST_PIXEL_SIZE = _optimal_patch_layout(screen_width=240, screen_height=224, n_patches=_NUM_MAX_PATCHES)
 
     # Start searching the Mario game tree.
     envs.reset()
@@ -629,10 +693,10 @@ def main():
 
     level_ticks = -1
 
-    patch_id = PatchId(x // PATCH_SIZE, y // PATCH_SIZE)
+    patch_id = PatchId(x // patch_size, y // patch_size)
     prev_patch_id = patch_id
 
-    saves = PatchReservoir()
+    saves = PatchReservoir(patch_size=patch_size)
     force_terminate = False
     steps_since_load = 0
 
@@ -665,7 +729,7 @@ def main():
         lives = life(ram)
         ticks_left = get_time_left(ram)
 
-        patch_id = PatchId(x // PATCH_SIZE, y // PATCH_SIZE)
+        patch_id = PatchId(x // patch_size, y // patch_size)
 
         # Calculate derived states.
         ticks_used = max(1, level_ticks - ticks_left)
@@ -722,6 +786,7 @@ def main():
 
             # Choose save.
             save_info, patch_id_and_weight_pairs = _choose_save(saves, rng=rng)
+            # save_info, patch_id_and_weight_pairs = _choose_save_from_history(state_history, saves, rng=rng)
 
             # Reload and re-initialize.
             nes.load(save_info.save_state)
@@ -734,6 +799,7 @@ def main():
             controller = _flip_buttons(controller, flip_prob=0.3, ignore_button_mask=_MASK_START_AND_SELECT)
 
             action_history = save_info.action_history.copy()
+            state_history = save_info.state_history.copy()
 
             # Read current state.
             world = get_world(ram)
@@ -751,7 +817,7 @@ def main():
             prev_level = level
             prev_x = x
             prev_lives = lives
-            patch_id = PatchId(x // PATCH_SIZE, y // PATCH_SIZE)
+            patch_id = PatchId(x // patch_size, y // patch_size)
             prev_patch_id = save_info.prev_patch_id
 
             level_ticks = save_info.level_ticks
@@ -770,7 +836,7 @@ def main():
 
         # Stop after some fixed number of steps.  This will force the sampling logic to run more often,
         # which means we won't waste as much time running through old states.
-        elif steps_since_load >= 250:
+        elif args.max_trajectory_steps > 0 and steps_since_load >= args.max_trajectory_steps:
             print(f"Ending trajectory, max steps for trajectory: {steps_since_load}: x={x} ticks_left={ticks_left}")
             force_terminate = True
 
@@ -795,6 +861,7 @@ def main():
 
                 # Clear state.
                 action_history = []
+                state_history = []
 
                 print(f"Starting level: {_str_level(world, level)}")
 
@@ -807,7 +874,7 @@ def main():
 
                 assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
 
-                saves = PatchReservoir()
+                saves = PatchReservoir(patch_size=patch_size)
                 saves.add(SaveInfo(
                     save_id=next_save_id,
                     x=x,
@@ -818,6 +885,7 @@ def main():
                     ticks_left=ticks_left,
                     save_state=nes.save(),
                     action_history=action_history.copy(),
+                    state_history=state_history.copy(),
                     prev_patch_id=prev_patch_id,
                 ))
                 next_save_id += 1
@@ -858,7 +926,7 @@ def main():
                         force_terminate = True
 
                 else:
-                    saves.add(SaveInfo(
+                    save_info = SaveInfo(
                         save_id=next_save_id,
                         x=x,
                         y=y,
@@ -868,9 +936,13 @@ def main():
                         ticks_left=ticks_left,
                         save_state=nes.save(),
                         action_history=action_history.copy(),
+                        state_history=state_history.copy(),
                         prev_patch_id=prev_patch_id,
-                    ))
+                    )
+                    saves.add(save_info)
                     next_save_id += 1
+
+                    state_history.append(save_info)
 
                 prev_patch_id = patch_id
 
@@ -899,6 +971,9 @@ def main():
             img_rgb_240 = _build_patch_histogram_rgb(
                 patch_id_and_num_saves_pairs,
                 current_patch=patch_id,
+                patch_size=patch_size,
+                max_patch_x=_MAX_PATCHES_X,
+                max_patch_y=_MAX_PATCHES_Y,
                 hist_rows=_HIST_ROWS,
                 hist_cols=_HIST_COLS,
                 pixel_size=_HIST_PIXEL_SIZE,
@@ -910,16 +985,26 @@ def main():
             img_rgb_240 = _build_patch_histogram_rgb(
                 patch_id_and_seen_count_pairs,
                 current_patch=patch_id,
+                patch_size=patch_size,
+                max_patch_x=_MAX_PATCHES_X,
+                max_patch_y=_MAX_PATCHES_Y,
                 hist_rows=_HIST_ROWS,
                 hist_cols=_HIST_COLS,
                 pixel_size=_HIST_PIXEL_SIZE,
             )
             screen.blit_image(img_rgb_240, screen_index=3)
 
+            # TODO(millman): avoid this?
+            if False:
+                _sample, patch_id_and_weight_pairs = _choose_save_from_history(state_history, saves, rng=rng)
+
             # Histogram of sampling weight.
             img_rgb_240 = _build_patch_histogram_rgb(
                 patch_id_and_weight_pairs,
                 current_patch=patch_id,
+                patch_size=patch_size,
+                max_patch_x=_MAX_PATCHES_X,
+                max_patch_y=_MAX_PATCHES_Y,
                 hist_rows=_HIST_ROWS,
                 hist_cols=_HIST_COLS,
                 pixel_size=_HIST_PIXEL_SIZE,
