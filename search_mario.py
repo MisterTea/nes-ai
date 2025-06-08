@@ -35,15 +35,11 @@ NdArrayRGB8 = np.ndarray[tuple[Literal[3]], np.dtype[np.uint8]]
 
 @dataclass(frozen=True)
 class PatchId:
-    world: int
-    level: int
     patch_x: int
     patch_y: int
 
     def __post_init__(self):
         # Convert value from np.uint8 to int.
-        object.__setattr__(self, 'world', int(self.world))
-        object.__setattr__(self, 'level', int(self.level))
         object.__setattr__(self, 'patch_x', int(self.patch_x))
         object.__setattr__(self, 'patch_y', int(self.patch_y))
 
@@ -206,8 +202,6 @@ PATCH_SIZE = 10
 
 @dataclass(frozen=True)
 class ReservoirId:
-    world: int
-    level: int
     patch_x: int
     patch_y: int
     prev_patch_x: int
@@ -226,17 +220,17 @@ class PatchReservoir:
 
     @staticmethod
     def patch_id_from_save(save: SaveInfo) -> tuple:
-        patch_id = PatchId(save.world, save.level, save.x // PATCH_SIZE, save.y // PATCH_SIZE)
+        patch_id = PatchId(save.x // PATCH_SIZE, save.y // PATCH_SIZE)
         return patch_id
 
     @staticmethod
     def reservoir_id_from_save(save: SaveInfo) -> tuple:
-        reservoir_id = ReservoirId(save.world, save.level, save.x // PATCH_SIZE, save.y // PATCH_SIZE, save.prev_patch_id.patch_x, save.prev_patch_id.patch_y)
+        reservoir_id = ReservoirId(save.x // PATCH_SIZE, save.y // PATCH_SIZE, save.prev_patch_id.patch_x, save.prev_patch_id.patch_y)
         return reservoir_id
 
     @staticmethod
     def reservoir_id_from_state(world: int, level: int, patch_id: PatchId, prev_patch_id: PatchId) -> ReservoirId:
-        reservoir_id = ReservoirId(world, level, patch_id.patch_x, patch_id.patch_y, prev_patch_id.patch_x, prev_patch_id.patch_y)
+        reservoir_id = ReservoirId(patch_id.patch_x, patch_id.patch_y, prev_patch_id.patch_x, prev_patch_id.patch_y)
         return reservoir_id
 
     def add(self, save: SaveInfo):
@@ -431,7 +425,7 @@ def _choose_save(saves_reservoir: PatchReservoir) -> SaveInfo:
         # Normalize by number of saves in each patch.  Note that multiple reservoir_id may map
         # into the same patch.
         patch_id_list = [
-            PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
+            PatchId(reservoir_id.patch_x, reservoir_id.patch_y)
             for reservoir_id in reservoir_id_list
         ]
 
@@ -661,7 +655,7 @@ def _choose_save(saves_reservoir: PatchReservoir) -> SaveInfo:
         chosen_y, chosen_x = np.unravel_index(chosen_flat_idx, weights_grid_result.shape)
 
         # Reconstruct the patch_id to find all saves in the patch.
-        selected_patch_id = PatchId(patch_id_list[0].world, patch_id_list[0].level, chosen_x, chosen_y)
+        selected_patch_id = PatchId(chosen_x, chosen_y)
         reservoir_and_i_pairs = patch_id_to_reservoir_ids[selected_patch_id]
 
         # Choose one of the reservoir ids, uniform sampling.
@@ -1076,7 +1070,7 @@ def main():
     level_ticks = -1
     distance_x = 0
 
-    patch_id = PatchId(world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+    patch_id = PatchId(x // PATCH_SIZE, y // PATCH_SIZE)
     prev_patch_id = patch_id
 
     saves = PatchReservoir()
@@ -1110,7 +1104,7 @@ def main():
         lives = life(ram)
         ticks_left = get_time_left(ram)
 
-        patch_id = PatchId(world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+        patch_id = PatchId(x // PATCH_SIZE, y // PATCH_SIZE)
 
         # Calculate derived states.
         ticks_used = max(1, level_ticks - ticks_left)
@@ -1208,7 +1202,7 @@ def main():
             prev_level = level
             prev_x = x
             prev_lives = lives
-            patch_id = PatchId(world, level, x // PATCH_SIZE, y // PATCH_SIZE)
+            patch_id = PatchId(x // PATCH_SIZE, y // PATCH_SIZE)
             prev_patch_id = save_info.prev_patch_id
 
             level_ticks = save_info.level_ticks
@@ -1395,7 +1389,7 @@ def main():
             # Collect reservoirs into patches.
             patch_id_to_count = Counter()
             for reservoir_id, saves_in_reservoir in saves._saves_by_reservoir.items():
-                patch_id = PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
+                patch_id = PatchId(reservoir_id.patch_x, reservoir_id.patch_y)
                 patch_id_to_count[patch_id] += len(saves_in_reservoir)
 
             patch_id_and_count_pairs = patch_id_to_count.items()
@@ -1434,7 +1428,7 @@ def main():
                 patch_id_to_count = Counter()
                 patch_id_to_weight = Counter()
                 for i, reservoir_id in enumerate(reservoir_id_list):
-                    p_id = PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
+                    p_id = PatchId(reservoir_id.patch_x, reservoir_id.patch_y)
                     patch_id_to_weight[p_id] += weights[i]
                     patch_id_to_count[p_id] += 1
 
@@ -1472,7 +1466,7 @@ def main():
                 patch_id_and_weight_pairs = []
                 for r, rows in enumerate(sample_weights_grid):
                     for c, weight in enumerate(rows):
-                        p_id = PatchId(world, level, c, r)
+                        p_id = PatchId(c, r)
                         patch_id_and_weight_pairs.append((p_id, weight))
 
                 img_rgb_240 = _build_patch_histogram_rgb(
