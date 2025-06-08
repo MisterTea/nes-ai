@@ -128,7 +128,7 @@ class Args:
     reset_to_save_state: bool = False
     headless: bool = False
     print_freq_sec: float = 1.0
-    start_world: int = 4
+    start_world: int = 8
     start_level: int = 4
 
     # Visualization
@@ -274,8 +274,9 @@ class PatchReservoir:
                     # Mark this patch as newly refreshed.
                     self._reservoir_refreshed.add(reservoir_id)
 
+                    # TODO(millman): is this a good idea?
                     # Don't increment since it was replaced.
-                    self._reservoir_count_since_refresh[reservoir_id] -= 1
+                    # self._reservoir_count_since_refresh[reservoir_id] -= 1
 
         # Update count.
         self._reservoir_seen_counts[reservoir_id] += 1
@@ -395,10 +396,12 @@ def _choose_save(saves_reservoir: PatchReservoir) -> SaveInfo:
         chosen_patch_x_index = np.random.choice(patch_indices, p=weights)
         chosen_patch_x = patches[chosen_patch_x_index]
 
+        # TODO(millman): Choose across y dimension based on counts.  We want to explore the under-explored areas.
         # Choose uniformly across y dimension.
         sample = random.choice(saves_by_patch[chosen_patch_x])
 
         # TODO(millman): return weights for all patches?, for visualization
+        return sample, [(saves_reservoir.patch_id_from_save(saves_bucket[0]), 1)]
 
     if True:
         # Use Boltzmann Exploration.
@@ -409,22 +412,30 @@ def _choose_save(saves_reservoir: PatchReservoir) -> SaveInfo:
         # Focus on the least-visited patches, independent of anything else.  We can think about the
         # exploration problem as wanting full coverage -- we have no reward or other idea about how
         # we should expand states.
+
         if True:
-            reservoir_id_list = saves_reservoir._reservoir_count_since_refresh.keys()
+            # Pentalize counts.  Explore lower count states.
+            reservoir_id_list = list(saves_reservoir._reservoir_count_since_refresh.keys())
+            counts = np.fromiter(saves_reservoir._reservoir_count_since_refresh.values(), dtype=np.float64)
+        else:
+            # Reward progress.  Explore higher count states.
+            reservoir_id_list = []
+            counts = []
+            for r_id, saves_in_reservoir in saves_reservoir._saves_by_reservoir.items():
+                for s in saves_in_reservoir:
+                    reservoir_id_list.append(r_id)
+                    counts.append(len(s.visited_patches_x))
 
-            counts = np.fromiter(saves_reservoir._reservoir_count_since_refresh.values(), dtype=np.int64)
+            counts = -np.asarray(counts)
 
-            # Boltzmann-exploration weighting.
-            beta = 1.0
-            weights = beta * np.exp(-counts)
+        # Normalize by number of saves in each patch.  Note that multiple reservoir_id may map
+        # into the same patch.
+        patch_id_list = [
+            PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
+            for reservoir_id in reservoir_id_list
+        ]
 
-            # Normalize by number of saves in each patch.  Note that multiple reservoir_id may map
-            # into the same patch.
-            patch_id_list = [
-                PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
-                for reservoir_id in reservoir_id_list
-            ]
-
+        if False:
             # Count the number of items in each patch.
             patch_id_to_count = Counter()
             for i, patch_id in enumerate(patch_id_list):
@@ -436,36 +447,231 @@ def _choose_save(saves_reservoir: PatchReservoir) -> SaveInfo:
                 patch_counts[i] = patch_id_to_count[patch_id]
 
             # Normalize weight by the number of items in the patch.
-            weights /= patch_counts
+            counts /= patch_counts
 
-            # Normalize to sum to 1.
-            weights /= sum(weights)
+        # Boltzmann-exploration weighting.
+        beta = 1.0
+        weights = beta * np.exp(-counts)
 
-            # Pick save.
-            save_indicies = np.arange(len(saves))
-            chosen_save_index = np.random.choice(save_indicies, p=weights)
+        # Normalize to sum to 1.
+        weights /= weights.sum()
 
-            sample = saves[chosen_save_index]
+        # Pick reservoir.
+        reservoir_list_indices = np.arange(len(reservoir_id_list))
+        chosen_reservoir_index = np.random.choice(reservoir_list_indices, p=weights)
+        reservoir_id = reservoir_id_list[chosen_reservoir_index]
 
-        # Focus on the least-visited reservoir buckets.  Don't aggregate into patches.
-        if False:
-            counts = [
-                # saves_reservoir._reservoir_count_since_refresh[saves_reservoir.reservoir_id_from_save(s)]
-                saves_reservoir._reservoir_seen_counts[saves_reservoir.reservoir_id_from_save(s)]
-                for s in saves
-            ]
+        # Pick uniformly among saves in the reservoir.
+        sample = random.choice(saves_reservoir._saves_by_reservoir[reservoir_id])
 
-            # Boltzmann-exploration weighting.
-            beta = 1.0
-            weights = np.exp(beta * -np.asarray(counts))
-            weights /= weights.sum()
+        return sample, zip(patch_id_list, weights)
 
-            save_indicies = np.arange(len(saves))
-            chosen_save_index = np.random.choice(save_indicies, p=weights)
+    # Use Boltzmann Exploration.
+    #
+    # Focus on the least-visited reservoir buckets.  Don't aggregate into patches.
+    if False:
+        counts = [
+            # saves_reservoir._reservoir_count_since_refresh[saves_reservoir.reservoir_id_from_save(s)]
+            saves_reservoir._reservoir_seen_counts[saves_reservoir.reservoir_id_from_save(s)]
+            for s in saves
+        ]
 
-            sample = saves[chosen_save_index]
+        # Boltzmann-exploration weighting.
+        beta = 1.0
+        weights = np.exp(beta * -np.asarray(counts))
+        weights /= weights.sum()
 
-    return sample
+        # Pick reservoir.
+        save_indicies = np.arange(len(saves))
+        chosen_save_index = np.random.choice(save_indicies, p=weights)
+
+        sample = saves[chosen_save_index]
+
+        patch_id_list = [
+            saves_reservoir.patch_id_from_save(s)
+            for s in saves
+        ]
+
+        return sample, zip(patch_id_list, weights)
+
+    # TODO(millman): NOT TESTED
+    # Weight across x patch hyperbolically.
+    # Weight across y patch exponentially (Boltzmann).
+    if False:
+        # Collect into xy buckets.
+        xy_to_patches = {}
+        for s in saves:
+            patch_id = saves_reservoir.patch_id_from_save(s)
+            xy_to_patches.setdefault(patch_id.patch_x, {}).setdefault(patch_id.patch_y, []).append((s, patch_id))
+
+        rng = np.random.default_rng()
+
+        # Hyperbolic weighting for x.  Normalize by number of items in x dimension.
+        x_list = list(xy_to_patches.keys())
+        x_weights = _weight_hyperbolic(len(x_list))
+        x_counts = np.fromiter((len(ys) for ys in xy_to_patches.values()), dtype=np.int64)
+        x_weights /= x_counts
+        x_probs = x_weights / x_weights.sum()
+
+        # Pick an x.
+        x_id = rng.choice(x_list, p=x_probs)
+
+        y_to_patches = xy_to_patches[x_id]
+
+        # Exponential weighting for y.
+        y_list = list(y_to_patches.keys())
+
+        beta = 1.0
+        y_counts = np.fromiter((count for _s, count in y_list), dtype=np.int64)
+        y_weights = np.exp(beta * -y_counts)
+        y_probs = y_weights / y_weights.sum()
+
+        # Pick a y.
+        y_id = rng.choice(y_list, p=y_probs)
+
+        sample, sample_patch_id = y_to_patches[y_id]
+
+    # Weight across x patch hyperbolically.
+    # Weight across y patch exponentially (Boltzmann).
+    if False:
+        reservoir_id_list = [
+            saves_reservoir.reservoir_id_from_save(s)
+            for s in saves
+        ]
+
+        patch_id_list = [
+            saves_reservoir.patch_id_from_save(s)
+            for s in saves
+        ]
+
+        patch_id_to_reservoir_ids = {}
+        for i,(p_id, r_id) in enumerate(zip(patch_id_list, reservoir_id_list)):
+            patch_id_to_reservoir_ids.setdefault(p_id, []).append((r_id, i))
+
+        # Adjust any end-of-level discontinuous values for display.
+
+        # Build a dense grid of the max patch values.
+        # Adjust any end-of-level discontinuous values.
+        max_px = 0
+        max_py = 0
+        for p in patch_id_list:
+            if p.patch_x <= _MAX_PATCHES_X:
+                max_px = max(max_px, p.patch_x)
+                max_py = max(max_py, p.patch_y)
+            else:
+                if False:
+                    # Determine the section the patch is in.
+
+                    # Create an offset for the given section.
+
+                    # Adjust to that section.
+
+                    # The section here is the 255-width pixel section that the level is divided into.
+                    # Also called "screen" in the memory map.
+                    x = p.patch_x * PATCH_SIZE
+
+                    section_x = (x // 256) * 256
+                    section_patch_x = section_x // PATCH_SIZE
+
+                    offset_x = x - section_x
+                    offset_patch_x = offset_x // PATCH_SIZE
+
+                    # Determine how many full-screen offsets we need from the edge of the histogram.
+                    if section_patch_x not in special_section_offsets:
+                        special_section_offsets[section_patch_x] = next_special_section_id[0]
+                        next_special_section_id[0] += 1
+
+                    section_id = special_section_offsets[section_patch_x]
+                    patches_in_section = 256 // PATCH_SIZE
+
+                    # Calculate the starting patch of the section.
+                    section_c = hc - (1 + section_id) * patches_in_section
+
+                    # Calculate how much offset we need from the start of the section.
+                    # Rewrite the x and y position, for display into this after-level section.
+                    c = section_c + offset_patch_x
+
+
+                    # TODO(millman): IMPLEMENT OFFSETS CORRECTLY
+                    # raise AssertionError("IMPLEMENT")
+                    pass
+        max_px += 1
+        max_py += 1
+
+        count_dim_x = np.zeros(max_px)
+        count_dim_y = np.zeros(max_py)
+        count_grid = np.zeros((max_py, max_px))
+        # weight_dim_y = np.zeros(max_py)
+        weight_grid = np.zeros((max_py, max_px))
+
+        # Populate the grid with counts.
+        for p, r in zip(patch_id_list, reservoir_id_list):
+            if p.patch_x >= _MAX_PATCHES_X:
+                # TODO(millman): implement
+                continue
+
+            count_in_patch = saves_reservoir._reservoir_count_since_refresh[r]
+
+            count_dim_x[p.patch_x] += 1
+            count_dim_y[p.patch_y] += 1
+
+            count_grid[p.patch_y, p.patch_x] += 1
+
+            # weight_dim_y[p.patch_y] += count_in_patch
+            weight_grid[p.patch_y, p.patch_x] += count_in_patch
+
+        # Normalize x and y dimension by multiplicity (count of non-zero values).
+
+        # Avoid division by zero.
+        x_counts_safe = np.where(count_dim_x == 0, 1, count_dim_x)
+        y_counts_safe = np.where(count_dim_y == 0, 1, count_dim_y)
+
+        # Broadcast and normalize by counts.
+        weight_grid_norm = weight_grid / (x_counts_safe[None, :] * y_counts_safe[:, None])
+
+        rng = np.random.default_rng()
+
+        # Hyperbolic weighting for x.  Normalize by number of items in x dimension.
+        # We want the larger x values to be preferred.
+        x_weights = _weight_hyperbolic(max_px)
+
+        # Exponential weighting for y.  We want the least visited y values to be preferred.
+        beta = 1.0
+        y_weights_grid = np.exp(beta * -count_grid)
+        # print(f"count_grid SHAPE: {count_grid.shape} {y_weights_grid.shape=}")
+
+        # Weights are independent, so can be combined.
+        # print(f"WEIGHT GRID NORM SHAPE: {weight_grid_norm.shape} {x_weights[None,:].shape=} {y_weights_grid[:, None].shape=}")
+        weights_grid_result = weight_grid_norm * x_weights[None, :] * y_weights_grid
+        # print(f"WEIGHT RESULT SHAPE: {weights_grid_result.shape}")
+
+        # Select a random r,c value out of the grid.
+
+        # Flatten the grid to 1D.
+        flat_weights = weights_grid_result.ravel()
+
+        # Normalize weights to sum to 1.
+        probs = flat_weights / flat_weights.sum()
+
+        # Select a single random index based on the weights.
+        chosen_flat_idx = np.random.choice(flat_weights.size, p=probs)
+
+        # Convert back to 2D indices.
+        # print(f"CHOSEN FLAT INDEX: {chosen_flat_idx} weight_grid_result={weights_grid_result.shape}")
+        chosen_y, chosen_x = np.unravel_index(chosen_flat_idx, weights_grid_result.shape)
+
+        # Reconstruct the patch_id to find all saves in the patch.
+        selected_patch_id = PatchId(patch_id_list[0].world, patch_id_list[0].level, chosen_x, chosen_y)
+        reservoir_and_i_pairs = patch_id_to_reservoir_ids[selected_patch_id]
+
+        # Choose one of the reservoir ids, uniform sampling.
+        selected_reservoir_id, selected_i = random.choice(reservoir_and_i_pairs)
+
+        sample = saves[selected_i]
+
+        return sample, weights_grid_result
+
+    return sample, None
 
 
 def _flip_buttons(controller_presses: NdArrayUint8, flip_prob: float, ignore_button_mask: NdArrayUint8) -> NdArrayUint8:
@@ -589,6 +795,7 @@ def _get_min_patches_per_tick() -> int:
 # Approximate the size of the histogram based on how many patches we need.
 _MAX_LEVEL_DIST = 6400
 _MAX_PATCHES_X = int(np.ceil(_MAX_LEVEL_DIST / PATCH_SIZE))
+_MAX_EXTRA_PATCHES_X = 5
 _MAX_PATCHES_Y = int(np.ceil(240 / PATCH_SIZE))
 _NUM_MAX_PATCHES = _MAX_PATCHES_X * _MAX_PATCHES_Y
 _SPACE_R = 0
@@ -632,6 +839,7 @@ def _build_patch_histogram_rgb(
     # Seems to happen when crossing boundaries in discontinuous levels like 4-4.
     def _calc_c_for_special_section(check_patch_x: PatchId, hr: int, hc: int):
         # print(f"REWRITING SPECIAL SECTION: patch={check_patch_x.patch_x},{check_patch_x.patch_y} hr={hr} hc={hc}")
+        # TODO(millman): this isn't right, special section is overlapping other things
 
         # The section here is the 255-width pixel section that the level is divided into.
         # Also called "screen" in the memory map.
@@ -923,6 +1131,16 @@ def main():
         else:
             distance_x += x - prev_x
 
+        if False: # x > 65000:
+            # 0x006D  Current screen (in which the player is currently in, increase or decrease depending on player's position)
+            # 0x0086  Player x position on screen
+            # 0x071A  Current screen (in level, always increasing)
+            # 0x071C  ScreenEdge X-Position
+            screen_x = ram[0x006D]
+            level_screen_x = ram[0x071A]
+            screen_pos = ram[0x0086]
+            print(f"WEIRD X POS: level={_str_level(world, level)} screen[0x006D]={screen_x} level_screen[0x071A]={level_screen_x} screen_pos[0x0086]={screen_pos} x={x} y={y} lives={lives}")
+
         # Mark current patch as visted.
         reservoir_id = saves.reservoir_id_from_state(world=world, level=level, patch_id=patch_id, prev_patch_id=prev_patch_id)
         if reservoir_id in saves._reservoir_refreshed:
@@ -958,7 +1176,7 @@ def main():
             # Start reload process.
 
             # Choose save.
-            save_info = _choose_save(saves)
+            save_info, _sample_weights = _choose_save(saves)
 
             # Reload and re-initialize.
             nes.load(save_info.save_state)
@@ -1009,8 +1227,10 @@ def main():
 
                 # Hyperbolic weight.
                 N = len(saves_list)
-                c = 0.0
-                weight = 1.0 / (N - save_i + c)
+                weights = _weight_hyperbolic(N)
+                weights /= weights[0]
+
+                weight = weights[save_i]
 
                 print(f"Loaded save: [{save_i}] {weight:.4f}x: save_id={save_info.save_id} level={_str_level(world, level)}, x={x} y={y} lives={lives}")
 
@@ -1022,7 +1242,7 @@ def main():
 
         # Stop after some fixed number of steps.  This will force the sampling logic to run more often,
         # which means we won't waste as much time running through old states.
-        elif steps_since_load >= 350:
+        elif steps_since_load >= PATCH_SIZE * 3:
             print(f"Ending trajectory, max steps for trajectory: {steps_since_load}: x={x} ticks_left={ticks_left}")
             force_terminate = True
 
@@ -1202,35 +1422,67 @@ def main():
             screen.blit_image(img_rgb_240, screen_index=3)
 
             # Histogram of sampling weight.
-            reservoir_id_list = saves._reservoir_count_since_refresh.keys()
-            counts = np.fromiter(saves._reservoir_count_since_refresh.values(), dtype=np.int64)
+            if False:
+                reservoir_id_list = saves._reservoir_count_since_refresh.keys()
+                counts = np.fromiter(saves._reservoir_count_since_refresh.values(), dtype=np.int64)
 
-            # Boltzmann-exploration weighting.
-            beta = 1.0
-            weights = beta * np.exp(-counts)
-            weights /= sum(weights)
+                # Boltzmann-exploration weighting.
+                beta = 1.0
+                weights = beta * np.exp(-counts)
+                weights /= weights.sum()
 
-            patch_id_to_count = Counter()
-            patch_id_to_weight = Counter()
-            for i, reservoir_id in enumerate(reservoir_id_list):
-                p_id = PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
-                patch_id_to_weight[p_id] += weights[i]
-                patch_id_to_count[p_id] += 1
+                patch_id_to_count = Counter()
+                patch_id_to_weight = Counter()
+                for i, reservoir_id in enumerate(reservoir_id_list):
+                    p_id = PatchId(reservoir_id.world, reservoir_id.level, reservoir_id.patch_x, reservoir_id.patch_y)
+                    patch_id_to_weight[p_id] += weights[i]
+                    patch_id_to_count[p_id] += 1
 
-            # Normalize weight by the number of items in the patch.
-            for p_id, count in patch_id_to_count.items():
-                patch_id_to_weight[p_id] /= count
+                # Normalize weight by the number of items in the patch.
+                for p_id, count in patch_id_to_count.items():
+                    patch_id_to_weight[p_id] /= count
 
-            patch_id_and_weight_pairs = patch_id_to_weight.items()
+                patch_id_and_weight_pairs = patch_id_to_weight.items()
 
-            img_rgb_240 = _build_patch_histogram_rgb(
-                patch_id_and_weight_pairs,
-                current_patch=patch_id,
-                hist_rows=_HIST_ROWS,
-                hist_cols=_HIST_COLS,
-                pixel_size=_HIST_PIXEL_SIZE,
-            )
-            screen.blit_image(img_rgb_240, screen_index=2)
+                img_rgb_240 = _build_patch_histogram_rgb(
+                    patch_id_and_weight_pairs,
+                    current_patch=patch_id,
+                    hist_rows=_HIST_ROWS,
+                    hist_cols=_HIST_COLS,
+                    pixel_size=_HIST_PIXEL_SIZE,
+                )
+                screen.blit_image(img_rgb_240, screen_index=2)
+
+            if True:
+                _selected, patch_id_and_weight_pairs = _choose_save(saves)
+
+                img_rgb_240 = _build_patch_histogram_rgb(
+                    patch_id_and_weight_pairs,
+                    current_patch=patch_id,
+                    hist_rows=_HIST_ROWS,
+                    hist_cols=_HIST_COLS,
+                    pixel_size=_HIST_PIXEL_SIZE,
+                )
+                screen.blit_image(img_rgb_240, screen_index=2)
+
+            if False:
+                _selected, sample_weights_grid = _choose_save(saves)
+
+                # Convert grid into a list for the histogram.
+                patch_id_and_weight_pairs = []
+                for r, rows in enumerate(sample_weights_grid):
+                    for c, weight in enumerate(rows):
+                        p_id = PatchId(world, level, c, r)
+                        patch_id_and_weight_pairs.append((p_id, weight))
+
+                img_rgb_240 = _build_patch_histogram_rgb(
+                    patch_id_and_weight_pairs,
+                    current_patch=patch_id,
+                    hist_rows=_HIST_ROWS,
+                    hist_cols=_HIST_COLS,
+                    pixel_size=_HIST_PIXEL_SIZE,
+                )
+                screen.blit_image(img_rgb_240, screen_index=2)
 
             # Update display.
             screen.show()
