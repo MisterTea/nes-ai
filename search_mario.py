@@ -52,11 +52,8 @@ class SaveInfo:
     level: int
     world: int
     level_ticks: int
-    distance_x: int
     ticks_left: int
     save_state: Any
-    visited_patches: set
-    visited_patches_x: set
     action_history: list
     prev_patch_id: PatchId
 
@@ -167,14 +164,14 @@ def _print_saves_list(saves: list[SaveInfo]):
 
     # Print bottom-N and top-N saves.
     for i, (s, w) in enumerate(zip(saves[:N], weights[:N])):
-        print(f"  [{i}] {w:.4f}x {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id} visited={len(s.visited_patches)} dist={s.distance_x}")
+        print(f"  [{i}] {w:.4f}x {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id}")
 
     num_top = min(len(saves) - N, N)
     if num_top > 0:
         print('  ...')
         for e, (s, w) in enumerate(zip(saves[-num_top:], weights[-num_top:])):
             i = len(saves) - num_top + e
-            print(f"  [{i}] {w:.4f}x {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id} visited={len(s.visited_patches)} dist={s.distance_x}")
+            print(f"  [{i}] {w:.4f}x {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id}")
 
 
 def _weight_hyperbolic(N: int) -> np.array:
@@ -215,7 +212,7 @@ class PatchReservoir:
         self._saves_by_reservoir = defaultdict(list)
         self._reservoir_seen_counts = Counter()
         self._patch_seen_counts = Counter()
-        self._reservoir_refreshed = set()
+        self._reservoir_refreshed = Counter()
         self._reservoir_count_since_refresh = Counter()
 
     @staticmethod
@@ -266,11 +263,11 @@ class PatchReservoir:
                     saves_in_patch[max_index] = save
 
                     # Mark this patch as newly refreshed.
-                    self._reservoir_refreshed.add(reservoir_id)
+                    self._reservoir_refreshed[reservoir_id] = len(max_item.action_history) - len(save.action_history)
 
                     # TODO(millman): is this a good idea?
                     # Don't increment since it was replaced.
-                    # self._reservoir_count_since_refresh[reservoir_id] -= 1
+                    self._reservoir_count_since_refresh[reservoir_id] = 0
 
         # Update count.
         self._reservoir_seen_counts[reservoir_id] += 1
@@ -292,380 +289,58 @@ def _choose_save(saves_reservoir: PatchReservoir) -> SaveInfo:
     # Collect saves.
     saves = saves_reservoir.values()
 
-    if False:
-        # Uniform random
-        return random.choice(saves)
-
-    if False:
-        weights = _weight_hyperbolic(len(saves))
-        sample = np.random.choice(saves, p=weights)
-
-    if False:
-        # Cluster patches.
-        saves_by_patch = {}
-        for s in saves:
-            patchx_id = (s.world, s.level, s.distance_x // PATCH_SIZE)
-            saves_by_patch.setdefault(patchx_id, []).append(s)
-
-        # Select a patch location.
-        patches = sorted(saves_by_patch.keys())
-
-        # Choose across x dimension.
-        weights = _weight_hyperbolic(len(patches))
-        patch_indices = np.arange(len(patches))
-        chosen_patch_index = np.random.choice(patch_indices, p=weights)
-        chosen_patch = patches[chosen_patch_index]
-
-        # Choose uniformly across y dimension.
-        sample = random.choice(saves_by_patch[chosen_patch])
-
-    if False:
-        # Order by most novel, determined by patches explored, along the x dimension.
-        saves_ordered_by_patches = sorted(saves, key=lambda s: len(s.visited_patches_x))
-
-        weights = _weight_hyperbolic(len(saves_ordered_by_patches))
-        sample = np.random.choice(saves_ordered_by_patches, p=weights)
-
-    if False:
-        # Cluster patches along x dimension.
-        saves_by_patch = {}
-        for s in saves:
-            patchx_id = (s.world, s.level, len(s.visited_patches_x))
-            saves_by_patch.setdefault(patchx_id, []).append(s)
-
-        # Select a patch location.
-        patches = sorted(saves_by_patch.keys())
-
-        # Choose across x dimension.
-        weights = _weight_hyperbolic(len(patches))
-        patch_indices = np.arange(len(patches))
-        chosen_patch_x_index = np.random.choice(patch_indices, p=weights)
-        chosen_patch_x = patches[chosen_patch_x_index]
-
-        # Choose uniformly across y dimension.
-        sample = random.choice(saves_by_patch[chosen_patch_x])
-
-    if False:
-        # Organize into 3 buckets:
-        #   1.  Newly visited patches.
-        #   2.  Newly refreshed patches (i.e. got to the patch in a faster time).
-        #   3.  Everything else.
-        #
-        # Within each bucket, prefer the states with more visited_patches_x, which corresponds to
-        # progress.
-        saves_by_patch_new = []
-        saves_by_patch_refreshed = []
-        saves_by_patch_other = []
-        for s in saves:
-            reservoir_id = saves_reservoir.reservoir_id_from_save(s)
-            if saves_reservoir._reservoir_seen_counts[reservoir_id] == 1:
-                # Newly visited, only encountered this patch only once.
-                saves_by_patch_new.append(s)
-            elif reservoir_id in saves_reservoir._reservoir_refreshed:
-                # Newly refreshed.
-                saves_by_patch_refreshed.append(s)
-            else:
-                saves_by_patch_other.append(s)
-
-        # Pick bucket in priority order.
-        if saves_by_patch_new:
-            saves_bucket = saves_by_patch_new
-        elif saves_by_patch_new:
-            saves_bucket = saves_by_patch_refreshed
-        else:
-            saves_bucket = saves_by_patch_other
-
-        # Cluster patches along x dimension.
-        saves_by_patch = {}
-        for s in saves_bucket:
-            patchx_id = (s.world, s.level, len(s.visited_patches_x))
-            saves_by_patch.setdefault(patchx_id, []).append(s)
-
-        # Select a patch location.
-        patches = sorted(saves_by_patch.keys())
-
-        # Choose across x dimension.
-        weights = _weight_hyperbolic(len(patches))
-        patch_indices = np.arange(len(patches))
-        chosen_patch_x_index = np.random.choice(patch_indices, p=weights)
-        chosen_patch_x = patches[chosen_patch_x_index]
-
-        # TODO(millman): Choose across y dimension based on counts.  We want to explore the under-explored areas.
-        # Choose uniformly across y dimension.
-        sample = random.choice(saves_by_patch[chosen_patch_x])
-
-        # TODO(millman): return weights for all patches?, for visualization
-        return sample, [(saves_reservoir.patch_id_from_save(saves_bucket[0]), 1)]
-
-    if True:
-        # Use Boltzmann Exploration.
-        #
-        # Maybe upgrade to Boltzmann-Gumbel explortation later?:
-        # https://proceedings.neurips.cc/paper_files/paper/2017/file/b299ad862b6f12cb57679f0538eca514-Paper.pdf
-
-        # Focus on the least-visited patches, independent of anything else.  We can think about the
-        # exploration problem as wanting full coverage -- we have no reward or other idea about how
-        # we should expand states.
-
-        if True:
-            # Pentalize counts.  Explore lower count states.
-            reservoir_id_list = list(saves_reservoir._reservoir_count_since_refresh.keys())
-            counts = np.fromiter(saves_reservoir._reservoir_count_since_refresh.values(), dtype=np.float64)
-        else:
-            # Reward progress.  Explore higher count states.
-            reservoir_id_list = []
-            counts = []
-            for r_id, saves_in_reservoir in saves_reservoir._saves_by_reservoir.items():
-                for s in saves_in_reservoir:
-                    reservoir_id_list.append(r_id)
-                    counts.append(len(s.visited_patches_x))
-
-            counts = -np.asarray(counts)
-
-        # Normalize by number of saves in each patch.  Note that multiple reservoir_id may map
-        # into the same patch.
-        patch_id_list = [
-            PatchId(reservoir_id.patch_x, reservoir_id.patch_y)
-            for reservoir_id in reservoir_id_list
-        ]
-
-        if False:
-            # Count the number of items in each patch.
-            patch_id_to_count = Counter()
-            for i, patch_id in enumerate(patch_id_list):
-                patch_id_to_count[patch_id] += 1
-
-            # Build normalizing list for weights.
-            patch_counts = np.zeros(len(patch_id_list))
-            for i, patch_id in enumerate(patch_id_list):
-                patch_counts[i] = patch_id_to_count[patch_id]
-
-            # Normalize weight by the number of items in the patch.
-            counts /= patch_counts
-
-        # Boltzmann-exploration weighting.
-        beta = 1.0
-        weights = beta * np.exp(-counts)
-
-        # Normalize to sum to 1.
-        weights /= weights.sum()
-
-        # Pick reservoir.
-        reservoir_list_indices = np.arange(len(reservoir_id_list))
-        chosen_reservoir_index = np.random.choice(reservoir_list_indices, p=weights)
-        reservoir_id = reservoir_id_list[chosen_reservoir_index]
-
-        # Pick uniformly among saves in the reservoir.
-        sample = random.choice(saves_reservoir._saves_by_reservoir[reservoir_id])
-
-        return sample, zip(patch_id_list, weights)
-
-    # Use Boltzmann Exploration.
+    # Principles:
+    #   - primary object: find new states
+    #   - when a new state is found, explore it
+    #   - when we need to choose among already-explored states, choose the states that
+    #     we've explored the least
+    #   - do not bake it x-progression into the game; that should happen naturally by preferring
+    #     states that reach the same point in fewer actions
     #
-    # Focus on the least-visited reservoir buckets.  Don't aggregate into patches.
-    if False:
-        counts = [
-            # saves_reservoir._reservoir_count_since_refresh[saves_reservoir.reservoir_id_from_save(s)]
-            saves_reservoir._reservoir_seen_counts[saves_reservoir.reservoir_id_from_save(s)]
-            for s in saves
-        ]
+    # Ideas:
+    #   - Use multi-resolution grid?
 
-        # Boltzmann-exploration weighting.
-        beta = 1.0
-        weights = np.exp(beta * -np.asarray(counts))
-        weights /= weights.sum()
+    # Collect reservoirs into patches.
+    patch_id_to_saves = {}
+    patch_id_to_count = Counter()
+    for s in saves:
+        res_id = saves_reservoir.reservoir_id_from_save(s)
+        patch_id = saves_reservoir.patch_id_from_save(s)
+        patch_id_to_saves.setdefault(patch_id, []).append(s)
+        patch_id_to_count[patch_id] += saves_reservoir._reservoir_count_since_refresh[res_id]
 
-        # Pick reservoir.
-        save_indicies = np.arange(len(saves))
-        chosen_save_index = np.random.choice(save_indicies, p=weights)
+    # Pick patch by Boltzmann-explortation exponential weighting of count.
+    patch_counts = np.fromiter(patch_id_to_count.values(), dtype=np.float64)
+    beta = 1.0
+    weights = np.exp(beta * -patch_counts)
+    weights /= weights.sum()
 
-        sample = saves[chosen_save_index]
+    # Pick patch.
+    patch_indicies = np.arange(len(patch_counts))
+    chosen_patch_index = np.random.choice(patch_indicies, p=weights)
 
-        patch_id_list = [
-            saves_reservoir.patch_id_from_save(s)
-            for s in saves
-        ]
+    patch_ids = list(patch_id_to_count.keys())
+    chosen_patch = patch_ids[chosen_patch_index]
 
-        return sample, zip(patch_id_list, weights)
+    # Pick reservoir by exponential weighting.
+    saves_list = patch_id_to_saves[chosen_patch]
+    save_counts = np.asarray([
+        saves_reservoir._reservoir_count_since_refresh[saves_reservoir.reservoir_id_from_save(s)]
+        for s in saves_list
+    ])
 
-    # TODO(millman): NOT TESTED
-    # Weight across x patch hyperbolically.
-    # Weight across y patch exponentially (Boltzmann).
-    if False:
-        # Collect into xy buckets.
-        xy_to_patches = {}
-        for s in saves:
-            patch_id = saves_reservoir.patch_id_from_save(s)
-            xy_to_patches.setdefault(patch_id.patch_x, {}).setdefault(patch_id.patch_y, []).append((s, patch_id))
+    beta = 1.0
+    save_weights = np.exp(beta * -save_counts)
+    save_weights /= save_weights.sum()
 
-        rng = np.random.default_rng()
+    # Pick reservoir.
+    save_indicies = np.arange(len(save_counts))
+    chosen_save_index = np.random.choice(save_indicies, p=save_weights)
+    chosen_save = saves_list[chosen_save_index]
 
-        # Hyperbolic weighting for x.  Normalize by number of items in x dimension.
-        x_list = list(xy_to_patches.keys())
-        x_weights = _weight_hyperbolic(len(x_list))
-        x_counts = np.fromiter((len(ys) for ys in xy_to_patches.values()), dtype=np.int64)
-        x_weights /= x_counts
-        x_probs = x_weights / x_weights.sum()
+    sample = chosen_save
 
-        # Pick an x.
-        x_id = rng.choice(x_list, p=x_probs)
-
-        y_to_patches = xy_to_patches[x_id]
-
-        # Exponential weighting for y.
-        y_list = list(y_to_patches.keys())
-
-        beta = 1.0
-        y_counts = np.fromiter((count for _s, count in y_list), dtype=np.int64)
-        y_weights = np.exp(beta * -y_counts)
-        y_probs = y_weights / y_weights.sum()
-
-        # Pick a y.
-        y_id = rng.choice(y_list, p=y_probs)
-
-        sample, sample_patch_id = y_to_patches[y_id]
-
-    # Weight across x patch hyperbolically.
-    # Weight across y patch exponentially (Boltzmann).
-    if False:
-        reservoir_id_list = [
-            saves_reservoir.reservoir_id_from_save(s)
-            for s in saves
-        ]
-
-        patch_id_list = [
-            saves_reservoir.patch_id_from_save(s)
-            for s in saves
-        ]
-
-        patch_id_to_reservoir_ids = {}
-        for i,(p_id, r_id) in enumerate(zip(patch_id_list, reservoir_id_list)):
-            patch_id_to_reservoir_ids.setdefault(p_id, []).append((r_id, i))
-
-        # Adjust any end-of-level discontinuous values for display.
-
-        # Build a dense grid of the max patch values.
-        # Adjust any end-of-level discontinuous values.
-        max_px = 0
-        max_py = 0
-        for p in patch_id_list:
-            if p.patch_x <= _MAX_PATCHES_X:
-                max_px = max(max_px, p.patch_x)
-                max_py = max(max_py, p.patch_y)
-            else:
-                if False:
-                    # Determine the section the patch is in.
-
-                    # Create an offset for the given section.
-
-                    # Adjust to that section.
-
-                    # The section here is the 255-width pixel section that the level is divided into.
-                    # Also called "screen" in the memory map.
-                    x = p.patch_x * PATCH_SIZE
-
-                    section_x = (x // 256) * 256
-                    section_patch_x = section_x // PATCH_SIZE
-
-                    offset_x = x - section_x
-                    offset_patch_x = offset_x // PATCH_SIZE
-
-                    # Determine how many full-screen offsets we need from the edge of the histogram.
-                    if section_patch_x not in special_section_offsets:
-                        special_section_offsets[section_patch_x] = next_special_section_id[0]
-                        next_special_section_id[0] += 1
-
-                    section_id = special_section_offsets[section_patch_x]
-                    patches_in_section = 256 // PATCH_SIZE
-
-                    # Calculate the starting patch of the section.
-                    section_c = hc - (1 + section_id) * patches_in_section
-
-                    # Calculate how much offset we need from the start of the section.
-                    # Rewrite the x and y position, for display into this after-level section.
-                    c = section_c + offset_patch_x
-
-
-                    # TODO(millman): IMPLEMENT OFFSETS CORRECTLY
-                    # raise AssertionError("IMPLEMENT")
-                    pass
-        max_px += 1
-        max_py += 1
-
-        count_dim_x = np.zeros(max_px)
-        count_dim_y = np.zeros(max_py)
-        count_grid = np.zeros((max_py, max_px))
-        # weight_dim_y = np.zeros(max_py)
-        weight_grid = np.zeros((max_py, max_px))
-
-        # Populate the grid with counts.
-        for p, r in zip(patch_id_list, reservoir_id_list):
-            if p.patch_x >= _MAX_PATCHES_X:
-                # TODO(millman): implement
-                continue
-
-            count_in_patch = saves_reservoir._reservoir_count_since_refresh[r]
-
-            count_dim_x[p.patch_x] += 1
-            count_dim_y[p.patch_y] += 1
-
-            count_grid[p.patch_y, p.patch_x] += 1
-
-            # weight_dim_y[p.patch_y] += count_in_patch
-            weight_grid[p.patch_y, p.patch_x] += count_in_patch
-
-        # Normalize x and y dimension by multiplicity (count of non-zero values).
-
-        # Avoid division by zero.
-        x_counts_safe = np.where(count_dim_x == 0, 1, count_dim_x)
-        y_counts_safe = np.where(count_dim_y == 0, 1, count_dim_y)
-
-        # Broadcast and normalize by counts.
-        weight_grid_norm = weight_grid / (x_counts_safe[None, :] * y_counts_safe[:, None])
-
-        rng = np.random.default_rng()
-
-        # Hyperbolic weighting for x.  Normalize by number of items in x dimension.
-        # We want the larger x values to be preferred.
-        x_weights = _weight_hyperbolic(max_px)
-
-        # Exponential weighting for y.  We want the least visited y values to be preferred.
-        beta = 1.0
-        y_weights_grid = np.exp(beta * -count_grid)
-        # print(f"count_grid SHAPE: {count_grid.shape} {y_weights_grid.shape=}")
-
-        # Weights are independent, so can be combined.
-        # print(f"WEIGHT GRID NORM SHAPE: {weight_grid_norm.shape} {x_weights[None,:].shape=} {y_weights_grid[:, None].shape=}")
-        weights_grid_result = weight_grid_norm * x_weights[None, :] * y_weights_grid
-        # print(f"WEIGHT RESULT SHAPE: {weights_grid_result.shape}")
-
-        # Select a random r,c value out of the grid.
-
-        # Flatten the grid to 1D.
-        flat_weights = weights_grid_result.ravel()
-
-        # Normalize weights to sum to 1.
-        probs = flat_weights / flat_weights.sum()
-
-        # Select a single random index based on the weights.
-        chosen_flat_idx = np.random.choice(flat_weights.size, p=probs)
-
-        # Convert back to 2D indices.
-        # print(f"CHOSEN FLAT INDEX: {chosen_flat_idx} weight_grid_result={weights_grid_result.shape}")
-        chosen_y, chosen_x = np.unravel_index(chosen_flat_idx, weights_grid_result.shape)
-
-        # Reconstruct the patch_id to find all saves in the patch.
-        selected_patch_id = PatchId(chosen_x, chosen_y)
-        reservoir_and_i_pairs = patch_id_to_reservoir_ids[selected_patch_id]
-
-        # Choose one of the reservoir ids, uniform sampling.
-        selected_reservoir_id, selected_i = random.choice(reservoir_and_i_pairs)
-
-        sample = saves[selected_i]
-
-        return sample, weights_grid_result
-
-    return sample, None
+    return sample, zip(patch_ids, weights)
 
 
 def _flip_buttons(controller_presses: NdArrayUint8, flip_prob: float, ignore_button_mask: NdArrayUint8) -> NdArrayUint8:
@@ -700,88 +375,6 @@ def _optimal_patch_layout(screen_width, screen_height, n_patches):
                 best_rows = n_rows
 
     return (best_rows, best_cols, max_patch_size)
-
-
-def _get_min_speed() -> int:
-    # If time left is too short, this creates a bad feedback loop because we can keep
-    # dying due to timer.  That would encourage the agent to finish quick, but it may not
-    # be possible to actually finish.
-    #
-    # We use some domain-specific knowledge here that all levels are about 3000-4000 units.
-    # If we assume that we can clear 4000 units in 400 timer ticks, then that means we need
-    # about 10 units/tick.  If we're too far behind this ratio, avoid saving based on time.
-    #
-    # For example, level 1-1 starts with 401 ticks (approx seconds) and is 3266 position
-    # units long.  The minimum rate at which we can cover ground is 3266 units in 401 ticks,
-    # or 3266/401 (8.1).  If we're under this ratio, we won't be able to finish the level.
-    #
-    # To get the ratio of our advancement, we actually want the number of ticks used, not the
-    # number of ticks left.  We assume that all levels have 401 ticks total.
-    #
-    # Since units/tick is distance/time, that's also "speed".
-    #
-    # Here are some sample numbers:
-    #   3266 units / 401 ticks used ->  8.1 units/tick (min)
-    #   3266 units / 200 ticks used -> 16.3 units/tick (twice normal rate, good)
-    #    100 units /  20 ticks used ->  5.0 units/tick (bad, too slow)
-    #    100 units / 100 ticks used ->  1.0 units/tick (bad, too slow)
-    #
-    # Level 1-3 is 3100 units, 300 ticks available ->  10.1 units/tick (min)
-    #
-    # Level 4-4 (and probably 8-4) are discontinuous.
-    # There is a jump from x=200 to x=665535 (max value) at some point.  If the x has
-    # changed by more than some large amount (say 100 units), then it means the distance_per_tick
-    # metric is invalid.  Instead of looking at pure x value, we need to measure the accumulated x
-    # position.
-    #
-    # Here are sample numbers when using distance, comparing with ticks remaining vs ticks used:
-    #   3000 distance remaining / 400 ticks remaining ->  7.5 units/tick
-    #   3000 distance remaining / 300 ticks remaining -> 10.0 units/tick
-    #   3000 distance remaining / 200 ticks remaining -> 15.0 units/tick
-    #   3000 distance remaining / 100 ticks remaining -> 30.0 units/tick
-    #
-    #   3000 distance remaining /   0 ticks used -> +inf units/tick
-    #   3000 distance remaining / 100 ticks used -> 30.0 units/tick
-    #   3000 distance remaining / 300 ticks used -> 10.0 units/tick
-    #   3000 distance remaining / 400 ticks used ->  7.5 units/tick
-    #
-    # A fast world might be 3000 distance in 300 ticks.  If we spend half the time waiting around, then
-    # the remaining time we need finish in half the ticks:
-    #   3000 distance remaining / 300 ticks used -> 10.0 units/ticks (nominal)
-    #   3000 distance remaining / 150 ticks used -> 15.0 units/ticks (required)
-    #
-    #   10 distance remaining / 300 ticks used -> 0.03 units/ticks (required)
-    #
-    # Another way to think about all of this:
-    #   * How much distance is left to cover?
-    #   * How much time do we have left?
-    #   * Distance per time is: speed
-    #   * What's mario's max speed?
-    #   * If our cumulative speed is too low, abort.
-    #
-    # World 8-1 is 6400 pixels long, and only 300 seconds
-
-    # Use a ratio of <1.0, because we want to be able to slow down and speed up within a level.
-    min_speed = 6400 / 300 * 1.0
-
-    return min_speed
-
-
-def _get_min_patches_per_tick() -> int:
-    # We want to ensure Mario is finding new states at a reasonable rate, otherwise it means that we're
-    # going back over too much ground we've seen before.
-    #
-    # If each patch is (say) 20 units, and we want mario to find a new one every
-    #
-    # A level is about 3000 pixels
-    # A level is about 3000/20 patches = 150 patches
-    # 150 patches in 300 ticks is 0.5 patches/tick
-    # That doesn't account for vertical positions too, which will yield extra patches.
-    # If Mario jumps, that will cover about 3 patches.
-
-    min_patches_per_tick = 3000 / PATCH_SIZE / 300 * 2.5
-
-    return min_patches_per_tick
 
 
 # Histogram visualization
@@ -951,18 +544,10 @@ def _print_info(
     ticks_left: int,
     ticks_used: int,
     saves: PatchReservoir,
-    visited_patches: set[Any],
-    visited_patches_x: set[Any],
-    distance_x: int,
-    min_speed: float,
     step: int,
     steps_since_load: int,
 ):
     steps_per_sec = step / dt
-
-    # speed = distance_x / ticks_used
-    # patches_per_tick = len(visited_patches) / ticks_used
-    # patches_x_per_tick = len(visited_patches_x) / ticks_used
 
     # screen_x = ram[0x006D]
     # level_screen_x = ram[0x071A]
@@ -974,13 +559,7 @@ def _print_info(
         f"x={x} y={y} ticks_left={ticks_left} "
         f"ticks_used={ticks_used} "
         f"states={len(saves)} "
-        # f"visited={len(visited_patches)} "
-        # f"visited_x={len(visited_patches_x)} "
         f"steps/sec={steps_per_sec:.4f} "
-        # f"speed={speed:.2f} "
-        # f"(required={min_speed:.2f}) "
-        # f"patches/tick={patches_per_tick:.2f} "
-        # f"patches_x/tick={patches_x_per_tick:.2f} "
         f"steps_since_load={steps_since_load}")
 
 
@@ -1045,13 +624,8 @@ def main():
     last_print_time = time.time()
     last_vis_time = time.time()
 
-    min_speed = _get_min_speed()
-    min_patches_per_tick = _get_min_patches_per_tick()
-
     # Per-trajectory state.  Resets after every death/level.
     action_history = []
-    visited_patches = set()
-    visited_patches_x = set()
     controller = _to_controller_presses([])
 
     # Start searching the Mario game tree.
@@ -1068,7 +642,6 @@ def main():
     ticks_left = -1
 
     level_ticks = -1
-    distance_x = 0
 
     patch_id = PatchId(x // PATCH_SIZE, y // PATCH_SIZE)
     prev_patch_id = patch_id
@@ -1089,7 +662,7 @@ def main():
         prev_lives = lives
 
         # Select an action, save in action history.
-        controller = _flip_buttons(controller, flip_prob=0.025, ignore_button_mask=_MASK_START_AND_SELECT)
+        controller = _flip_buttons(controller, flip_prob=0.05, ignore_button_mask=_MASK_START_AND_SELECT)
 
         action_history.append(controller)
 
@@ -1109,9 +682,6 @@ def main():
         # Calculate derived states.
         ticks_used = max(1, level_ticks - ticks_left)
 
-        speed = distance_x / ticks_used
-        patches_per_tick = len(visited_patches) / ticks_used
-
         # If we get teleported, or if the level boundary is discontinuous, the change in x position isn't meaningful.
         if abs(x - prev_x) > 50:
             if level != prev_level:
@@ -1122,8 +692,6 @@ def main():
                 pass
             else:
                 print(f"Discountinuous x position: {prev_x} -> {x}")
-        else:
-            distance_x += x - prev_x
 
         if False: # x > 65000:
             # 0x006D  Current screen (in which the player is currently in, increase or decrease depending on player's position)
@@ -1138,11 +706,11 @@ def main():
         # Mark current patch as visted.
         reservoir_id = saves.reservoir_id_from_state(world=world, level=level, patch_id=patch_id, prev_patch_id=prev_patch_id)
         if reservoir_id in saves._reservoir_refreshed:
-            saves._reservoir_refreshed.remove(reservoir_id)
+            del saves._reservoir_refreshed[reservoir_id]
 
         # TODO(millman): something is broken with the termination flag?
         if lives < prev_lives and not termination:
-            print(f"Lost a life: x={x} ticks_left={ticks_left} distance={distance_x}")
+            print(f"Lost a life: x={x} ticks_left={ticks_left}")
             raise AssertionError("Missing termination flag for lost life")
 
         # If we died, reload from a game state based on heuristic.
@@ -1182,8 +750,6 @@ def main():
             # We flip buttons here with much higher probability than during a trajectory.
             controller = _flip_buttons(controller, flip_prob=0.3, ignore_button_mask=_MASK_START_AND_SELECT)
 
-            visited_patches = save_info.visited_patches.copy()
-            visited_patches_x = save_info.visited_patches_x.copy()
             action_history = save_info.action_history.copy()
 
             # Read current state.
@@ -1209,10 +775,6 @@ def main():
 
             # Update derived state.
             ticks_used = max(1, level_ticks - ticks_left)
-            distance_x = save_info.distance_x
-
-            speed = distance_x / ticks_used
-            patches_per_tick = len(visited_patches) / ticks_used
 
             if True:
                 saves_list = saves.values()
@@ -1236,7 +798,7 @@ def main():
 
         # Stop after some fixed number of steps.  This will force the sampling logic to run more often,
         # which means we won't waste as much time running through old states.
-        elif steps_since_load >= PATCH_SIZE * 3:
+        elif steps_since_load >= 250:
             print(f"Ending trajectory, max steps for trajectory: {steps_since_load}: x={x} ticks_left={ticks_left}")
             force_terminate = True
 
@@ -1254,17 +816,13 @@ def main():
             if world != prev_world or level != prev_level:
                 # Print before-level-end info.
                 if True:
-                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, visited_patches=visited_patches, visited_patches_x=visited_patches_x, distance_x=distance_x, min_speed=min_speed, step=step, steps_since_load=steps_since_load)
+                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load)
 
                 # Set number of ticks in level to the current ticks.
                 level_ticks = get_time_left(ram)
 
                 # Clear state.
                 action_history = []
-                visited_patches = set()
-                visited_patches_x = set()
-
-                distance_x = 0
 
                 print(f"Starting level: {_str_level(world, level)}")
 
@@ -1273,7 +831,7 @@ def main():
 
                 # Print after-level-start info.
                 if True:
-                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, visited_patches=visited_patches, visited_patches_x=visited_patches_x, distance_x=distance_x, min_speed=min_speed, step=step, steps_since_load=steps_since_load)
+                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load)
 
                 assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
 
@@ -1285,30 +843,12 @@ def main():
                     level=level,
                     world=world,
                     level_ticks=level_ticks,
-                    distance_x=distance_x,
                     ticks_left=ticks_left,
                     save_state=nes.save(),
-                    visited_patches=visited_patches.copy(),
-                    visited_patches_x=visited_patches_x.copy(),
                     action_history=action_history.copy(),
                     prev_patch_id=prev_patch_id,
                 ))
                 next_save_id += 1
-
-            # If time left is too short, this creates a bad feedback loop because we can keep
-            # dying due to timer.  That would encourage the agent to finish quick, but it may not
-            # be possible to actually finish.
-            #
-            # Wait until we've used some ticks, so that the speed is meaningful.
-            if False:  # ticks_used > 20 and speed < min_speed:
-                print(f"Ending trajectory, traversal is too slow: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
-                force_terminate = True
-
-            # We want to ensure Mario is finding new states at a reasonable rate, otherwise it means that we're
-            # going back over too much ground we've seen before.
-            elif False:  # ticks_used > 20 and patches_per_tick < min_patches_per_tick:
-                print(f"Ending trajectory, patch discovery rate is too slow: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
-                force_terminate = True
 
             elif patch_id != prev_patch_id:
                 valid_lives = lives > 1 and lives < 100
@@ -1318,7 +858,7 @@ def main():
                 if not valid_x:
                     # TODO(millman): how did we get into a weird x state?  Happens on 4-4.
                     print(f"RAM values: ram[0x006D]={ram[0x006D]=} * 256 + ram[0x0086]={ram[0x0086]=}")
-                    print(f"Something is wrong with the x position, don't save this state: level={_str_level(world, level)} x={x} y={y} lives={lives} ticks-left={ticks_left} states={len(saves)} visited={len(visited_patches)}")
+                    print(f"Something is wrong with the x position, don't save this state: level={_str_level(world, level)} x={x} y={y} lives={lives} ticks-left={ticks_left} states={len(saves)} actions={len(action_history)}")
                     raise AssertionError("STOP")
 
                 if not valid_lives:
@@ -1342,7 +882,7 @@ def main():
 
                     # Stop this trajectory if we've already arrived at this state, but with more actions than other trajectories.
                     if len(action_history) >= max_action_history:
-                        print(f"Ending trajectory, revisited state: actions {len(action_history)} > {len(max_item.action_history)}: x={x} ticks_left={ticks_left} distance={distance_x} speed={speed:.2f} patches/tick={patches_per_tick:.2f}")
+                        print(f"Ending trajectory, revisited state: actions {len(action_history)} > {len(max_item.action_history)}: x={x} ticks_left={ticks_left}")
                         force_terminate = True
 
                 else:
@@ -1353,19 +893,12 @@ def main():
                         level=level,
                         world=world,
                         level_ticks=level_ticks,
-                        distance_x=distance_x,
                         ticks_left=ticks_left,
                         save_state=nes.save(),
-                        visited_patches=visited_patches.copy(),
-                        visited_patches_x=visited_patches_x.copy(),
                         action_history=action_history.copy(),
                         prev_patch_id=prev_patch_id,
                     ))
                     next_save_id += 1
-                    visited_patches.add(patch_id)
-
-                    patch_x_id = (world, level, x // PATCH_SIZE)
-                    visited_patches_x.add(patch_x_id)
 
                 prev_patch_id = patch_id
 
@@ -1379,7 +912,7 @@ def main():
         #   * Novel states found (across all trajectories)
         #   * Novel states/sec
         if args.print_freq_sec > 0 and now - last_print_time > args.print_freq_sec:
-            _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, visited_patches=visited_patches, visited_patches_x=visited_patches_x, distance_x=distance_x, min_speed=min_speed, step=step, steps_since_load=steps_since_load)
+            _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load)
             last_print_time = now
 
         # Visualize the distribution of save states.
@@ -1416,67 +949,16 @@ def main():
             screen.blit_image(img_rgb_240, screen_index=3)
 
             # Histogram of sampling weight.
-            if False:
-                reservoir_id_list = saves._reservoir_count_since_refresh.keys()
-                counts = np.fromiter(saves._reservoir_count_since_refresh.values(), dtype=np.int64)
+            _selected, patch_id_and_weight_pairs = _choose_save(saves)
 
-                # Boltzmann-exploration weighting.
-                beta = 1.0
-                weights = beta * np.exp(-counts)
-                weights /= weights.sum()
-
-                patch_id_to_count = Counter()
-                patch_id_to_weight = Counter()
-                for i, reservoir_id in enumerate(reservoir_id_list):
-                    p_id = PatchId(reservoir_id.patch_x, reservoir_id.patch_y)
-                    patch_id_to_weight[p_id] += weights[i]
-                    patch_id_to_count[p_id] += 1
-
-                # Normalize weight by the number of items in the patch.
-                for p_id, count in patch_id_to_count.items():
-                    patch_id_to_weight[p_id] /= count
-
-                patch_id_and_weight_pairs = patch_id_to_weight.items()
-
-                img_rgb_240 = _build_patch_histogram_rgb(
-                    patch_id_and_weight_pairs,
-                    current_patch=patch_id,
-                    hist_rows=_HIST_ROWS,
-                    hist_cols=_HIST_COLS,
-                    pixel_size=_HIST_PIXEL_SIZE,
-                )
-                screen.blit_image(img_rgb_240, screen_index=2)
-
-            if True:
-                _selected, patch_id_and_weight_pairs = _choose_save(saves)
-
-                img_rgb_240 = _build_patch_histogram_rgb(
-                    patch_id_and_weight_pairs,
-                    current_patch=patch_id,
-                    hist_rows=_HIST_ROWS,
-                    hist_cols=_HIST_COLS,
-                    pixel_size=_HIST_PIXEL_SIZE,
-                )
-                screen.blit_image(img_rgb_240, screen_index=2)
-
-            if False:
-                _selected, sample_weights_grid = _choose_save(saves)
-
-                # Convert grid into a list for the histogram.
-                patch_id_and_weight_pairs = []
-                for r, rows in enumerate(sample_weights_grid):
-                    for c, weight in enumerate(rows):
-                        p_id = PatchId(c, r)
-                        patch_id_and_weight_pairs.append((p_id, weight))
-
-                img_rgb_240 = _build_patch_histogram_rgb(
-                    patch_id_and_weight_pairs,
-                    current_patch=patch_id,
-                    hist_rows=_HIST_ROWS,
-                    hist_cols=_HIST_COLS,
-                    pixel_size=_HIST_PIXEL_SIZE,
-                )
-                screen.blit_image(img_rgb_240, screen_index=2)
+            img_rgb_240 = _build_patch_histogram_rgb(
+                patch_id_and_weight_pairs,
+                current_patch=patch_id,
+                hist_rows=_HIST_ROWS,
+                hist_cols=_HIST_COLS,
+                pixel_size=_HIST_PIXEL_SIZE,
+            )
+            screen.blit_image(img_rgb_240, screen_index=2)
 
             # Update display.
             screen.show()
