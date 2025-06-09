@@ -10,7 +10,6 @@ from typing import Any, Literal
 
 import gymnasium as gym
 import numpy as np
-import torch
 
 import tyro
 
@@ -122,10 +121,10 @@ class Args:
     reset_to_save_state: bool = False
     headless: bool = False
     print_freq_sec: float = 1.0
-    start_world: int = 8
+    start_world: int = 7
     start_level: int = 4
-    max_trajectory_steps: int = 200
-    patch_size: int = 10
+    max_trajectory_steps: int = 32 * 4
+    patch_size: int = 32
 
     # Visualization
     vis_freq_sec: float = 0.15
@@ -362,21 +361,27 @@ def _choose_save(saves_reservoir: PatchReservoir, rng: Any) -> SaveInfo:
     # Collect reservoirs into patches.
     patch_id_to_count = saves_reservoir._patch_count_since_refresh
 
+    patch_id_list = list(patch_id_to_count.keys())
+
     # Pick patch by Boltzmann-explortation exponential weighting of count.
     patch_counts = np.fromiter(patch_id_to_count.values(), dtype=np.float64)
+
     # Include weighting based on x position.
-    order_counts = np.sqrt(np.arange(len(patch_id_to_count)))
+    order_counts = np.fromiter((p.patch_x for p in patch_id_list), dtype=np.float64)
 
     combined_counts = -patch_counts + order_counts
+
+    # Subtract max for numerical stability.
     combined_counts -= combined_counts.max()
 
+    patch_log_weights = combined_counts
+
     beta = 1.0
-    patch_weights = np.exp(beta * combined_counts + 1)
+    patch_weights = np.exp(beta * combined_counts)
     patch_weights /= patch_weights.sum()
 
     # Pick patch.
     chosen_patch_index = rng.choice(len(patch_counts), p=patch_weights)
-    patch_id_list = list(patch_id_to_count.keys())
     chosen_patch = patch_id_list[chosen_patch_index]
 
     # Pick reservoir by exponential weighting.
