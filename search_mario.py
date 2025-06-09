@@ -421,7 +421,7 @@ def _optimal_patch_layout(screen_width, screen_height, n_patches):
 
 
 def _build_patch_histogram_rgb(
-    patch_id_and_count_pairs: list[PatchId, int],
+    patch_id_and_weight_pairs: list[PatchId, int],
     current_patch: PatchId,
     patch_size: int,
     max_patch_x: int,
@@ -435,8 +435,8 @@ def _build_patch_histogram_rgb(
     patch_histogram = np.zeros((hr + 1, hc + 1), dtype=np.float64)
 
     if False:
-        patch_id_and_count_pairs = list(patch_id_and_count_pairs)
-        print(f"FIRST patch_id_and_count_pairs: {patch_id_and_count_pairs[0]}")
+        patch_id_and_weight_pairs = list(patch_id_and_weight_pairs)
+        print(f"FIRST patch_id_and_weight_pairs: {patch_id_and_weight_pairs[0]}")
         raise AssertionError("DEBUG")
 
     special_section_offsets = {}
@@ -480,7 +480,7 @@ def _build_patch_histogram_rgb(
         return c
 
 
-    for save_patch_id, count in patch_id_and_count_pairs:
+    for save_patch_id, weight in patch_id_and_weight_pairs:
         patch_x, patch_y = save_patch_id.patch_x, save_patch_id.patch_y
 
         # For display purposes only, if we're at one of the special offscreen locations,
@@ -497,7 +497,7 @@ def _build_patch_histogram_rgb(
             c = _calc_c_for_special_section(save_patch_id, hr=hr, hc=hc)
 
         try:
-            patch_histogram[r][c] = count
+            patch_histogram[r][c] = weight
         except IndexError:
             print(f"PATCH LAYOUT: max_patches_x={max_patch_x} max_patches_y={max_patch_y} pixel_size={pixel_size} hr={hr} hc={hc}")
             print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
@@ -506,9 +506,16 @@ def _build_patch_histogram_rgb(
 
     #print(f"HISTOGRAM min={patch_histogram.min()} max={patch_histogram.max()}")
 
+    w_zero = patch_histogram == 0
+
     # Normalize counts to range (0, 255)
-    grid_f = patch_histogram
+    grid_f = patch_histogram - patch_histogram.min()
     grid_g = (grid_f / grid_f.max() * 255).astype(np.uint8)
+
+    # Reset untouched patches to zero.
+    grid_g[w_zero] = 0
+
+    # Convert to RGB,
     grid_rgb = np.stack([grid_g]*3, axis=-1)
 
     # Mark current patch.
