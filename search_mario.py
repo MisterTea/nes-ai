@@ -904,7 +904,7 @@ def main():
             prev_level = level
             prev_x = x
             prev_lives = lives
-            patch_id = PatchId(x // patch_size, y // patch_size)
+            patch_id = saves.patch_id_from_save(save_info)
             prev_patch_id = save_info.prev_patch_id
 
             level_ticks = save_info.level_ticks
@@ -912,8 +912,17 @@ def main():
             # Update derived state.
             ticks_used = max(1, level_ticks - ticks_left)
 
+            # Mark save as entered.
+            res_id = saves.reservoir_id_from_save(save_info)
+            saves._patch_seen_counts[patch_id] += 1
+            saves._patch_count_since_refresh[patch_id] += 1
+            saves._reservoir_seen_counts[res_id] += 1
+            saves._reservoir_count_since_refresh[res_id] += 1
+
             if True:
-                print(f"Loaded save: save_id={save_info.save_id} level={_str_level(world, level)}, x={x} y={y} lives={lives}")
+                patch_seen = saves._patch_seen_counts[patch_id]
+                res_seen = saves._reservoir_seen_counts[res_id]
+                print(f"Loaded save: save_id={save_info.save_id} level={_str_level(world, level)}, x={x} y={y} lives={lives} saves={len(saves)} patch_seen={patch_seen} res_seen={res_seen}")
 
                 if False:
                     _print_saves_list(saves.values())
