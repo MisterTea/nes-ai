@@ -1091,8 +1091,9 @@ def main():
             screen.blit_image(img_rgb_240, screen_index=3)
 
             # TODO(millman): avoid this?
-            if False:
-                _sample, patch_id_and_weight_pairs = _choose_save_from_history(state_history, saves, rng=rng)
+            if True:
+                # _sample, patch_id_and_weight_pairs = _choose_save_from_history(state_history, saves, rng=rng)
+                _sample, patch_id_and_weight_pairs = _choose_save(saves, rng=rng)
 
             # Histogram of sampling weight.
             img_rgb_240 = _build_patch_histogram_rgb(
