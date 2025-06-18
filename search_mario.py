@@ -376,7 +376,7 @@ def _choose_save(saves_reservoir: PatchReservoir, rng: Any) -> SaveInfo:
     patch_log_weights = combined_counts
 
     beta = 1.0
-    patch_weights = np.exp(beta * combined_counts)
+    patch_weights = np.exp(beta * patch_log_weights)
     patch_weights /= patch_weights.sum()
 
     # Pick patch.
@@ -466,7 +466,7 @@ def _choose_save_from_history(saves: list[SaveInfo], saves_reservoir: PatchReser
 
 
 def _flip_buttons(controller_presses: NdArrayUint8, flip_prob: float, ignore_button_mask: NdArrayUint8) -> NdArrayUint8:
-    flip_mask = np.random.rand(8) < flip_prob   # True where we want to flip
+    flip_mask = np.random.rand(len(controller_presses)) < flip_prob   # True where we want to flip
     flip_mask[ignore_button_mask] = 0
     result = np.where(flip_mask, 1 - controller_presses, controller_presses)
     return result
