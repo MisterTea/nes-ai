@@ -122,8 +122,8 @@ class Args:
     headless: bool = False
     print_freq_sec: float = 1.0
     start_level: tuple[int,int] = (7,4)
-    max_trajectory_steps: int = 32 * 4
-    patch_size: int = 32
+    max_trajectory_steps: int = -1
+    patch_size: int = 20
 
     # Visualization
     vis_freq_sec: float = 0.15
@@ -237,7 +237,7 @@ class PatchReservoir:
 
             # Replace the save that took the longest to reach this patch.
             if True:
-                if False:
+                if True:
                     # Find the save state with the most action steps.  We assume that it's better to
                     # get to a state with fewer action steps.
                     saves_in_reservoir = self._reservoir_to_saves[reservoir_id]
@@ -254,7 +254,7 @@ class PatchReservoir:
 
                     did_kick_new_item = False
 
-                if True:
+                if False:
                     saves_in_reservoir = self._reservoir_to_saves[reservoir_id]
 
                     assert len(saves_in_reservoir) == 1, f"Implement for non-single reservoir"
@@ -317,7 +317,7 @@ class PatchReservoir:
         max_expected_in_patch = 13
         res_ids_in_patch = self._patch_to_reservoir_ids[patch_id]
 
-        if len(res_ids_in_patch) > max_expected_in_patch:
+        if False: # len(res_ids_in_patch) > max_expected_in_patch:
             print(f"Should be no more than {max_expected_in_patch} items per patch, found: {len(res_ids_in_patch)}")
             print(f"  patch_id={patch_id}")
             for i, res_id in enumerate(res_ids_in_patch):
@@ -363,6 +363,8 @@ def _choose_save(saves_reservoir: PatchReservoir, rng: Any) -> SaveInfo:
 
     # Include weighting based on x position.
     order_counts = np.fromiter((p.patch_x for p in patch_id_list), dtype=np.float64)
+    order_counts = np.sqrt(order_counts)
+    # order_counts = np.zeros(len(patch_id_list), dtype=np.float64)
 
     combined_counts = -patch_counts + order_counts
 
@@ -896,7 +898,7 @@ def main():
         prev_lives = lives
 
         # Select an action, save in action history.
-        controller = _flip_buttons(controller, flip_prob=0.05, ignore_button_mask=_MASK_START_AND_SELECT)
+        controller = _flip_buttons(controller, flip_prob=0.03, ignore_button_mask=_MASK_START_AND_SELECT)
 
         action_history.append(controller)
 
@@ -1194,7 +1196,7 @@ def main():
             screen.blit_image(img_rgb_240, screen_index=3)
 
             # TODO(millman): avoid this?
-            if True:
+            if False:
                 # _sample, patch_id_and_weight_pairs = _choose_save_from_history(state_history, saves, rng=rng)
                 _sample, patch_id_and_weight_pairs = _choose_save(saves, rng=rng)
 
