@@ -121,8 +121,7 @@ class Args:
     reset_to_save_state: bool = False
     headless: bool = False
     print_freq_sec: float = 1.0
-    start_world: int = 7
-    start_level: int = 4
+    start_level: tuple[int,int] = (7,4)
     max_trajectory_steps: int = 32 * 4
     patch_size: int = 32
 
@@ -723,7 +722,7 @@ def main():
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, 0, args.capture_video, run_name, args.headless, (args.start_world, args.start_level))],
+        [make_env(args.env_id, 0, args.capture_video, run_name, args.headless, args.start_level)],
         autoreset_mode=gym.vector.AutoresetMode.DISABLED,
     )
 
