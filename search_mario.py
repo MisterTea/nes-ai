@@ -3,8 +3,8 @@
 import os
 import random
 import time
-from collections import Counter, defaultdict
-from dataclasses import dataclass
+from collections import Counter, defaultdict, deque
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
@@ -13,7 +13,7 @@ import numpy as np
 
 import tyro
 
-from PIL import Image
+from PIL import Image, ImageDraw
 from torch.utils.tensorboard import SummaryWriter
 
 from super_mario_env_search import SuperMarioEnv, SCREEN_H, SCREEN_W, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses, get_time_left, life
@@ -55,7 +55,7 @@ class SaveInfo:
     save_state: Any
     action_history: list
     state_history: list
-    prev_patch_id: PatchId
+    patch_history: tuple[PatchId]
 
     def __post_init__(self):
         # Convert value from np.uint8 to int.
@@ -189,11 +189,7 @@ def _weight_hyperbolic(N: int) -> np.array:
 
 @dataclass(frozen=True)
 class ReservoirId:
-    patch_x: int
-    patch_y: int
-    prev_patch_x: int
-    prev_patch_y: int
-
+    patch_history: tuple[PatchId, ...]
 
 class PatchReservoir:
 
@@ -214,7 +210,7 @@ class PatchReservoir:
         return patch_id
 
     def reservoir_id_from_save(self, save: SaveInfo) -> tuple:
-        reservoir_id = ReservoirId(save.x // self.patch_size, save.y // self.patch_size, save.prev_patch_id.patch_x, save.prev_patch_id.patch_y)
+        reservoir_id = ReservoirId(save.patch_history)
         return reservoir_id
 
     def add(self, save: SaveInfo):
@@ -325,7 +321,7 @@ class PatchReservoir:
             print(f"Should be no more than {max_expected_in_patch} items per patch, found: {len(res_ids_in_patch)}")
             print(f"  patch_id={patch_id}")
             for i, res_id in enumerate(res_ids_in_patch):
-                print(f"  [{i}] res_id={res_id.prev_patch_x},{res_id.prev_patch_y} -> {res_id.patch_x}, {res_id.patch_y}")
+                print(f"  [{i}] res_id: {res_id.patch_history}")
 
         # Update count.
         self._patch_seen_counts[patch_id] += 1
@@ -623,6 +619,106 @@ def _build_patch_histogram_rgb(
     return img_rgb_240
 
 
+def _draw_patch_path(
+    img_rgb_240: NdArrayRGB8,
+    patch_history: list[PatchId],
+    patch_size: int,
+    max_patch_x: int,
+    max_patch_y: int,
+    hist_rows: int,
+    hist_cols: int,
+    pixel_size: int,
+) -> NdArrayRGB8:
+    hr, hc = hist_rows, hist_cols
+
+    special_section_offsets = {}
+    next_special_section_id = [0]
+
+    # Sometimes we get a discontinuous jump, like:
+    #   Discountinuous x position: 1013 -> 65526
+    #
+    # Seems to happen when crossing boundaries in discontinuous levels like 4-4.
+    def _calc_c_for_special_section(check_patch_x: PatchId, hr: int, hc: int):
+        # print(f"REWRITING SPECIAL SECTION: patch={check_patch_x.patch_x},{check_patch_x.patch_y} hr={hr} hc={hc}")
+        # TODO(millman): this isn't right, special section is overlapping other things
+
+        # The section here is the 255-width pixel section that the level is divided into.
+        # Also called "screen" in the memory map.
+        x = check_patch_x.patch_x * patch_size
+
+        section_x = (x // 256) * 256
+        section_patch_x = section_x // patch_size
+
+        offset_x = x - section_x
+        offset_patch_x = offset_x // patch_size
+
+        # Determine how many full-screen offsets we need from the edge of the histogram.
+        if section_patch_x not in special_section_offsets:
+            special_section_offsets[section_patch_x] = next_special_section_id[0]
+            next_special_section_id[0] += 1
+
+        section_id = special_section_offsets[section_patch_x]
+        patches_in_section = 256 // patch_size
+
+        # Calculate the starting patch of the section.
+        section_c = hc - (1 + section_id) * patches_in_section
+
+        # Calculate how much offset we need from the start of the section.
+        # Rewrite the x and y position, for display into this after-level section.
+        c = section_c + offset_patch_x
+
+        # print(f"REWRITING SPECIAL SECTION: patch={check_patch_x.patch_x},{check_patch_x.patch_y} hr={hr} hc={hc} -> c={c}")
+
+        return c
+
+    draw = ImageDraw.Draw(img_rgb_240)
+
+    # print(f"PATCH HISTORY TO DRAW: {patch_history}")
+    prev_xy = None
+    prev_special = False
+    for i, p in enumerate(patch_history):
+        patch_x, patch_y = p.patch_x, p.patch_y
+
+        # For display purposes only, if we're at one of the special offscreen locations,
+        # Use an offset, but still show it in the histogram.
+        if patch_x <= max_patch_x:
+            # What row of the level we're in.  Wrap around if past the end of the screen.
+            wrap_i = patch_x // hc
+
+            r = wrap_i * (max_patch_y + _SPACE_R) + patch_y
+            c = patch_x % hc
+
+            is_special = False
+        else:
+            # Special case, we're past the end of the level for some special section.
+            r = hr - max_patch_y + patch_y
+            c = _calc_c_for_special_section(p, hr=hr, hc=hc)
+
+            is_special = True
+
+        # Convert r,c patch to center of pixel for patch.
+        #  pixel size: 4
+        #  hr = 60
+        #  screen_h = 224
+        #
+        #  hr * pixel_size = 224
+        #  hc * pixel_size = 240
+        scale_x = SCREEN_W / ((hc + 1) * pixel_size)
+        scale_y = SCREEN_H / ((hr + 1) * pixel_size)
+        y = (r + 0.5) * pixel_size * scale_y
+        x = (c + 0.5) * pixel_size * scale_x
+
+        if prev_xy is None or prev_special != is_special:
+            draw.line([(x,y), (x,y)], fill=(0, 255, 0), width=1)
+        else:
+            draw.line([prev_xy, (x,y)], fill=(0, 255, 0), width=1)
+
+        prev_xy = x, y
+        prev_special = is_special
+
+    return img_rgb_240
+
+
 def _validate_save_state(save_info: SaveInfo, ram: NdArrayUint8):
     world = get_world(ram)
     level = get_level(ram)
@@ -779,8 +875,8 @@ def main():
 
     level_ticks = -1
 
-    patch_id = PatchId(x // patch_size, y // patch_size)
-    prev_patch_id = patch_id
+    patch_history_size = 10
+    patch_history = deque(maxlen=patch_history_size)
 
     saves = PatchReservoir(patch_size=patch_size)
     force_terminate = False
@@ -903,8 +999,12 @@ def main():
             prev_level = level
             prev_x = x
             prev_lives = lives
+            patch_history = deque(save_info.patch_history, maxlen=patch_history_size)
             patch_id = saves.patch_id_from_save(save_info)
-            prev_patch_id = save_info.prev_patch_id
+
+            assert patch_id == patch_history[-1], f"Mismatched patch history: history[-1]:{patch_history[-1]} != patch_id:{patch_id}"
+
+            assert len(patch_history) <= patch_history_size, f"Patch history is too large?: size={len(patch_history)}"
 
             level_ticks = save_info.level_ticks
 
@@ -958,6 +1058,10 @@ def main():
                 action_history = []
                 state_history = []
 
+                patch_history = deque(maxlen=patch_history_size)
+                patch_history.append(patch_id)
+                assert len(patch_history) <= patch_history_size, f"Patch history is too large?: size={len(patch_history)}"
+
                 print(f"Starting level: {_str_level(world, level)}")
 
                 # Update derived state.
@@ -981,11 +1085,11 @@ def main():
                     save_state=nes.save(),
                     action_history=action_history.copy(),
                     state_history=state_history.copy(),
-                    prev_patch_id=prev_patch_id,
+                    patch_history=tuple(patch_history),
                 ))
                 next_save_id += 1
 
-            elif patch_id != prev_patch_id:
+            elif patch_id != patch_history[-1]:
                 valid_lives = lives > 1 and lives < 100
                 valid_x = True  # x < 65500
 
@@ -1021,6 +1125,8 @@ def main():
                         force_terminate = True
 
                 else:
+                    patch_history.append(patch_id)
+
                     save_info = SaveInfo(
                         save_id=next_save_id,
                         x=x,
@@ -1032,17 +1138,15 @@ def main():
                         save_state=nes.save(),
                         action_history=action_history.copy(),
                         state_history=state_history.copy(),
-                        prev_patch_id=prev_patch_id,
+                        patch_history=tuple(patch_history),
                     )
                     saves.add(save_info)
                     next_save_id += 1
 
                     state_history.append(save_info)
 
-                prev_patch_id = patch_id
-
             else:
-                assert patch_id == prev_patch_id, f"Missed case of transitioning patches: {patch_id} != {prev_patch_id}"
+                assert patch_id == patch_history[-1], f"Missed case of transitioning patches: {patch_id} != {patch_history[-1]}"
 
         # Print stats every second:
         #   * Current position: (x, y)
@@ -1105,6 +1209,17 @@ def main():
                 hist_cols=_HIST_COLS,
                 pixel_size=_HIST_PIXEL_SIZE,
             )
+            _draw_patch_path(
+                img_rgb_240,
+                patch_history,
+                patch_size=patch_size,
+                max_patch_x=_MAX_PATCHES_X,
+                max_patch_y=_MAX_PATCHES_Y,
+                hist_rows=_HIST_ROWS,
+                hist_cols=_HIST_COLS,
+                pixel_size=_HIST_PIXEL_SIZE,
+            )
+
             screen.blit_image(img_rgb_240, screen_index=2)
 
             # Update display.
