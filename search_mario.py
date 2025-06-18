@@ -56,6 +56,7 @@ class SaveInfo:
     action_history: list
     state_history: list
     patch_history: tuple[PatchId]
+    visited_patches_x: set[PatchId]
 
     def __post_init__(self):
         # Convert value from np.uint8 to int.
@@ -124,7 +125,8 @@ class Args:
     start_level: tuple[int,int] = (7,4)
     max_trajectory_steps: int = -1
     patch_size: int = 32
-    patch_history_length: int = 10
+    patch_history_length: int = 4
+    max_trajectory_patches_x: int = 3
     flip_prob: float = 0.03
 
     # Visualization
@@ -384,6 +386,14 @@ def _choose_save(saves_reservoir: PatchReservoir, rng: Any) -> SaveInfo:
     # Pick patch.
     chosen_patch_index = rng.choice(len(patch_counts), p=patch_weights)
     chosen_patch = patch_id_list[chosen_patch_index]
+
+    if False:
+        for i, w in enumerate(patch_weights):
+            if i == chosen_patch_index:
+                s = "->"
+            else:
+                s = "  "
+            print(f" {s}[{i}]: {w:.2f}")
 
     # Pick reservoir by exponential weighting.
     reservoir_id_list = list(saves_reservoir._patch_to_reservoir_ids[chosen_patch])
@@ -756,6 +766,7 @@ def _print_info(
     saves: PatchReservoir,
     step: int,
     steps_since_load: int,
+    patches_x_since_load: int,
 ):
     steps_per_sec = step / dt
 
@@ -770,7 +781,9 @@ def _print_info(
         f"ticks_used={ticks_used} "
         f"states={len(saves)} "
         f"steps/sec={steps_per_sec:.4f} "
-        f"steps_since_load={steps_since_load}")
+        f"steps_since_load={steps_since_load} "
+        f"patches_x_since_load={patches_x_since_load}"
+    )
 
 
 _MAX_LEVEL_DIST = 6400
@@ -883,10 +896,13 @@ def main():
 
     patch_history_length = args.patch_history_length
     patch_history = deque(maxlen=patch_history_length)
+    visited_patches_x = set()
 
     saves = PatchReservoir(patch_size=patch_size)
     force_terminate = False
     steps_since_load = 0
+    patches_x_since_load = 0
+    new_patches_x_since_load = 0
 
     patch_id_and_weight_pairs = []
 
@@ -989,6 +1005,7 @@ def main():
 
             action_history = save_info.action_history.copy()
             state_history = save_info.state_history.copy()
+            visited_patches_x = save_info.visited_patches_x.copy()
 
             # Read current state.
             world = get_world(ram)
@@ -1034,12 +1051,18 @@ def main():
                     _print_saves_list(saves.values())
 
             steps_since_load = 0
+            patches_x_since_load = 0
+            new_patches_x_since_load = 0
             force_terminate = False
 
         # Stop after some fixed number of steps.  This will force the sampling logic to run more often,
         # which means we won't waste as much time running through old states.
         elif args.max_trajectory_steps > 0 and steps_since_load >= args.max_trajectory_steps:
             print(f"Ending trajectory, max steps for trajectory: {steps_since_load}: x={x} ticks_left={ticks_left}")
+            force_terminate = True
+
+        elif args.max_trajectory_patches_x > 0 and patches_x_since_load >= args.max_trajectory_patches_x:
+            print(f"Ending trajectory, max patches x for trajectory: {patches_x_since_load}: x={x} ticks_left={ticks_left}")
             force_terminate = True
 
         # If we died, skip.
@@ -1056,7 +1079,7 @@ def main():
             if world != prev_world or level != prev_level:
                 # Print before-level-end info.
                 if True:
-                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load)
+                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load, patches_x_since_load=patches_x_since_load)
 
                 # Set number of ticks in level to the current ticks.
                 level_ticks = get_time_left(ram)
@@ -1064,6 +1087,7 @@ def main():
                 # Clear state.
                 action_history = []
                 state_history = []
+                visited_patches_x = set()
 
                 patch_history = deque(maxlen=patch_history_length)
                 patch_history.append(patch_id)
@@ -1076,7 +1100,7 @@ def main():
 
                 # Print after-level-start info.
                 if True:
-                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load)
+                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load, patches_x_since_load=patches_x_since_load)
 
                 assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
 
@@ -1093,6 +1117,7 @@ def main():
                     action_history=action_history.copy(),
                     state_history=state_history.copy(),
                     patch_history=tuple(patch_history),
+                    visited_patches_x=visited_patches_x.copy(),
                 ))
                 next_save_id += 1
 
@@ -1109,8 +1134,16 @@ def main():
 
                 if not valid_lives:
                     # TODO(millman): how did we get to a state where we don't have full lives?
-                    print(f"Something is wrong with the lives, don't save this state: level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} lives={lives} steps_since_load={steps_since_load}")
+                    print(f"Something is wrong with the lives, don't save this state: level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} lives={lives} steps_since_load={steps_since_load} patches_x_since_load={patches_x_since_load}")
                     raise AssertionError("STOP")
+
+                if patch_id.patch_x not in visited_patches_x:
+                    visited_patches_x.add(patch_id.patch_x)
+                    new_patches_x_since_load += 1
+
+                # NOTE: These are any patches since load, not *new* patches load.
+                if patch_id.patch_x != patch_history[-1].patch_x:
+                    patches_x_since_load += 1
 
                 # Can't avoid visiting a state, because if we jump up and down, we'll get back to the same
                 # state we were just on.  TODO(millman): to make this work, need to keep track of frontier?  Otherwise we end up sampling non-sense trajectories?
@@ -1146,6 +1179,7 @@ def main():
                         action_history=action_history.copy(),
                         state_history=state_history.copy(),
                         patch_history=tuple(patch_history),
+                        visited_patches_x=visited_patches_x.copy(),
                     )
                     saves.add(save_info)
                     next_save_id += 1
@@ -1162,7 +1196,7 @@ def main():
         #   * Novel states found (across all trajectories)
         #   * Novel states/sec
         if args.print_freq_sec > 0 and now - last_print_time > args.print_freq_sec:
-            _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load)
+            _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load, patches_x_since_load=patches_x_since_load)
             last_print_time = now
 
         # Visualize the distribution of save states.
