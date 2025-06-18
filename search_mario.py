@@ -125,6 +125,7 @@ class Args:
     max_trajectory_steps: int = -1
     patch_size: int = 32
     patch_history_length: int = 10
+    flip_prob: float = 0.03
 
     # Visualization
     vis_freq_sec: float = 0.15
@@ -901,7 +902,7 @@ def main():
         prev_lives = lives
 
         # Select an action, save in action history.
-        controller = _flip_buttons(controller, flip_prob=0.03, ignore_button_mask=_MASK_START_AND_SELECT)
+        controller = _flip_buttons(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
 
         action_history.append(controller)
 
@@ -980,10 +981,11 @@ def main():
             ram = nes.ram()
             controller[:] = nes.controller1.is_pressed[:]
 
-            # Flip the buttons with some probability.  If we're loading a state, we don't want to
-            # be required to use the same action state that was tried before.  To get faster coverage
-            # We flip buttons here with much higher probability than during a trajectory.
-            controller = _flip_buttons(controller, flip_prob=0.3, ignore_button_mask=_MASK_START_AND_SELECT)
+            if False:
+                # Flip the buttons with some probability.  If we're loading a state, we don't want to
+                # be required to use the same action state that was tried before.  To get faster coverage
+                # We flip buttons here with much higher probability than during a trajectory.
+                controller = _flip_buttons(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
 
             action_history = save_info.action_history.copy()
             state_history = save_info.state_history.copy()
