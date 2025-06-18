@@ -123,7 +123,8 @@ class Args:
     print_freq_sec: float = 1.0
     start_level: tuple[int,int] = (7,4)
     max_trajectory_steps: int = -1
-    patch_size: int = 20
+    patch_size: int = 32
+    patch_history_length: int = 10
 
     # Visualization
     vis_freq_sec: float = 0.15
@@ -187,9 +188,11 @@ def _weight_hyperbolic(N: int) -> np.array:
 
     return weights
 
+
 @dataclass(frozen=True)
 class ReservoirId:
     patch_history: tuple[PatchId, ...]
+
 
 class PatchReservoir:
 
@@ -877,8 +880,8 @@ def main():
 
     level_ticks = -1
 
-    patch_history_size = 10
-    patch_history = deque(maxlen=patch_history_size)
+    patch_history_length = args.patch_history_length
+    patch_history = deque(maxlen=patch_history_length)
 
     saves = PatchReservoir(patch_size=patch_size)
     force_terminate = False
@@ -1001,12 +1004,12 @@ def main():
             prev_level = level
             prev_x = x
             prev_lives = lives
-            patch_history = deque(save_info.patch_history, maxlen=patch_history_size)
+            patch_history = deque(save_info.patch_history, maxlen=patch_history_length)
             patch_id = saves.patch_id_from_save(save_info)
 
             assert patch_id == patch_history[-1], f"Mismatched patch history: history[-1]:{patch_history[-1]} != patch_id:{patch_id}"
 
-            assert len(patch_history) <= patch_history_size, f"Patch history is too large?: size={len(patch_history)}"
+            assert len(patch_history) <= patch_history_length, f"Patch history is too large?: size={len(patch_history)}"
 
             level_ticks = save_info.level_ticks
 
@@ -1060,9 +1063,9 @@ def main():
                 action_history = []
                 state_history = []
 
-                patch_history = deque(maxlen=patch_history_size)
+                patch_history = deque(maxlen=patch_history_length)
                 patch_history.append(patch_id)
-                assert len(patch_history) <= patch_history_size, f"Patch history is too large?: size={len(patch_history)}"
+                assert len(patch_history) <= patch_history_length, f"Patch history is too large?: size={len(patch_history)}"
 
                 print(f"Starting level: {_str_level(world, level)}")
 
