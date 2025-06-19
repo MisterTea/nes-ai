@@ -57,6 +57,8 @@ class SaveInfo:
     state_history: list
     patch_history: tuple[PatchId]
     visited_patches_x: set[PatchId]
+    controller_state: NdArrayUint8
+    controller_state_from_ram: NdArrayUint8
 
     def __post_init__(self):
         # Convert value from np.uint8 to int.
@@ -64,6 +66,14 @@ class SaveInfo:
         object.__setattr__(self, 'level', int(self.level))
         object.__setattr__(self, 'x', int(self.x))
         object.__setattr__(self, 'y', int(self.y))
+
+        assert (self.controller_state == self.controller_state_from_ram).all(), f"Mismatched controller when saving: {self.controller_state} != {self.controller_state_from_ram}"
+
+        # Convert value from list to np.uint8.
+        object.__setattr__(self, 'controller_state', np.asarray(self.controller_state, dtype=np.uint8))
+        object.__setattr__(self, 'controller_state_from_ram', np.asarray(self.controller_state_from_ram, dtype=np.uint8))
+
+        print(f"[{self.save_id:>3}] controller at save: {self.controller_state}")
 
 
 @dataclass
@@ -920,13 +930,17 @@ def main():
         prev_x = x
         prev_lives = lives
 
-        # Select an action, save in action history.
-        controller = _flip_buttons(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
-
         action_history.append(controller)
+
+        controller_before = controller.copy()
 
         # Execute action.
         _next_obs, reward, termination, truncation, info = envs.step((controller,))
+
+        controller_after = controller.copy()
+
+        assert (controller_before == controller_after).all(), f"Mismatched before and after: {controller_before} != {controller_after}"
+
 
         # Read current state.
         world = get_world(ram)
@@ -974,11 +988,19 @@ def main():
             if world != prev_world or level != prev_level:
                 raise AssertionError("Reached a new world ({prev_world}-{prev_level} -> {world}-{level}), but also terminated?")
 
+            controller_before_reload = controller.copy()
+            controller_ram_before_reload = np.asarray(nes.controller1.is_pressed.copy(), dtype=np.uint8)
+
             # In AutoresetMode.DISABLED, we have to reset ourselves.
             # Reset only if we hit a termination state.  Otherwise, we can just reload.
             if termination:
                 resets_before = first_env.resets
                 envs.reset()
+
+                controller_right_after_reset = controller.copy()
+                controller_ram_right_after_reset = np.asarray(nes.controller1.is_pressed.copy(), dtype=np.uint8)
+
+                # controller[:] = nes.controller1.is_pressed[:]
 
                 # Don't count this reset by us, we're trying to find where other things are calling reset.
                 first_env.resets -= 1
@@ -989,6 +1011,10 @@ def main():
                 if resets_after == resets_before and level != prev_level:
                     raise AssertionError("Failed to reset on level change")
 
+            else:
+                controller_right_after_reset = controller.copy()
+                controller_ram_right_after_reset = np.asarray(nes.controller1.is_pressed.copy(), dtype=np.uint8)
+
             # Start reload process.
 
             # Choose save.
@@ -998,7 +1024,29 @@ def main():
             # Reload and re-initialize.
             nes.load(save_info.save_state)
             ram = nes.ram()
-            controller[:] = nes.controller1.is_pressed[:]
+
+            # Restore controller.  There is some overwrite happening of the controller inside the
+            # environment.  For now, explicitly set the controller when loading.
+            nes.controller1.set_state(save_info.controller_state)
+            controller[:] = save_info.controller_state[:]
+
+            controller_after_reload = controller.copy()
+            controller_ram_after_reload = np.asanyarray(nes.controller1.is_pressed.copy(), dtype=np.uint8)
+
+            if False:  # (controller == save_info.controller_state).any():
+                print(f"LOADING SAVE: {save_info.save_id}")
+                print(f"  [{save_info.save_id}] CONTROLLER                  : {controller} dtype={controller.dtype}")
+                print(f"  [{save_info.save_id}] CONTROLLER           IN SAVE: {save_info.controller_state} dtype={save_info.controller_state.dtype}")
+                print()
+                #print(f"  [{save_info.save_id}]CONTROLLER     BEFORE RELOAD: {controller_before_reload} dtype={controller_before_reload.dtype}")
+                #print(f"  [{save_info.save_id}]CONTROLLER RAM BEFORE RELOAD: {controller_ram_before_reload} dtype={controller_ram_before_reload.dtype}")
+                print(f"  [{save_info.save_id}] CONTROLLER       RIGHT AFTER: {controller_right_after_reset} dtype={controller_right_after_reset.dtype}")
+                print(f"  [{save_info.save_id}] CONTROLLER RAM   RIGHT AFTER: {controller_ram_right_after_reset} dtype={controller_ram_right_after_reset.dtype}")
+                print(f"  [{save_info.save_id}] CONTROLLER     AFTER RELOAD:  {controller_after_reload} dtype={controller_after_reload.dtype}")
+                print(f"  [{save_info.save_id}] CONTROLLER RAM AFTER RELOAD:  {controller_ram_after_reload} dtype={controller_ram_after_reload.dtype}")
+
+            # Ensure loading from ram is the same as loading from the controller state.
+            assert (controller == save_info.controller_state).all(), f"Mismatched controller on load: {controller} != {save_info.controller_state}, from ram: {save_info.controller_state_from_ram}"
 
             if False:
                 # Flip the buttons with some probability.  If we're loading a state, we don't want to
@@ -1175,6 +1223,8 @@ def main():
                     state_history=state_history.copy(),
                     patch_history=patch_history.copy(),
                     visited_patches_x=visited_patches_x.copy(),
+                    controller_state=controller.copy(),
+                    controller_state_from_ram=nes.controller1.is_pressed.copy(),
                 ))
                 next_save_id += 1
 
@@ -1237,6 +1287,8 @@ def main():
                         state_history=state_history.copy(),
                         patch_history=patch_history.copy(),
                         visited_patches_x=visited_patches_x.copy(),
+                        controller_state=controller.copy(),
+                        controller_state_from_ram=nes.controller1.is_pressed.copy(),
                     )
                     saves.add(save_info)
                     next_save_id += 1
@@ -1245,6 +1297,9 @@ def main():
 
             else:
                 assert patch_id == patch_history[-1], f"Missed case of transitioning patches: {patch_id} != {patch_history[-1]}"
+
+            # Update action.
+            controller = _flip_buttons(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
 
         # Print stats every second:
         #   * Current position: (x, y)
