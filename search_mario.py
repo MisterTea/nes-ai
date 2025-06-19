@@ -31,8 +31,6 @@ register(
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 NdArrayRGB8 = np.ndarray[tuple[Literal[3]], np.dtype[np.uint8]]
 
-_DEBUG_CONTROLLER = True
-
 
 @dataclass(frozen=True)
 class PatchId:
@@ -71,8 +69,6 @@ class SaveInfo:
         # Convert value from list to np.uint8.
         assert self.controller_state.dtype == np.uint8, f"Unexpected controller state type: {self.controller_state.dtype} != np.uint8"
 
-        if _DEBUG_CONTROLLER:
-            print(f"[{self.save_id:>3}] controller at save: {self.controller_state}")
 
 @dataclass
 class Args:
@@ -979,22 +975,11 @@ def main():
             if world != prev_world or level != prev_level:
                 raise AssertionError("Reached a new world ({prev_world}-{prev_level} -> {world}-{level}), but also terminated?")
 
-            if _DEBUG_CONTROLLER:
-                print("LOADING SAVE:")
-
             # In AutoresetMode.DISABLED, we have to reset ourselves.
             # Reset only if we hit a termination state.  Otherwise, we can just reload.
             if termination:
                 resets_before = first_env.resets
                 envs.reset()
-
-                if _DEBUG_CONTROLLER:
-                    print(f"  CONTROLLER      AFTER RESET: {controller=}")
-
-                # controller[:] = nes.controller1.is_pressed[:]
-
-                if _DEBUG_CONTROLLER:
-                    print(f"  CONTROLLER    = AFTER RESET: {controller=}")
 
                 # Don't count this reset by us, we're trying to find where other things are calling reset.
                 first_env.resets -= 1
@@ -1015,15 +1000,8 @@ def main():
             nes.load(save_info.save_state)
             ram = nes.ram()
 
-            if _DEBUG_CONTROLLER:
-                print(f"  [{save_info.save_id}] CONTROLLER           IN SAVE: {save_info.controller_state}")
-                print(f"  [{save_info.save_id}] CONTROLLER    RAM AFTER LOAD: {nes.controller1.is_pressed}")
-
             # Restore controller.
             controller[:] = nes.controller1.is_pressed[:]
-
-            if _DEBUG_CONTROLLER:
-                print(f"  [{save_info.save_id}] CONTROLLER      = AFTER LOAD: {controller}")
 
             # Ensure loading from ram is the same as loading from the controller state.
             assert (controller == save_info.controller_state).all(), f"Mismatched controller on load: {controller} != {save_info.controller_state}"
