@@ -12,6 +12,7 @@ from .bitwise cimport bit_high
 
 import numpy as np
 
+
 cdef class NESCart:
     """
     NES Cartridge interface
@@ -131,10 +132,18 @@ cdef class NESCart0(NESCart):
         cdef unsigned char [:] prg_rom = self.prg_rom
         cdef unsigned char [:] chr_mem = self.chr_mem
 
+        ram_np = np.asarray(ram, copy=True)
+        prg_rom_np = np.asarray(prg_rom, copy=True)
+        chr_mem_np = np.asarray(chr_mem, copy=True)
+
+        ram_np.setflags(write=False)
+        prg_rom_np.setflags(write=False)
+        chr_mem_np.setflags(write=False)
+
         return (
-            np.asarray(ram, copy=True),
-            np.asarray(prg_rom, copy=True),
-            np.asarray(chr_mem, copy=True),
+            ram_np,
+            prg_rom_np,
+            chr_mem_np,
 
             self.prg_start_addr,
             self.prg_rom_size,
@@ -147,9 +156,9 @@ cdef class NESCart0(NESCart):
         """
         Load the state of the cart from a tuple of numpy arrays
         """
-        cdef unsigned char [:] np_ram = self.ram
-        cdef unsigned char [:] np_prg_rom = self.prg_rom
-        cdef unsigned char [:] np_chr_mem = self.chr_mem
+        cdef const unsigned char [:] np_ram
+        cdef const unsigned char [:] np_prg_rom
+        cdef const unsigned char [:] np_chr_mem
 
         (
             np_ram,
@@ -286,18 +295,28 @@ cdef class NESCart1(NESCart):
         cdef unsigned char[:,:] banked_chr_rom_1 = self.banked_chr_rom_1
         cdef unsigned char[:,:] ram_1 = self.ram_1
 
+        chr_bank_np = np.asarray(chr_bank, copy=True)
+        banked_prg_rom_1_np = np.asarray(banked_prg_rom_1, copy=True)
+        banked_chr_rom_1_np = np.asarray(banked_chr_rom_1, copy=True)
+        ram_1_np = np.asarray(ram_1, copy=True)
+
+        chr_bank_np.setflags(write=False)
+        banked_prg_rom_1_np.setflags(write=False)
+        banked_chr_rom_1_np.setflags(write=False)
+        ram_1_np.setflags(write=False)
+
         return (
             super().save(),
             self.num_prg_banks, self.num_chr_banks, self.num_prg_ram_banks,
             self.chr_mem_writeable,
             self.ctrl,
-            np.asarray(chr_bank, copy=True),
+            chr_bank_np,
             self.prg_bank, self.prg_ram_bank,
             self.shift,
             self.shift_ctr,
-            np.asarray(banked_prg_rom_1, copy=True),
-            np.asarray(banked_chr_rom_1, copy=True),
-            np.asarray(ram_1, copy=True),
+            banked_prg_rom_1_np,
+            banked_chr_rom_1_np,
+            ram_1_np,
         )
 
     def load(self, state):
@@ -305,10 +324,10 @@ cdef class NESCart1(NESCart):
         Load the state of the cart from a tuple of numpy arrays
         """
 
-        cdef unsigned char[:] np_chr_bank
-        cdef unsigned char[:,:] np_banked_prg_rom_1
-        cdef unsigned char[:,:] np_banked_chr_rom_1
-        cdef unsigned char[:,:] np_ram_1
+        cdef const unsigned char[:] np_chr_bank
+        cdef const unsigned char[:,:] np_banked_prg_rom_1
+        cdef const unsigned char[:,:] np_banked_chr_rom_1
+        cdef const unsigned char[:,:] np_ram_1
 
         (
             state_super,

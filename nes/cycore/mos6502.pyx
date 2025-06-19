@@ -74,6 +74,9 @@ cdef class MOS6502:
     def save(self):
         cdef int[:] instr_size_bytes = self.instr_size_bytes
 
+        instr_size_bytes_np = np.asarray(instr_size_bytes, copy=True)
+        instr_size_bytes_np.setflags(write=False)
+
         return (
             self.A, self.X, self.Y,     # registers
             self.PC, self.SP,           # program and stack pointers
@@ -82,11 +85,11 @@ cdef class MOS6502:
             self.cycles_since_reset,     # cycles since the processor was reset
             self.aax_sets_flags, self.undocumented_support_level, self.stack_underflow_causes_exception,
 
-            np.asarray(instr_size_bytes, copy=True)
+            instr_size_bytes_np,
         )
 
     def load(self, state):
-        cdef int[:] np_instr_size_bytes
+        cdef const int[:] np_instr_size_bytes
 
         (
             self.A, self.X, self.Y,     # registers

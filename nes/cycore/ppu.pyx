@@ -107,10 +107,42 @@ cdef class NESPPU:
         cdef int [:] _palette_cache_valid = self._palette_cache_valid
         cdef unsigned int [:,:] screen_buffer = self.screen_buffer
 
+        ppu_scroll_np = np.asarray(ppu_scroll, copy=True)
+        ppu_scroll_np.setflags(write=False)
+
+        oam_np = np.asarray(oam, copy=True)
+        _oam_np = np.asarray(_oam, copy=True)
+        _active_sprite_addrs_np = np.asarray(_active_sprite_addrs, copy=True)
+        _sprite_bkg_priority_np = np.asarray(_sprite_bkg_priority, copy=True)
+        _sprite_line_np = np.asarray(_sprite_line, copy=True)
+        _sprite_pattern_np = np.asarray(_sprite_pattern, copy=True)
+
+        oam_np.setflags(write=False)
+        _oam_np.setflags(write=False)
+        _active_sprite_addrs_np.setflags(write=False)
+        _sprite_bkg_priority_np.setflags(write=False)
+        _sprite_line_np.setflags(write=False)
+        _sprite_pattern_np.setflags(write=False)
+
+        irq_tick_triggers_np = np.asarray(self.irq_tick_triggers, dtype=np.bool_, copy=True)
+        irq_tick_triggers_np.setflags(write=False)
+
+        _palette_np = np.asarray(_palette, copy=True)
+        screen_buffer_np = np.asarray(screen_buffer, copy=True)
+        hex_palette_np = np.asarray(hex_palette, copy=True)
+        _palette_cache_np = np.asarray(_palette_cache, copy=True)
+        _palette_cache_valid_np = np.asarray(_palette_cache_valid, copy=True)
+
+        _palette_np.setflags(write=False)
+        screen_buffer_np.setflags(write=False)
+        hex_palette_np.setflags(write=False)
+        _palette_cache_np.setflags(write=False)
+        _palette_cache_valid_np.setflags(write=False)
+
         return (
             # ppu registers
             self.ppu_ctrl, self.ppu_mask, self.oam_addr, self.oam_data, self._ppu_data_buffer, self._io_latch,
-            np.asarray(ppu_scroll, copy=True),
+            ppu_scroll_np,
             self.ppu_addr, self._ppu_byte_latch,
 
             # ppu current position
@@ -124,12 +156,12 @@ cdef class NESPPU:
             self.cycles_since_reset,
 
             # Sprite rendering
-            np.asarray(oam, copy=True),                    # main internal OAM memory
-            np.asarray(_oam, copy=True),                   # a secondary internal OAM array to store sprites active on next scanline
-            np.asarray(_active_sprite_addrs, copy=True),   # addresses of the active sprites
-            np.asarray(_sprite_bkg_priority, copy=True),   # a buffer to hold whether a given sprite has priority over background
-            np.asarray(_sprite_line, copy=True),           # lines of the active sprite that we are on
-            np.asarray(_sprite_pattern, copy=True),        # decoded patterns for the active sprites
+            oam_np,                    # main internal OAM memory
+            _oam_np,                   # a secondary internal OAM array to store sprites active on next scanline
+            _active_sprite_addrs_np,   # addresses of the active sprites
+            _sprite_bkg_priority_np,   # a buffer to hold whether a given sprite has priority over background
+            _sprite_line_np,           # lines of the active sprite that we are on
+            _sprite_pattern_np,        # decoded patterns for the active sprites
             self._num_active_sprites,                      # how many sprites are active in this current line
 
             # NOTE: Using np.asarray('cdef bint [:,:]') duplicates memoryview copy definition:
@@ -141,30 +173,30 @@ cdef class NESPPU:
             #   np.asarray(irq_tick_triggers),
             # But we'll allow a copy to happen, using np.asarray() on the original value, not the memoryview.
 
-            np.asarray(self.irq_tick_triggers, dtype=np.bool_, copy=True),             # whether or not an irq tick is triggered on this pixel of sprite fetch
+            irq_tick_triggers_np,             # whether or not an irq tick is triggered on this pixel of sprite fetch
 
             # Background rendering
             self._pattern_lo, self._pattern_hi,     # 16-bit bkg pattern registers (only bottom 16 bits relevant)
             self._effective_x, self._effective_y,   # current background tile position being fetched
-            np.asarray(_palette, copy=True),   # palettes for next tiles
+            _palette_np,   # palettes for next tiles
 
             # access to other bits of the system - vram and interrupts
             self.vram.save(),
             self.interrupt_listener.save(),
 
             # the screen buffer itself; currently uses a packed 32 bit int with pixel format xRGB
-            np.asarray(screen_buffer, copy=True),
+            screen_buffer_np,
 
             # palettes for all the colors the NES can display
             #unsigned int rgb_palette[64][3]        # in standard RGB format
-            np.asarray(hex_palette, copy=True),     # in packed 32 bit xRGB format
+            hex_palette_np,     # in packed 32 bit xRGB format
 
             # special colors that are in use
             self.transparent_color, self.bkg_color,
 
             # caches for palettes, since decoding them is a bit slow
-            np.asarray(_palette_cache, copy=True),
-            np.asarray(_palette_cache_valid, copy=True),
+            _palette_cache_np,
+            _palette_cache_valid_np,
         )
 
     def load(self, buffer):
@@ -182,19 +214,19 @@ cdef class NESPPU:
         cdef int [:] _palette_cache_valid = self._palette_cache_valid
         cdef unsigned int [:,:] screen_buffer = self.screen_buffer
 
-        cdef unsigned char [:] np_ppu_scroll
-        cdef unsigned char [:] np_oam
-        cdef unsigned char [:] np__oam
-        cdef int [:] np__active_sprite_addrs
-        cdef unsigned char [:] np__sprite_bkg_priority
-        cdef int [:] np__sprite_line
-        cdef char [:,:] np__sprite_pattern
-        cdef bint [:] np_irq_tick_triggers
-        cdef int [:,:] np__palette
-        cdef unsigned int [:] np_hex_palette
-        cdef int [:,:] np__palette_cache
-        cdef int [:] np__palette_cache_valid
-        cdef unsigned int [:,:] np_screen_buffer
+        cdef const unsigned char [:] np_ppu_scroll
+        cdef const unsigned char [:] np_oam
+        cdef const unsigned char [:] np__oam
+        cdef const int [:] np__active_sprite_addrs
+        cdef const unsigned char [:] np__sprite_bkg_priority
+        cdef const int [:] np__sprite_line
+        cdef const char [:,:] np__sprite_pattern
+        cdef const bint [:] np_irq_tick_triggers
+        cdef const int [:,:] np__palette
+        cdef const unsigned int [:] np_hex_palette
+        cdef const int [:,:] np__palette_cache
+        cdef const int [:] np__palette_cache_valid
+        cdef const unsigned int [:,:] np_screen_buffer
 
         if False:
             (

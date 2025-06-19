@@ -199,15 +199,21 @@ cdef class NESVRAM(MemoryBase):
         cdef unsigned char[:] _nametables = self._nametables
         cdef unsigned char[:] palette_ram = self.palette_ram
 
+        _nametables_np = np.asarray(_nametables, copy=True)
+        palette_ram_np = np.asarray(palette_ram, copy=True)
+
+        _nametables_np.setflags(write=False)
+        palette_ram_np.setflags(write=False)
+
         return (
-            np.asarray(_nametables, copy=True),
-            np.asarray(palette_ram, copy=True),
+            _nametables_np,
+            palette_ram_np,
             self.cart.save(),
         )
 
     def load(self, state):
-        cdef unsigned char[:] np__nametables
-        cdef unsigned char[:] np_palette_ram
+        cdef const unsigned char[:] np__nametables
+        cdef const unsigned char[:] np_palette_ram
 
         (
             np__nametables,

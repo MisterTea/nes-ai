@@ -310,7 +310,7 @@ class ControllerBase:
 
     def save(self):
         is_pressed = self.is_pressed.copy()
-        is_pressed.flags.writeable = False
+        is_pressed.setflags(write=False)
 
         # The save-state copy is unwritable, but the self instance should still be writeable.
         assert self.is_pressed.flags.writeable

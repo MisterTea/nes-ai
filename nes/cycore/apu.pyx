@@ -557,6 +557,12 @@ cdef class NESAPU:
         cdef short [:] output = self.output
         cdef short [:] buffer = self.buffer
 
+        output_np = np.asarray(output, copy=True)
+        buffer_np = np.asarray(buffer, copy=True)
+
+        output_np.setflags(write=False)
+        buffer_np.setflags(write=False)
+
         return (
         #### master volume
         self.master_volume,
@@ -570,8 +576,8 @@ cdef class NESAPU:
         self._buffer_start, self._buffer_end,  # start and end index of the sample ring buffer
 
         #### buffers for up to 1s of data for each of the waveform generators
-        np.asarray(output, copy=True),   # final output from the mixer; power of two sized to make ring buffer easier to implement
-        np.asarray(buffer, copy=True),
+        output_np,   # final output from the mixer; power of two sized to make ring buffer easier to implement
+        buffer_np,
 
         #### status register
         self.mode, self.irq_inhibit, self.frame_interrupt_flag,
@@ -590,8 +596,8 @@ cdef class NESAPU:
         cdef short [:] output = self.output
         cdef short [:] buffer = self.buffer
 
-        cdef short [:] np_output
-        cdef short [:] np_buffer
+        cdef const short [:] np_output
+        cdef const short [:] np_buffer
 
         (
         #### master volume
