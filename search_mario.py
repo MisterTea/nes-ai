@@ -1077,7 +1077,12 @@ def main():
         # backwards jump in the level, like in 7-4.  We should massively penalize the entire
         # path that got here, since it's very for the algorithm to look back enough steps to
         # realize that it should keep searching.
-        elif patch_history and (patch_id.patch_x - patch_history[-1].patch_x < -10) and patch_id.patch_x in visited_patches_x:
+        elif (
+            patch_history and
+            patch_id.patch_x - patch_history[-1].patch_x < -10 and
+            patch_id.patch_x in visited_patches_x and
+            world == prev_world and level == prev_level
+        ):
             print(f"Ending trajectory, backward jump from {prev_x} -> {x}: x={x} ticks_left={ticks_left}")
 
             PENALTY = 1000
@@ -1101,6 +1106,25 @@ def main():
                 saves._reservoir_seen_counts[r_id] += PENALTY
                 saves._reservoir_count_since_refresh[r_id] += PENALTY
 
+            force_terminate = True
+
+        # Stop if we double-back to the same x patch within a trajectory.
+        #
+        # TODO(millman): This seems really powerful for preventing wasting search space, but there
+        #   are a few places in the game where mario needs to go back and forth on x, when advancing
+        #   the y position.  Maybe if total number of patches revisited is too many?
+        #   This is also still not easily getting past 7-4; the specific path and jump is a really
+        #   narrow sequence.
+        #
+        #   Overall, seems like there needs to be a smarter algorithm to find states that are
+        #   accessible, but not easily accessible.
+        elif (
+            patch_history and
+            patch_id.patch_x != patch_history[-1].patch_x and
+            patch_id.patch_x in visited_patches_x and
+            world == prev_world and level == prev_level
+        ):
+            print(f"Ending trajectory, revisited x patch: {patch_id.patch_x}: x={x} ticks_left={ticks_left}")
             force_terminate = True
 
         # If we made progress, save state.
