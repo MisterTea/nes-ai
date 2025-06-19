@@ -1,7 +1,11 @@
 import copy
 import logging
 
+import numpy as np
+
 from nes_ai import game_mode
+
+NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 
 # would like to make this not depend on pygame
 if game_mode.HEADLESS:
@@ -297,10 +301,9 @@ class ControllerBase:
     RIGHT = 7
 
     NUM_BUTTONS = 8
-    NAMES = ["A", "B", "select", "start", "up", "down", "left", "right"]
 
     def __init__(self, active=True):
-        self.is_pressed = [0] * 8  # array to store key status
+        self.is_pressed = np.zeros(self.NUM_BUTTONS, dtype=np.uint8)  # array to store key status
         self._current_bit = 0
         self.strobe = False
         self.active = active  # allows the gamepad to be turned off (acting as if it were disconnected)
@@ -315,27 +318,22 @@ class ControllerBase:
         pass
 
     def get_ai_state(self):
-        import numpy as np
-
         controller_pressed = copy.deepcopy(self.is_pressed)
         return controller_pressed
 
-    def set_state(self, state):
+    def set_state(self, state: NdArrayUint8):
         """
         Sets the controller state from a length-8 array of boolean values.  Set this way to support any type of array as
         input state.
         """
-        self.is_pressed[self.A] = int(state[self.A])
-        self.is_pressed[self.B] = int(state[self.B])
-        self.is_pressed[self.SELECT] = int(state[self.SELECT])
-        self.is_pressed[self.START] = int(state[self.START])
-        self.is_pressed[self.UP] = int(state[self.UP])
-        self.is_pressed[self.DOWN] = int(state[self.DOWN])
-        self.is_pressed[self.LEFT] = int(state[self.LEFT])
-        self.is_pressed[self.RIGHT] = int(state[self.RIGHT])
+
+        assert state.shape == self.is_pressed.shape, f"Unexpected state shape: {state.shape} != {self.is_pressed.shape}"
+        assert state.dtype == np.uint8, f"Unexpected state dtype: {state.dtype} != {np.uint8}"
+
+        self.is_pressed[:] = state[:]
 
     def is_any_pressed(self):
-        return any(self.is_pressed)
+        return self.is_pressed.any()
 
     def set_strobe(self, value):
         """

@@ -448,7 +448,6 @@ cdef class NES:
         # update the controllers once per frame
         self.controller1.update()
         self.controller2.update()
-        pass
 
     cpdef bint run_frame(self):
         # cdef int vblank_started=False
@@ -472,9 +471,7 @@ cdef class NES:
         while not vblank_started:
             vblank_started = self.step(log_cpu)
 
-        # update the controllers once per frame
-        # self.controller1.update()
-        # self.controller2.update()
+        # Assume controllers have already been updated for this frame.
 
         clock = self.clock = pygame.time.Clock()
         frame = self.frame
@@ -976,8 +973,8 @@ cdef class NES:
         cdef unsigned int [:, :] buffer_mv = buffer
 
         # set the controller state (same for all frames)
-        self.controller1.set_state(controller1_state)
-        self.controller2.set_state(controller2_state)
+        self.controller1.set_state(np.asarray(controller1_state).astype(np.uint8))
+        self.controller2.set_state(np.asarray(controller2_state).astype(np.uint8))
 
         self.ai_handler.update()
 

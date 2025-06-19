@@ -238,7 +238,7 @@ class SuperMarioEnv(gym.Env):
             self.nes.read_controller_presses()
 
         # If user pressed anything, avoid applying actions.
-        if any(self.nes.controller1.is_pressed):
+        if self.nes.controller1.is_pressed.any():
             if PRINT_CONTROLLER:
                 controller_desc = _describe_controller_vector(self.nes.controller1.is_pressed)
                 print(f"Controller (user pressed): {controller_desc}")
