@@ -309,10 +309,17 @@ class ControllerBase:
         self.active = active  # allows the gamepad to be turned off (acting as if it were disconnected)
 
     def save(self):
-        return (self.is_pressed, self._current_bit, self.strobe, self.active)
+        is_pressed = self.is_pressed.copy()
+        is_pressed.flags.writeable = False
+
+        # The save-state copy is unwritable, but the self instance should still be writeable.
+        assert self.is_pressed.flags.writeable
+
+        return (is_pressed, self._current_bit, self.strobe, self.active)
 
     def load(self, data):
-        self.is_pressed, self._current_bit, self.strobe, self.active = data
+        is_pressed, self._current_bit, self.strobe, self.active = data
+        self.is_pressed = is_pressed.copy()
 
     def update(self):
         pass

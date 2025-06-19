@@ -991,7 +991,7 @@ def main():
                 if _DEBUG_CONTROLLER:
                     print(f"  CONTROLLER      AFTER RESET: {controller=}")
 
-                controller[:] = nes.controller1.is_pressed[:]
+                # controller[:] = nes.controller1.is_pressed[:]
 
                 if _DEBUG_CONTROLLER:
                     print(f"  CONTROLLER    = AFTER RESET: {controller=}")
@@ -1019,9 +1019,8 @@ def main():
                 print(f"  [{save_info.save_id}] CONTROLLER           IN SAVE: {save_info.controller_state}")
                 print(f"  [{save_info.save_id}] CONTROLLER    RAM AFTER LOAD: {nes.controller1.is_pressed}")
 
-            # Restore controller.  There is some overwrite happening of the controller inside the
-            # environment.  For now, explicitly set the controller when loading.
-            controller[:] = save_info.controller_state[:]
+            # Restore controller.
+            controller[:] = nes.controller1.is_pressed[:]
 
             if _DEBUG_CONTROLLER:
                 print(f"  [{save_info.save_id}] CONTROLLER      = AFTER LOAD: {controller}")
