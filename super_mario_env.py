@@ -329,14 +329,6 @@ def _set_prelevel_timer(ram: NdArrayUint8, time_left: int):
 
 
 def _set_world_level(ram: NdArrayUint8, world: int, level: int):
-
-    if True:
-        # Decode levels
-        for w in range(1, 9):
-            for l in range(1, 5):
-                target_world, target_stage, target_level = decode_world_level(w, l, lost_levels=False)
-                print(f"SETTING WORLD LEVEL: {w}-{l} decoded -> {target_world}, {target_stage}, {target_level}")
-
     target_world, target_stage, target_level = decode_world_level(world, level, lost_levels=False)
 
     ram[0x075f] = np.uint8(target_world - 1)
@@ -345,6 +337,13 @@ def _set_world_level(ram: NdArrayUint8, world: int, level: int):
 
 
 def _skip_start_screen(nes: Any, world_level: tuple[int, int] | None):
+    if True:
+        # Decode levels
+        for w in range(1, 9):
+            for l in range(1, 5):
+                target_world, target_stage, target_level = decode_world_level(w, l, lost_levels=False)
+                print(f"SETTING WORLD LEVEL: {w}-{l} decoded -> {target_world}, {target_stage}, {target_level}")
+
     ram = nes.ram()
 
     LJUST = 35
