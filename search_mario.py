@@ -42,6 +42,9 @@ class PatchId:
         object.__setattr__(self, 'patch_x', int(self.patch_x))
         object.__setattr__(self, 'patch_y', int(self.patch_y))
 
+    def __str__(self) -> str:
+        return f"PatchId({self.patch_x},{self.patch_y})"
+
 
 @dataclass(frozen=True)
 class SaveInfo:
@@ -148,7 +151,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless
             raise RuntimeError("STOP")
         else:
             render_mode = "rgb" if headless else "human"
-            env = gym.make(env_id, render_mode=render_mode, world_level=world_level, screen_rc=(2,2))
+            env = gym.make(env_id, render_mode=render_mode, world_level=world_level, screen_rc=(3,2))
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
 
@@ -199,6 +202,15 @@ def _weight_hyperbolic(N: int) -> np.array:
 @dataclass(frozen=True)
 class ReservoirId:
     patch_history: tuple[PatchId, ...]
+
+    def __str__(self) -> str:
+        s = "ReservoirId["
+        for i, p in enumerate(self.patch_history):
+            if i > 0:
+                s += ", "
+            s += f"({p.patch_x},{p.patch_y})"
+        s += "]"
+        return s
 
 
 class PatchReservoir:
@@ -742,6 +754,48 @@ def _draw_patch_path(
     return img_rgb_240
 
 
+def _draw_patch_grid(
+    img_rgb_240: NdArrayRGB8,
+    patch_size: int,
+    ram: NdArrayUint8,
+    x: int,
+    y: int,
+) -> NdArrayRGB8:
+
+    # Player x pos within current screen offset.
+    screen_offset_x = ram[0x03AD]
+
+    # Patches are based on player position, but the view is based on screen position.
+    # The first patch is going to be offset from the left side of the screen.
+    left_x = x - int(screen_offset_x)
+
+    # The first vertical line is going to be at an offset:
+    #   if the viewport is at 0, then the offset is 0
+    #   if the viewport is at 10, then the first patch will be drawn at 32-10 or 22
+    #   if the viewport is at 100, then first patch will be drawn at 32 - (100 % 32) or 28
+
+    x_offset = patch_size - left_x % patch_size
+    y_offset = 0
+
+    draw = ImageDraw.Draw(img_rgb_240)
+
+    # Draw all horizontal lines.
+    for j in range(SCREEN_H // patch_size + 1):
+        x0 = 0
+        x1 = SCREEN_W
+        y0 = j * patch_size + y_offset
+        draw.line([(x0, y0), (x1, y0)], fill=(0, 255, 0), width=1)
+
+    # Draw all vertical lines.
+    for i in range(SCREEN_W // patch_size + 1):
+        y0 = 0
+        y1 = SCREEN_H
+        x0 = x_offset + i * patch_size
+        draw.line([(x0, y0), (x0, y1)], fill=(0, 255, 0), width=1)
+
+    return img_rgb_240
+
+
 def _validate_save_state(save_info: SaveInfo, ram: NdArrayUint8):
     world = get_world(ram)
     level = get_level(ram)
@@ -1269,6 +1323,15 @@ def main():
 
         # Visualize the distribution of save states.
         if args.vis_freq_sec > 0 and now - last_vis_time > args.vis_freq_sec:
+
+            # Draw grid on screen.
+            if True:
+                obs_hwc = _next_obs[0]
+                img_rgb_240 = Image.fromarray(obs_hwc.swapaxes(0, 1), mode='RGB')
+                expected_size = (SCREEN_W, SCREEN_H)
+                assert img_rgb_240.size == expected_size, f"Unexpected img_rgb_240 size: {img_rgb_240.size} != {expected_size}"
+                _draw_patch_grid(img_rgb_240, patch_size=patch_size, ram=ram, x=x, y=y)
+                screen.blit_image(img_rgb_240, screen_index=4)
 
             # Histogram of number of saves in each patch reservoir.
             # Collect reservoirs into patches.
