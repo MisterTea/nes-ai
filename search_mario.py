@@ -1308,8 +1308,8 @@ def main():
             else:
                 assert patch_id == patch_history[-1], f"Missed case of transitioning patches: {patch_id} != {patch_history[-1]}"
 
-            # Update action.
-            controller = _flip_buttons(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
+        # Update action every frame.
+        controller = _flip_buttons(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
 
         # Print stats every second:
         #   * Current position: (x, y)
