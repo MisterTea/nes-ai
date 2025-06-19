@@ -125,7 +125,7 @@ class Args:
     start_level: tuple[int,int] = (7,4)
     max_trajectory_steps: int = -1
     patch_size: int = 32
-    patch_history_length: int = 4
+    reservoir_history_length: int = 4
     max_trajectory_patches_x: int = 3
     flip_prob: float = 0.03
 
@@ -199,8 +199,9 @@ class ReservoirId:
 
 class PatchReservoir:
 
-    def __init__(self, patch_size: int, max_saves_per_reservoir: int = 1):
+    def __init__(self, patch_size: int, reservoir_history_length: int, max_saves_per_reservoir: int = 1):
         self.patch_size = patch_size
+        self.reservoir_history_length = reservoir_history_length
         self.max_saves_per_reservoir = max_saves_per_reservoir
 
         self._reservoir_to_saves = defaultdict(list)
@@ -216,7 +217,7 @@ class PatchReservoir:
         return patch_id
 
     def reservoir_id_from_save(self, save: SaveInfo) -> tuple:
-        reservoir_id = ReservoirId(save.patch_history)
+        reservoir_id = ReservoirId(tuple(save.patch_history[-self.reservoir_history_length:]))
         return reservoir_id
 
     def add(self, save: SaveInfo):
@@ -360,7 +361,8 @@ def _choose_save(saves_reservoir: PatchReservoir, rng: Any) -> SaveInfo:
     #   - Use multi-resolution grid?
 
     # Collect reservoirs into patches.
-    patch_id_to_count = saves_reservoir._patch_count_since_refresh
+    #patch_id_to_count = saves_reservoir._patch_count_since_refresh
+    patch_id_to_count = saves_reservoir._patch_seen_counts
 
     patch_id_list = list(patch_id_to_count.keys())
 
@@ -398,7 +400,8 @@ def _choose_save(saves_reservoir: PatchReservoir, rng: Any) -> SaveInfo:
     # Pick reservoir by exponential weighting.
     reservoir_id_list = list(saves_reservoir._patch_to_reservoir_ids[chosen_patch])
     reservoir_counts = np.fromiter((
-        saves_reservoir._reservoir_count_since_refresh[res_id]
+        #saves_reservoir._reservoir_count_since_refresh[res_id]
+        saves_reservoir._reservoir_seen_counts[res_id]
         for res_id in reservoir_id_list
     ), dtype=np.float64)
 
@@ -894,11 +897,11 @@ def main():
 
     level_ticks = -1
 
-    patch_history_length = args.patch_history_length
-    patch_history = deque(maxlen=patch_history_length)
+    reservoir_history_length = args.reservoir_history_length
+    patch_history = []
     visited_patches_x = set()
 
-    saves = PatchReservoir(patch_size=patch_size)
+    saves = PatchReservoir(patch_size=patch_size, reservoir_history_length=reservoir_history_length)
     force_terminate = False
     steps_since_load = 0
     patches_x_since_load = 0
@@ -1023,12 +1026,12 @@ def main():
             prev_level = level
             prev_x = x
             prev_lives = lives
-            patch_history = deque(save_info.patch_history, maxlen=patch_history_length)
+            patch_history = save_info.patch_history.copy()
             patch_id = saves.patch_id_from_save(save_info)
 
             assert patch_id == patch_history[-1], f"Mismatched patch history: history[-1]:{patch_history[-1]} != patch_id:{patch_id}"
 
-            assert len(patch_history) <= patch_history_length, f"Patch history is too large?: size={len(patch_history)}"
+            # assert len(patch_history) <= reservoir_history_length, f"Patch history is too large?: size={len(patch_history)}"
 
             level_ticks = save_info.level_ticks
 
@@ -1070,6 +1073,36 @@ def main():
             print(f"Lost a life: x={x} ticks_left={ticks_left}")
             force_terminate = True
 
+        # Stop if we've jumped backwards and already visited this state.  It indicates a
+        # backwards jump in the level, like in 7-4.  We should massively penalize the entire
+        # path that got here, since it's very for the algorithm to look back enough steps to
+        # realize that it should keep searching.
+        elif patch_history and (patch_id.patch_x - patch_history[-1].patch_x < -10) and patch_id.patch_x in visited_patches_x:
+            print(f"Ending trajectory, backward jump from {prev_x} -> {x}: x={x} ticks_left={ticks_left}")
+
+            PENALTY = 1000
+            pen = f"+{PENALTY}"
+
+            print(f"Penalizing patches and reservoirs:")
+            for j in range(len(patch_history)):
+                i = max(0, j - reservoir_history_length)
+                ph = patch_history[i:j+1]
+                try:
+                    p_id = ph[-1]
+                except IndexError:
+                    print(f"WHAT WENT WRONG?: i={i} j={j} res_hist_len={reservoir_history_length} ph={ph} ")
+                    raise
+
+                r_id = ReservoirId(tuple(ph[-reservoir_history_length:]))
+
+                print(f"  p:{p_id} r:{r_id}: {saves._patch_seen_counts[p_id]} -> {pen}, {saves._reservoir_seen_counts[r_id]} -> {pen}")
+                saves._patch_seen_counts[p_id] += PENALTY
+                saves._patch_count_since_refresh[p_id] += PENALTY
+                saves._reservoir_seen_counts[r_id] += PENALTY
+                saves._reservoir_count_since_refresh[r_id] += PENALTY
+
+            force_terminate = True
+
         # If we made progress, save state.
         #   * Assign (level, x, y) patch position to save state.
         #   * Add state to buffer, with vector-time (number of total actions taken)
@@ -1089,9 +1122,9 @@ def main():
                 state_history = []
                 visited_patches_x = set()
 
-                patch_history = deque(maxlen=patch_history_length)
+                patch_history = []
                 patch_history.append(patch_id)
-                assert len(patch_history) <= patch_history_length, f"Patch history is too large?: size={len(patch_history)}"
+                # assert len(patch_history) <= reservoir_history_length, f"Patch history is too large?: size={len(patch_history)}"
 
                 print(f"Starting level: {_str_level(world, level)}")
 
@@ -1104,7 +1137,7 @@ def main():
 
                 assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
 
-                saves = PatchReservoir(patch_size=patch_size)
+                saves = PatchReservoir(patch_size=patch_size, reservoir_history_length=reservoir_history_length)
                 saves.add(SaveInfo(
                     save_id=next_save_id,
                     x=x,
@@ -1116,7 +1149,7 @@ def main():
                     save_state=nes.save(),
                     action_history=action_history.copy(),
                     state_history=state_history.copy(),
-                    patch_history=tuple(patch_history),
+                    patch_history=patch_history.copy(),
                     visited_patches_x=visited_patches_x.copy(),
                 ))
                 next_save_id += 1
@@ -1178,7 +1211,7 @@ def main():
                         save_state=nes.save(),
                         action_history=action_history.copy(),
                         state_history=state_history.copy(),
-                        patch_history=tuple(patch_history),
+                        patch_history=patch_history.copy(),
                         visited_patches_x=visited_patches_x.copy(),
                     )
                     saves.add(save_info)
