@@ -16,6 +16,7 @@ import tyro
 from PIL import Image, ImageDraw
 from torch.utils.tensorboard import SummaryWriter
 
+from search_mario_actions import ACTION_INDEX_TO_CONTROLLER, CONTROLLER_TO_ACTION_INDEX, build_controller_transition_matrix, flip_buttons_by_action_in_place
 from super_mario_env_search import SuperMarioEnv, SCREEN_H, SCREEN_W, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses, get_time_left, life
 from super_mario_env_ram_hacks import decode_world_level, encode_world_level
 
@@ -500,20 +501,6 @@ def _choose_save_from_history(saves: list[SaveInfo], saves_reservoir: PatchReser
     return sample, patch_id_and_weight_pairs
 
 
-def _flip_buttons(controller_presses: NdArrayUint8, flip_prob: float, ignore_button_mask: NdArrayUint8) -> NdArrayUint8:
-    flip_mask = np.random.rand(len(controller_presses)) < flip_prob   # True where we want to flip
-    flip_mask[ignore_button_mask] = 0
-    result = np.where(flip_mask, 1 - controller_presses, controller_presses)
-    return result
-
-
-def _flip_buttons_in_place(controller_presses: NdArrayUint8, flip_prob: float, ignore_button_mask: NdArrayUint8) -> None:
-    flip_mask = np.random.rand(len(controller_presses)) < flip_prob
-    flip_mask[ignore_button_mask] = False
-    controller_presses[flip_mask] ^= 1  # In-place bitwise flip (0->1, 1->0)
-    return controller_presses
-
-
 _MASK_START_AND_SELECT = _to_controller_presses(['start', 'select']).astype(bool)
 
 def _str_level(world_ram: int, level_ram: int) -> str:
@@ -937,6 +924,9 @@ def main():
     nes = first_env.nes
     screen = first_env.screen
 
+    # Action setup.
+    transition_matrix = build_controller_transition_matrix(actions=ACTION_INDEX_TO_CONTROLLER, flip_prob=args.flip_prob)
+
     # Global state.
     patch_size = args.patch_size
     step = 0
@@ -1102,7 +1092,7 @@ def main():
                 # Flip the buttons with some probability.  If we're loading a state, we don't want to
                 # be required to use the same action state that was tried before.  To get faster coverage
                 # We flip buttons here with much higher probability than during a trajectory.
-                controller = _flip_buttons_in_place(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
+                controller = flip_buttons_by_action_in_place(controller, transition_matrix=transition_matrix, action_index_to_controller=ACTION_INDEX_TO_CONTROLLER, controller_to_action_index=CONTROLLER_TO_ACTION_INDEX)
 
             action_history = save_info.action_history.copy()
             state_history = save_info.state_history.copy()
@@ -1351,7 +1341,7 @@ def main():
                 assert patch_id == patch_history[-1], f"Missed case of transitioning patches: {patch_id} != {patch_history[-1]}"
 
         # Update action every frame.
-        controller = _flip_buttons_in_place(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
+        controller = controller = flip_buttons_by_action_in_place(controller, transition_matrix=transition_matrix, action_index_to_controller=ACTION_INDEX_TO_CONTROLLER, controller_to_action_index=CONTROLLER_TO_ACTION_INDEX)
 
         # Print stats every second:
         #   * Current position: (x, y)
