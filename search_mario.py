@@ -594,7 +594,13 @@ def _score_patch(patch_id: PatchId, p_stats: PatchStats, max_possible_transition
         # entropy score is very high.
         e = 1.0
         beta = 1.0
-        transition_score = (transition_entropy + e) / (p_stats.num_selected + beta)
+        transition_score = (transition_entropy + e) / (p_stats.num_visited + beta)
+
+    # Prefer states that have unexplored neighbors.  This makes it more likely that we pick patches
+    # near the frontier of exploration.
+    e = 1.0
+    beta = 1.0
+    frontier_score = -(len(p_stats.transitioned_to_patch) + e) / (p_stats.num_visited + beta)
 
     # Some sample values for score parts:
     #   productivity_score=1.0 transition_entropy=0.7219 total=5 max_possible_transitions=4
@@ -606,9 +612,9 @@ def _score_patch(patch_id: PatchId, p_stats: PatchStats, max_possible_transition
     #   productivity_score=1.0 transition_entropy=0.9852 total=7 max_possible_transitions=4
 
     if _DEBUG_SCORE_PATCH:
-        print(f"Scored patch: {patch_id}: productivity_score={productivity_score:.4f} transition_entropy={transition_entropy:.4f} transition_score={transition_score:.4f} {total=} {max_possible_transitions=}")
+        print(f"Scored patch: {patch_id}: productivity_score={productivity_score:.4f} transition_entropy={transition_entropy:.4f} transition_score={transition_score:.4f} frontier_score={frontier_score:.4f} {total=} {max_possible_transitions=}")
 
-    score = productivity_score + transition_score
+    score = productivity_score + transition_score + frontier_score
 
     return score
 
