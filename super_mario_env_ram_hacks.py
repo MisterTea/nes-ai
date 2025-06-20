@@ -209,7 +209,7 @@ def decode_world_level(world: int, level: int, lost_levels: bool) -> tuple[int, 
     target_world, target_stage = target
     # Type and value check the target world parameter
     if not isinstance(target_world, int):
-        raise TypeError('target_world must be of type: int')
+        raise TypeError(f'target_world must be of type: int, found: ({type(target_world)}) {target_world}')
     else:
         if lost_levels:
             if not 1 <= target_world <= 12:
@@ -258,4 +258,4 @@ def encode_world_level(world_ram: int, level_ram: int) -> tuple[int, int]:
         if level >= 2:
             level = level - 1
 
-    return (world_ram + 1, level)
+    return (int(world_ram + 1), int(level))
