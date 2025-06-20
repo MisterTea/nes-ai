@@ -507,6 +507,13 @@ def _flip_buttons(controller_presses: NdArrayUint8, flip_prob: float, ignore_but
     return result
 
 
+def _flip_buttons_in_place(controller_presses: NdArrayUint8, flip_prob: float, ignore_button_mask: NdArrayUint8) -> None:
+    flip_mask = np.random.rand(len(controller_presses)) < flip_prob
+    flip_mask[ignore_button_mask] = False
+    controller_presses[flip_mask] ^= 1  # In-place bitwise flip (0->1, 1->0)
+    return controller_presses
+
+
 _MASK_START_AND_SELECT = _to_controller_presses(['start', 'select']).astype(bool)
 
 def _str_level(world_ram: int, level_ram: int) -> str:
@@ -1095,7 +1102,7 @@ def main():
                 # Flip the buttons with some probability.  If we're loading a state, we don't want to
                 # be required to use the same action state that was tried before.  To get faster coverage
                 # We flip buttons here with much higher probability than during a trajectory.
-                controller = _flip_buttons(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
+                controller = _flip_buttons_in_place(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
 
             action_history = save_info.action_history.copy()
             state_history = save_info.state_history.copy()
@@ -1344,7 +1351,7 @@ def main():
                 assert patch_id == patch_history[-1], f"Missed case of transitioning patches: {patch_id} != {patch_history[-1]}"
 
         # Update action every frame.
-        controller = _flip_buttons(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
+        controller = _flip_buttons_in_place(controller, flip_prob=args.flip_prob, ignore_button_mask=_MASK_START_AND_SELECT)
 
         # Print stats every second:
         #   * Current position: (x, y)
