@@ -670,7 +670,12 @@ def _choose_save_from_stats(saves_reservoir: PatchReservoir, patches_stats: dict
     assert chosen_patch not in patches_with_missing_reservoir, f"Shouldn't have picked a patch with no save states: {chosen_patch}"
 
     # Pick reservoir by exponential weighting.
-    reservoir_id_list = list(saves_reservoir._patch_to_reservoir_ids[chosen_patch])
+    reservoir_id_list = [
+        res_id
+        for res_id in saves_reservoir._patch_to_reservoir_ids[chosen_patch]
+        if saves_reservoir._reservoir_seen_counts[res_id]
+    ]
+
     reservoir_counts = np.fromiter((
         #saves_reservoir._reservoir_count_since_refresh[res_id]
         saves_reservoir._reservoir_seen_counts[res_id]
@@ -1275,7 +1280,7 @@ def main():
         # backwards jump in the level, like in 7-4.  We should massively penalize the entire
         # path that got here, since it's very for the algorithm to look back enough steps to
         # realize that it should keep searching.
-        elif (
+        elif False and (
             patch_history and
             patch_id.patch_x - patch_history[-1].patch_x < -10 and
             patch_id.patch_x in visited_patches_x and
