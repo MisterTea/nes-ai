@@ -42,6 +42,8 @@ class SimpleAiHandler:
 
 class SimpleScreenRxC:
     def __init__(self, screen_size: tuple[int, int], scale: int, rows: int, cols: int):
+        assert scale == 1, f"Implement scaling as a combined scaled surface"
+
         r, c = rows, cols
         self.rows = rows
         self.cols = cols
@@ -49,7 +51,6 @@ class SimpleScreenRxC:
 
         w, h = screen_size
         self.screen_size = screen_size
-        self.screen_size_scaled = (w * scale, h * scale)
         self.window_size = (self.screen_size[0] * c, self.screen_size[1] * r)
 
         self.window = None
@@ -61,7 +62,8 @@ class SimpleScreenRxC:
             for ri in range(rows)
             for ci in range(cols)
         ]
-        self.combined_surf_scaled = pygame.Surface(self.window_size)
+
+        self.dirty_screen_indexes = set()
 
     def get_as_image(self, screen_index: int) -> Image:
         surf = self.surfs[screen_index]
@@ -76,10 +78,14 @@ class SimpleScreenRxC:
         # print(f"SURF SIZE: {self.surfs[screen_index].get_size()}  image.shape={image_np.shape}")
         pygame.surfarray.blit_array(self.surfs[screen_index], image_np)
 
+        self.dirty_screen_indexes.add(screen_index)
+
     def blit_image(self, image: Image, screen_index: int):
         assert image.mode == 'RGB', f"Unexpected image mode: {image.mode} != RGB"
         image_np = np.asarray(image).swapaxes(0, 1)
         pygame.surfarray.blit_array(self.surfs[screen_index], image_np)
+
+        self.dirty_screen_indexes.add(screen_index)
 
     def show(self):
         if self.window is None:
@@ -88,15 +94,30 @@ class SimpleScreenRxC:
             pygame.display.init()
             self.window = pygame.display.set_mode(self.window_size)
 
-        if self.scale != 1:
-            pygame.transform.scale(surface=self.combined_surf, size=self.window_size, dest_surface=self.combined_surf_scaled)
-            self.window.blit(self.combined_surf_scaled, dest=(0, 0))
-        else:
-            pygame.transform.scale(surface=self.combined_surf, size=self.window_size, dest_surface=self.combined_surf_scaled)
-            self.window.blit(self.combined_surf, dest=(0, 0))
+        self.window.blit(self.combined_surf, dest=(0, 0))
 
-        pygame.event.pump()
-        pygame.display.flip()
+        if len(self.dirty_screen_indexes) == len(self.surfs):
+            # All screens dirty, update everything.
+            pygame.display.flip()
+        else:
+            w, h = self.screen_size
+
+            # Update only screens that are dirty.
+            rects = []
+            for screen_index in self.dirty_screen_indexes:
+                r = screen_index // self.rows
+                c = screen_index % self.cols
+
+                x0, y0 = c * w, r * h
+                x1, y1 = (c+1) * w, (r+1) * h
+
+                rect = ((x0, y0), (x1, y1))
+
+                rects.append(rect)
+
+            pygame.display.update(rects)
+
+        self.dirty_screen_indexes.clear()
 
     def close(self):
         if self.window is not None:
