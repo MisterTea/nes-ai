@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw
 from torch.utils.tensorboard import SummaryWriter
 
 from super_mario_env_search import SuperMarioEnv, SCREEN_H, SCREEN_W, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses, get_time_left, life
-from super_mario_env_ram_hacks import encode_world_level
+from super_mario_env_ram_hacks import decode_world_level, encode_world_level
 
 from gymnasium.envs.registration import register
 
@@ -132,7 +132,10 @@ class Args:
     start_level: tuple[int,int] = (7,4)
     max_trajectory_steps: int = -1
     patch_size: int = 32
-    reservoir_history_length: int = 4
+
+    # TODO(millman): need enough history to distinguish between paths for 7-4 and 8-4; works with len=20.
+    #   All other levels are much faster with history of length 3, or even 1.
+    reservoir_history_length: int = 1
     max_trajectory_patches_x: int = 3
     flip_prob: float = 0.03
 
@@ -851,6 +854,26 @@ _MAX_LEVEL_DIST = 6400
 _SPACE_R = 0
 
 
+def _history_length_for_level(default_history_length: int, natural_world_level: tuple[int, int]) -> int:
+    WORLD_LEVEL_TO_LEN = {
+        (7, 4): 20,
+        (8, 4): 20,
+    }
+
+    world, level = natural_world_level
+
+    if (world, level) not in WORLD_LEVEL_TO_LEN:
+        return default_history_length
+
+    custom_len = WORLD_LEVEL_TO_LEN[(world, level)]
+    if default_history_length < custom_len:
+        print(f"Increasing history length, required for level {world}-{level}: {custom_len}")
+        return custom_len
+    else:
+        print(f"Satisfied history length, required for level {world}-{level}: {default_history_length}")
+        return default_history_length
+
+
 def main():
     args = tyro.cli(Args)
 
@@ -955,10 +978,10 @@ def main():
 
     level_ticks = -1
 
-    reservoir_history_length = args.reservoir_history_length
     patch_history = []
     visited_patches_x = set()
 
+    reservoir_history_length = _history_length_for_level(args.reservoir_history_length, args.start_level)
     saves = PatchReservoir(patch_size=patch_size, reservoir_history_length=reservoir_history_length)
     force_terminate = False
     steps_since_load = 0
@@ -1221,6 +1244,8 @@ def main():
 
                 assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
 
+                natural_world_level = encode_world_level(world, level)
+                reservoir_history_length = _history_length_for_level(args.reservoir_history_length, natural_world_level)
                 saves = PatchReservoir(patch_size=patch_size, reservoir_history_length=reservoir_history_length)
                 saves.add(SaveInfo(
                     save_id=next_save_id,
