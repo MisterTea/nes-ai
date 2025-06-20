@@ -526,7 +526,10 @@ def _choose_save_from_history(saves: list[SaveInfo], saves_reservoir: PatchReser
     return sample, patch_id_and_weight_pairs
 
 
-def _score_patch(p_stats: PatchStats, max_possible_transitions: int) -> float:
+_DEBUG_SCORE_PATCH = False
+
+
+def _score_patch(patch_id: PatchId, p_stats: PatchStats, max_possible_transitions: int) -> float:
     # Score recommended by Go-Explore paper: https://arxiv.org/abs/1901.10995, an estimate of recent productivity.
     # If the patch has recently produced children, keep exploring.  As the patch gets selected more,
     # its productivity will drop.
@@ -577,7 +580,6 @@ def _score_patch(p_stats: PatchStats, max_possible_transitions: int) -> float:
 
     # Threshold entropy.  When we have fewer than the max possible transitions, just assume we have max entropy.
     if True:
-
         if total < max_possible_transitions:
             # Max possible entropy is a single count for every possible transition.
             probs = np.full(max_possible_transitions, fill_value=1.0 / max_possible_transitions, dtype=np.float64)
@@ -586,7 +588,13 @@ def _score_patch(p_stats: PatchStats, max_possible_transitions: int) -> float:
 
         transition_entropy = -np.sum(probs * np.log2(probs))
 
-    print(f"SCORED PATCH: productivity_score={productivity_score} transition_entropy={transition_entropy:.4f} {total=} {max_possible_transitions=}")
+        # Ensure the transition score includes the number of times the state is selected.  It's
+        # possible that Mario is about to die, in which case we want to reduce the probability
+        # that this cell gets selected.  Otherwise, Mario can get stuck on this cell if it's
+        # entropy score is very high.
+        e = 1.0
+        beta = 1.0
+        transition_score = (transition_entropy + e) / (p_stats.num_selected + beta)
 
     # Some sample values for score parts:
     #   productivity_score=1.0 transition_entropy=0.7219 total=5 max_possible_transitions=4
@@ -597,13 +605,29 @@ def _score_patch(p_stats: PatchStats, max_possible_transitions: int) -> float:
     #   productivity_score=0.5 transition_entropy=1.4488 total=7 max_possible_transitions=4
     #   productivity_score=1.0 transition_entropy=0.9852 total=7 max_possible_transitions=4
 
-    score = productivity_score + transition_entropy
+    if _DEBUG_SCORE_PATCH:
+        print(f"Scored patch: {patch_id}: productivity_score={productivity_score:.4f} transition_entropy={transition_entropy:.4f} transition_score={transition_score:.4f} {total=} {max_possible_transitions=}")
+
+    score = productivity_score + transition_score
 
     return score
 
 
-def _choose_save_from_stats(saves_reservoir: PatchReservoir, patches_stats: dict[PatchId, PatchStats], rng: Any) -> SaveInfo:#
-    patch_ids = list(patches_stats.keys())
+def _choose_save_from_stats(saves_reservoir: PatchReservoir, patches_stats: dict[PatchId, PatchStats], rng: Any) -> SaveInfo:
+    valid_patch_ids = []
+    valid_patch_stats = []
+    patches_with_missing_reservoir = {}
+    for patch_id, p_stats in patches_stats.items():
+        if saves_reservoir._patch_to_reservoir_ids[patch_id]:
+            valid_patch_ids.append(patch_id)
+            valid_patch_stats.append(p_stats)
+        else:
+            patches_with_missing_reservoir[patch_id] = p_stats
+
+    if _DEBUG_SCORE_PATCH and patches_with_missing_reservoir:
+        print("Missing reservoir for patches:")
+        for patch_id, p_stats in patches_with_missing_reservoir.items():
+            print(f"  {patch_id}: {p_stats}")
 
     # For a given patch size and Mario movement speed, we can have different max possible transitions.
     # Since mario can jump a number of pixels at a time, he may transition from 1, 2, or even more
@@ -614,18 +638,23 @@ def _choose_save_from_stats(saves_reservoir: PatchReservoir, patches_stats: dict
     # theoretical.  Note we want the number of unique transitions, not the count of transitions.
     max_possible_transitions = max((
         len(p_stats.transitioned_to_patch)
-        for p_stats in patches_stats.values()
+        for p_stats in valid_patch_stats
     ), default=1)
 
     # Calculate patch scores.
     scores = np.fromiter((
-        _score_patch(p_stats, max_possible_transitions=max_possible_transitions)
-        for p_stats in patches_stats.values()
+        _score_patch(patch_id, p_stats, max_possible_transitions=max_possible_transitions)
+        for patch_id, p_stats in zip(valid_patch_ids, valid_patch_stats)
     ), dtype=np.float64)
 
     # Pick patch based on score.  Deterministic.
     chosen_patch_index = np.argmax(scores)
-    chosen_patch = patch_ids[chosen_patch_index]
+    chosen_patch = valid_patch_ids[chosen_patch_index]
+
+    if _DEBUG_SCORE_PATCH:
+        print(f"Picked patch: {chosen_patch} score={scores[chosen_patch_index]} {saves_reservoir._patch_to_reservoir_ids[chosen_patch]=}")
+
+    assert chosen_patch not in patches_with_missing_reservoir, f"Shouldn't have picked a patch with no save states: {chosen_patch}"
 
     # Pick reservoir by exponential weighting.
     reservoir_id_list = list(saves_reservoir._patch_to_reservoir_ids[chosen_patch])
@@ -652,7 +681,7 @@ def _choose_save_from_stats(saves_reservoir: PatchReservoir, patches_stats: dict
 
     sample = saves_list[0]
 
-    patch_id_and_weight_pairs = list(zip(patch_ids, scores))
+    patch_id_and_weight_pairs = list(zip(valid_patch_ids, scores))
 
     return sample, patch_id_and_weight_pairs
 
@@ -1158,6 +1187,9 @@ def main():
         prev_x = x
         prev_lives = lives
 
+        # Update action every frame.
+        controller = controller = flip_buttons_by_action_in_place(controller, transition_matrix=transition_matrix, action_index_to_controller=ACTION_INDEX_TO_CONTROLLER, controller_to_action_index=CONTROLLER_TO_ACTION_INDEX)
+
         action_history.append(controller)
 
         # Execute action.
@@ -1190,6 +1222,10 @@ def main():
             else:
                 print(f"Discountinuous x position: {prev_x} -> {x}")
 
+        # ---------------------------------------------------------------------
+        # Trajectory ending criteria
+        # ---------------------------------------------------------------------
+
         if False: # x > 65000:
             # 0x006D  Current screen (in which the player is currently in, increase or decrease depending on player's position)
             # 0x0086  Player x position on screen
@@ -1205,13 +1241,243 @@ def main():
             print(f"Lost a life: x={x} ticks_left={ticks_left}")
             raise AssertionError("Missing termination flag for lost life")
 
+        # Stop after some fixed number of steps.  This will force the sampling logic to run more often,
+        # which means we won't waste as much time running through old states.
+        if args.max_trajectory_steps > 0 and steps_since_load >= args.max_trajectory_steps:
+            print(f"Ending trajectory, max steps for trajectory: {steps_since_load}: x={x} ticks_left={ticks_left}")
+            force_terminate = True
+
+        elif args.max_trajectory_patches_x > 0 and patches_x_since_load >= args.max_trajectory_patches_x:
+            print(f"Ending trajectory, max patches x for trajectory: {patches_x_since_load}: x={x} ticks_left={ticks_left}")
+            force_terminate = True
+
+        # If we died, skip.
+        elif lives < prev_lives:
+            print(f"Lost a life: x={x} ticks_left={ticks_left}")
+            force_terminate = True
+
+        # Stop if we've jumped backwards and already visited this state.  It indicates a
+        # backwards jump in the level, like in 7-4.  We should massively penalize the entire
+        # path that got here, since it's very for the algorithm to look back enough steps to
+        # realize that it should keep searching.
+        elif (
+            patch_history and
+            patch_id.patch_x - patch_history[-1].patch_x < -10 and
+            patch_id.patch_x in visited_patches_x and
+            world == prev_world and level == prev_level
+        ):
+            print(f"Ending trajectory, backward jump from {prev_x} -> {x}: x={x} ticks_left={ticks_left}")
+
+            PENALTY = 1000
+            pen = f"+{PENALTY}"
+
+            print(f"Penalizing patches and reservoirs:")
+            for j in range(len(patch_history)):
+                i = max(0, j - reservoir_history_length)
+                ph = patch_history[i:j+1]
+                try:
+                    p_id = ph[-1]
+                except IndexError:
+                    print(f"WHAT WENT WRONG?: i={i} j={j} res_hist_len={reservoir_history_length} ph={ph} ")
+                    raise
+
+                r_id = ReservoirId(tuple(ph[-reservoir_history_length:]))
+
+                print(f"  p:{p_id} r:{r_id}: {saves._patch_seen_counts[p_id]} -> {pen}, {saves._reservoir_seen_counts[r_id]} -> {pen}")
+                saves._patch_seen_counts[p_id] += PENALTY
+                saves._patch_count_since_refresh[p_id] += PENALTY
+                saves._reservoir_seen_counts[r_id] += PENALTY
+                saves._reservoir_count_since_refresh[r_id] += PENALTY
+
+            force_terminate = True
+
+        # Stop if we double-back to the same x patch within a trajectory.
+        #
+        # Must check only the x patch, since we can't avoid visiting a state by changing y.
+        # If we jump up and down, we'll get back to the same state we were just on.
+        #
+        # TODO(millman): This seems really powerful for preventing wasting search space, but there
+        #   are a few places in the game where mario needs to go back and forth on x, when advancing
+        #   the y position.  Maybe if total number of patches revisited is too many?
+        #   This is also still not easily getting past 7-4; the specific path and jump is a really
+        #   narrow sequence.
+        #
+        #   Overall, seems like there needs to be a smarter algorithm to find states that are
+        #   accessible, but not easily accessible.
+        elif (
+            patch_history and
+            patch_id.patch_x != patch_history[-1].patch_x and
+            patch_id.patch_x in visited_patches_x and
+            world == prev_world and level == prev_level
+        ):
+            print(f"Ending trajectory, revisited x patch: {patch_id.patch_x}: x={x} ticks_left={ticks_left}")
+            force_terminate = True
+
+        # ---------------------------------------------------------------------
+        # Handle new level reached
+        # ---------------------------------------------------------------------
+
+        # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
+        # Also dump state histogram.
+        if world != prev_world or level != prev_level:
+            # Print before-level-end info.
+            if True:
+                _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load, patches_x_since_load=patches_x_since_load)
+
+            # Set number of ticks in level to the current ticks.
+            level_ticks = get_time_left(ram)
+
+            # Clear state.
+            action_history = []
+            state_history = []
+            visited_patches_in_level = set()
+            visited_patches_x = set()
+
+            visited_patches_in_level.add(patch_id)
+            visited_patches_x.add(patch_id.patch_x)
+
+            patch_history = []
+            patch_history.append(patch_id)
+            # assert len(patch_history) <= reservoir_history_length, f"Patch history is too large?: size={len(patch_history)}"
+
+            print(f"Starting level: {_str_level(world, level)}")
+
+            # Update derived state.
+            ticks_used = max(1, level_ticks - ticks_left)
+
+            # Print after-level-start info.
+            if True:
+                _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load, patches_x_since_load=patches_x_since_load)
+
+            assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
+
+            natural_world_level = encode_world_level(world, level)
+            reservoir_history_length = _history_length_for_level(args.reservoir_history_length, natural_world_level)
+            saves = PatchReservoir(patch_size=patch_size, reservoir_history_length=reservoir_history_length)
+            saves.add(SaveInfo(
+                save_id=next_save_id,
+                x=x,
+                y=y,
+                level=level,
+                world=world,
+                level_ticks=level_ticks,
+                ticks_left=ticks_left,
+                save_state=nes.save(),
+                action_history=action_history.copy(),
+                state_history=state_history.copy(),
+                patch_history=patch_history.copy(),
+                visited_patches_x=visited_patches_x.copy(),
+                controller_state=controller.copy(),
+                controller_state_user=nes.controller1.is_pressed_user.copy(),
+            ))
+            next_save_id += 1
+
+            patches_stats = defaultdict(PatchStats)
+
+            # Fill out stats for current patch.  Do not include transitions.
+            p_stats = patches_stats[patch_id]
+            p_stats.num_visited += 1
+            p_stats.num_selected += 1
+            p_stats.last_selected_step = step
+            p_stats.last_visited_step = step
+
+            last_selected_patch_id = patch_id
+
+        # ---------------------------------------------------------------------
+        # Handle patch transitions
+        # ---------------------------------------------------------------------
+        #
+        # Track patch stats even if we terminate on this patch.
+
+        if patch_id != patch_history[-1]:
+            if termination or force_terminate:
+                print(f"Updating patch stats on terminate: {patch_id}")
+
+            prev_patch_id = patch_history[-1]
+
+            # Update patch stats.
+            p_stats = patches_stats[patch_id]
+            p_stats.num_visited += 1
+            p_stats.last_visited_step = step
+            p_stats.transitioned_from_patch[prev_patch_id] += 1
+
+            if patch_id not in visited_patches_in_level:
+                p_stats.num_children += 1
+                p_stats.num_children_since_last_visited += 1
+
+                p_last_selected_stats = patches_stats[last_selected_patch_id]
+                p_last_selected_stats.num_children += 1
+                p_last_selected_stats.num_children_since_last_selected += 1
+
+                visited_patches_in_level.add(patch_id)
+
+            p_prev_stats = patches_stats[prev_patch_id]
+            p_prev_stats.transitioned_to_patch[patch_id] += 1
+
+
+        if patch_id != patch_history[-1] and not (termination or force_terminate):
+            valid_lives = lives > 1 and lives < 100
+            valid_x = True  # x < 65500
+
+            # NOTE: Some levels (like 4-4) are discontinuous.  We can get x values of > 65500.
+            if not valid_x:
+                # TODO(millman): how did we get into a weird x state?  Happens on 4-4.
+                print(f"RAM values: ram[0x006D]={ram[0x006D]=} * 256 + ram[0x0086]={ram[0x0086]=}")
+                print(f"Something is wrong with the x position, don't save this state: level={_str_level(world, level)} x={x} y={y} lives={lives} ticks-left={ticks_left} states={len(saves)} actions={len(action_history)}")
+                raise AssertionError("STOP")
+
+            if not valid_lives:
+                # TODO(millman): how did we get to a state where we don't have full lives?
+                print(f"Something is wrong with the lives, don't save this state: level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} lives={lives} steps_since_load={steps_since_load} patches_x_since_load={patches_x_since_load}")
+                raise AssertionError("STOP")
+
+            if patch_id.patch_x not in visited_patches_x:
+                visited_patches_x.add(patch_id.patch_x)
+                new_patches_x_since_load += 1
+
+            # NOTE: These are any patches since load, not *new* patches load.
+            if patch_id.patch_x != patch_history[-1].patch_x:
+                patches_x_since_load += 1
+
+            patch_history.append(patch_id)
+
+            save_info = SaveInfo(
+                save_id=next_save_id,
+                x=x,
+                y=y,
+                level=level,
+                world=world,
+                level_ticks=level_ticks,
+                ticks_left=ticks_left,
+                save_state=nes.save(),
+                action_history=action_history.copy(),
+                state_history=state_history.copy(),
+                patch_history=patch_history.copy(),
+                visited_patches_x=visited_patches_x.copy(),
+                controller_state=controller.copy(),
+                controller_state_user=nes.controller1.is_pressed_user.copy(),
+            )
+            saves.add(save_info)
+            next_save_id += 1
+
+            state_history.append(save_info)
+
+        # ---------------------------------------------------------------------
+        # Handle trajectory end
+        # ---------------------------------------------------------------------
+        #
+        # Trajectory can end from either from Mario dying or a forced ending criteria.
+        #
+        # Note that we want to handle ending trajectories after we've processed the transition.
+        # We need to ensure that stats for the new state are handled correctly.
+
         # If we died, reload from a game state based on heuristic.
         if termination or force_terminate:
 
             # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
             # Also dump state histogram.
             if world != prev_world or level != prev_level:
-                raise AssertionError("Reached a new world ({prev_world}-{prev_level} -> {world}-{level}), but also terminated?")
+                raise AssertionError(f"Reached a new world ({prev_world}-{prev_level} -> {world}-{level}), but also terminated?")
 
             # In AutoresetMode.DISABLED, we have to reset ourselves.
             # Reset only if we hit a termination state.  Otherwise, we can just reload.
@@ -1319,238 +1585,9 @@ def main():
 
             assert patch_id in visited_patches_in_level, f"Missing patch_id in visited, even though chosen as start point: {patch_id}"
 
-        # Stop after some fixed number of steps.  This will force the sampling logic to run more often,
-        # which means we won't waste as much time running through old states.
-        elif args.max_trajectory_steps > 0 and steps_since_load >= args.max_trajectory_steps:
-            print(f"Ending trajectory, max steps for trajectory: {steps_since_load}: x={x} ticks_left={ticks_left}")
-            force_terminate = True
-
-        elif args.max_trajectory_patches_x > 0 and patches_x_since_load >= args.max_trajectory_patches_x:
-            print(f"Ending trajectory, max patches x for trajectory: {patches_x_since_load}: x={x} ticks_left={ticks_left}")
-            force_terminate = True
-
-        # If we died, skip.
-        elif lives < prev_lives:
-            print(f"Lost a life: x={x} ticks_left={ticks_left}")
-            force_terminate = True
-
-        # Stop if we've jumped backwards and already visited this state.  It indicates a
-        # backwards jump in the level, like in 7-4.  We should massively penalize the entire
-        # path that got here, since it's very for the algorithm to look back enough steps to
-        # realize that it should keep searching.
-        elif (
-            patch_history and
-            patch_id.patch_x - patch_history[-1].patch_x < -10 and
-            patch_id.patch_x in visited_patches_x and
-            world == prev_world and level == prev_level
-        ):
-            print(f"Ending trajectory, backward jump from {prev_x} -> {x}: x={x} ticks_left={ticks_left}")
-
-            PENALTY = 1000
-            pen = f"+{PENALTY}"
-
-            print(f"Penalizing patches and reservoirs:")
-            for j in range(len(patch_history)):
-                i = max(0, j - reservoir_history_length)
-                ph = patch_history[i:j+1]
-                try:
-                    p_id = ph[-1]
-                except IndexError:
-                    print(f"WHAT WENT WRONG?: i={i} j={j} res_hist_len={reservoir_history_length} ph={ph} ")
-                    raise
-
-                r_id = ReservoirId(tuple(ph[-reservoir_history_length:]))
-
-                print(f"  p:{p_id} r:{r_id}: {saves._patch_seen_counts[p_id]} -> {pen}, {saves._reservoir_seen_counts[r_id]} -> {pen}")
-                saves._patch_seen_counts[p_id] += PENALTY
-                saves._patch_count_since_refresh[p_id] += PENALTY
-                saves._reservoir_seen_counts[r_id] += PENALTY
-                saves._reservoir_count_since_refresh[r_id] += PENALTY
-
-            force_terminate = True
-
-        # Stop if we double-back to the same x patch within a trajectory.
-        #
-        # TODO(millman): This seems really powerful for preventing wasting search space, but there
-        #   are a few places in the game where mario needs to go back and forth on x, when advancing
-        #   the y position.  Maybe if total number of patches revisited is too many?
-        #   This is also still not easily getting past 7-4; the specific path and jump is a really
-        #   narrow sequence.
-        #
-        #   Overall, seems like there needs to be a smarter algorithm to find states that are
-        #   accessible, but not easily accessible.
-        elif False and (
-            patch_history and
-            patch_id.patch_x != patch_history[-1].patch_x and
-            patch_id.patch_x in visited_patches_x and
-            world == prev_world and level == prev_level
-        ):
-            print(f"Ending trajectory, revisited x patch: {patch_id.patch_x}: x={x} ticks_left={ticks_left}")
-            force_terminate = True
-
-        # If we made progress, save state.
-        #   * Assign (level, x, y) patch position to save state.
-        #   * Add state to buffer, with vector-time (number of total actions taken)
-        else:
-            # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
-            # Also dump state histogram.
-            if world != prev_world or level != prev_level:
-                # Print before-level-end info.
-                if True:
-                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load, patches_x_since_load=patches_x_since_load)
-
-                # Set number of ticks in level to the current ticks.
-                level_ticks = get_time_left(ram)
-
-                # Clear state.
-                action_history = []
-                state_history = []
-                visited_patches_in_level = set()
-                visited_patches_x = set()
-
-                visited_patches_in_level.add(patch_id)
-                visited_patches_x.add(patch_id.patch_x)
-
-                patch_history = []
-                patch_history.append(patch_id)
-                # assert len(patch_history) <= reservoir_history_length, f"Patch history is too large?: size={len(patch_history)}"
-
-                print(f"Starting level: {_str_level(world, level)}")
-
-                # Update derived state.
-                ticks_used = max(1, level_ticks - ticks_left)
-
-                # Print after-level-start info.
-                if True:
-                    _print_info(dt=now-start_time, world=world, level=level, x=x, y=y, ticks_left=ticks_left, ticks_used=ticks_used, saves=saves, step=step, steps_since_load=steps_since_load, patches_x_since_load=patches_x_since_load)
-
-                assert lives > 1 and lives < 100, f"How did we end up with lives?: {lives}"
-
-                natural_world_level = encode_world_level(world, level)
-                reservoir_history_length = _history_length_for_level(args.reservoir_history_length, natural_world_level)
-                saves = PatchReservoir(patch_size=patch_size, reservoir_history_length=reservoir_history_length)
-                saves.add(SaveInfo(
-                    save_id=next_save_id,
-                    x=x,
-                    y=y,
-                    level=level,
-                    world=world,
-                    level_ticks=level_ticks,
-                    ticks_left=ticks_left,
-                    save_state=nes.save(),
-                    action_history=action_history.copy(),
-                    state_history=state_history.copy(),
-                    patch_history=patch_history.copy(),
-                    visited_patches_x=visited_patches_x.copy(),
-                    controller_state=controller.copy(),
-                    controller_state_user=nes.controller1.is_pressed_user.copy(),
-                ))
-                next_save_id += 1
-
-                patches_stats = defaultdict(PatchStats)
-
-                # Fill out stats for current patch.  Do not include transitions.
-                p_stats = patches_stats[patch_id]
-                p_stats.num_visited += 1
-                p_stats.num_selected += 1
-                p_stats.last_selected_step = step
-                p_stats.last_visited_step = step
-
-                last_selected_patch_id = patch_id
-
-            elif patch_id != patch_history[-1]:
-                valid_lives = lives > 1 and lives < 100
-                valid_x = True  # x < 65500
-
-                # NOTE: Some levels (like 4-4) are discontinuous.  We can get x values of > 65500.
-                if not valid_x:
-                    # TODO(millman): how did we get into a weird x state?  Happens on 4-4.
-                    print(f"RAM values: ram[0x006D]={ram[0x006D]=} * 256 + ram[0x0086]={ram[0x0086]=}")
-                    print(f"Something is wrong with the x position, don't save this state: level={_str_level(world, level)} x={x} y={y} lives={lives} ticks-left={ticks_left} states={len(saves)} actions={len(action_history)}")
-                    raise AssertionError("STOP")
-
-                if not valid_lives:
-                    # TODO(millman): how did we get to a state where we don't have full lives?
-                    print(f"Something is wrong with the lives, don't save this state: level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} lives={lives} steps_since_load={steps_since_load} patches_x_since_load={patches_x_since_load}")
-                    raise AssertionError("STOP")
-
-                prev_patch_id = patch_history[-1]
-
-                # Update patch stats.
-                p_stats = patches_stats[patch_id]
-                p_stats.num_visited += 1
-                p_stats.last_visited_step = step
-                p_stats.transitioned_from_patch[prev_patch_id] += 1
-
-                if patch_id not in visited_patches_in_level:
-                    p_stats.num_children += 1
-                    p_stats.num_children_since_last_visited += 1
-
-                    p_last_selected_stats = patches_stats[last_selected_patch_id]
-                    p_last_selected_stats.num_children += 1
-                    p_last_selected_stats.num_children_since_last_selected += 1
-
-                    visited_patches_in_level.add(patch_id)
-
-                p_prev_stats = patches_stats[prev_patch_id]
-                p_prev_stats.transitioned_to_patch[patch_id] += 1
-
-                if patch_id.patch_x not in visited_patches_x:
-                    visited_patches_x.add(patch_id.patch_x)
-                    new_patches_x_since_load += 1
-
-                # NOTE: These are any patches since load, not *new* patches load.
-                if patch_id.patch_x != patch_history[-1].patch_x:
-                    patches_x_since_load += 1
-
-                # Can't avoid visiting a state, because if we jump up and down, we'll get back to the same
-                # state we were just on.  TODO(millman): to make this work, need to keep track of frontier?  Otherwise we end up sampling non-sense trajectories?
-                # What if we wait until we've hit the same state a few times in a row as a detection of if we're retracing ground?
-                if False:
-                    # Find the trajectory that got to this state, but took the most actions.
-                    saves_in_patch = saves._saves_by_reservoir[patch_id]
-                    if saves_in_patch:
-                        # We've already been to this patch, get the slowest action history.
-                        max_item = max(saves_in_patch, key=lambda save: len(save.action_history))
-                        max_action_history = len(max_item.action_history)
-                    else:
-                        # We haven't been to this patch, use a virtual history that is slower than the current history.
-                        max_action_history = len(action_history) + 1
-
-                    # Stop this trajectory if we've already arrived at this state, but with more actions than other trajectories.
-                    if len(action_history) >= max_action_history:
-                        print(f"Ending trajectory, revisited state: actions {len(action_history)} > {len(max_item.action_history)}: x={x} ticks_left={ticks_left}")
-                        force_terminate = True
-
-                else:
-                    patch_history.append(patch_id)
-
-                    save_info = SaveInfo(
-                        save_id=next_save_id,
-                        x=x,
-                        y=y,
-                        level=level,
-                        world=world,
-                        level_ticks=level_ticks,
-                        ticks_left=ticks_left,
-                        save_state=nes.save(),
-                        action_history=action_history.copy(),
-                        state_history=state_history.copy(),
-                        patch_history=patch_history.copy(),
-                        visited_patches_x=visited_patches_x.copy(),
-                        controller_state=controller.copy(),
-                        controller_state_user=nes.controller1.is_pressed_user.copy(),
-                    )
-                    saves.add(save_info)
-                    next_save_id += 1
-
-                    state_history.append(save_info)
-
-            else:
-                assert patch_id == patch_history[-1], f"Missed case of transitioning patches: {patch_id} != {patch_history[-1]}"
-
-        # Update action every frame.
-        controller = controller = flip_buttons_by_action_in_place(controller, transition_matrix=transition_matrix, action_index_to_controller=ACTION_INDEX_TO_CONTROLLER, controller_to_action_index=CONTROLLER_TO_ACTION_INDEX)
+        # ---------------------------------------------------------------------
+        # Loop updates
+        # ---------------------------------------------------------------------
 
         # Print stats every second:
         #   * Current position: (x, y)
