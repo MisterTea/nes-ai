@@ -130,17 +130,20 @@ class Args:
     """enable or disable training of the agent"""
 
     # Specific experiments
-    reset_to_save_state: bool = False
     headless: bool = False
     print_freq_sec: float = 1.0
     start_level: tuple[int,int] = (7,4)
-    max_trajectory_steps: int = -1
+
     patch_size: int = 32
 
     # TODO(millman): need enough history to distinguish between paths for 7-4 and 8-4; works with len=20.
     #   All other levels are much faster with history of length 3, or even 1.
     reservoir_history_length: int = 1
+
+    max_trajectory_steps: int = -1
     max_trajectory_patches_x: int = 3
+    max_trajectory_revisit_x: int = 2
+
     flip_prob: float = 0.03
 
     # Visualization
@@ -1175,6 +1178,8 @@ def main():
     patch_history = []
     visited_patches_x = set()
 
+    revisited_x = 0
+
     reservoir_history_length = _history_length_for_level(args.reservoir_history_length, args.start_level)
     saves = PatchReservoir(patch_size=patch_size, reservoir_history_length=reservoir_history_length)
     patches_stats = defaultdict(PatchStats)
@@ -1320,8 +1325,11 @@ def main():
             patch_id.patch_x in visited_patches_x and
             world == prev_world and level == prev_level
         ):
-            print(f"Ending trajectory, revisited x patch: {patch_id.patch_x}: x={x} ticks_left={ticks_left}")
-            force_terminate = True
+            revisited_x += 1
+
+            if args.max_trajectory_revisit_x > 0 and revisited_x > args.max_trajectory_revisit_x:
+                print(f"Ending trajectory, revisited x patch: {patch_id.patch_x}: x={x} ticks_left={ticks_left}")
+                force_terminate = True
 
         # ---------------------------------------------------------------------
         # Handle new level reached
@@ -1342,6 +1350,8 @@ def main():
             state_history = []
             visited_patches_in_level = set()
             visited_patches_x = set()
+
+            revisited_x = 0
 
             visited_patches_in_level.add(patch_id)
             visited_patches_x.add(patch_id.patch_x)
@@ -1534,6 +1544,8 @@ def main():
             action_history = save_info.action_history.copy()
             state_history = save_info.state_history.copy()
             visited_patches_x = save_info.visited_patches_x.copy()
+
+            revisited_x = 0
 
             # Read current state.
             world = get_world(ram)
