@@ -206,10 +206,17 @@ class SuperMarioEnv(gym.Env):
 
         # Reset CPU and controller.
         self.nes.reset()
-        self.nes.controller1.set_state(_to_controller_presses([]))
+
+        # Read the controller from the keyboard to clear it out.
+        if _USE_KEYBOARD_INPUT := True:
+            self.nes.read_controller_presses()
+        self.nes.keys_pressed = []
 
         # Load from saved state, after start screen.
         self.nes.load(self.start_state)
+
+        # Reset the controller.
+        self.nes.controller1.set_state(_to_controller_presses([]))
 
         # Get initial values.
         observation = self._get_obs()
@@ -237,26 +244,23 @@ class SuperMarioEnv(gym.Env):
         if _USE_KEYBOARD_INPUT := True:
             self.nes.read_controller_presses()
 
-        # If user pressed anything, avoid applying actions.
-        if self.nes.controller1.is_pressed.any():
+        # If user pressed anything, avoid applying input actions.
+        if self.nes.controller1.is_pressed_user.any():
+            action = self.nes.controller1.is_pressed_user
+
             if PRINT_CONTROLLER:
-                controller_desc = _describe_controller_vector(self.nes.controller1.is_pressed)
+                controller_desc = _describe_controller_vector(action)
                 print(f"Controller (user pressed): {controller_desc}")
+        # Use input actions.
         else:
-            # Convert an action_index into a specific set of controller actions.
             action = controller_presses
 
-            if False:
-                # Set fixed action, for testing.
-                # Right button.
-                action[7] = 1
-
             if PRINT_CONTROLLER:
-                print(f"CONTROLLER 1 ACTION: {action}")
                 controller_desc = _describe_controller_vector(action)
                 print(f"Controller (input action): {controller_desc}")
 
-            self.nes.controller1.set_state(action)
+        # Update the controller state, either from user or input to function.
+        self.nes.controller1.set_state(action)
 
         if PRINT_CONTROLLER:
             controller_desc = _describe_controller_vector(self.nes.controller1.is_pressed)

@@ -445,9 +445,26 @@ cdef class NES:
         self.keep_going = True
 
     cpdef void read_controller_presses(self):
-        # update the controllers once per frame
-        self.controller1.update()
-        self.controller2.update()
+        # Check for an event.
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                # if audio:
+                #     self.player.stop_stream()
+                #     self.player.close()
+                #     self.pyaudio_obj.terminate()
+                pass
+            elif event.type == pygame.KEYDOWN:
+                self.keys_pressed.append(event.key)
+
+                # update the controllers once per frame
+                self.controller1.update(event)
+                self.controller2.update()
+            elif event.type == pygame.KEYUP:
+                self.controller1.update(event)
+                self.controller2.update()
+            else:
+                pass
 
     cpdef bint run_frame(self):
         # cdef int vblank_started=False
@@ -523,111 +540,112 @@ cdef class NES:
         if not keep_going:
             return False
 
-        # Check for an exit
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                if audio:
-                    self.player.stop_stream()
-                    self.player.close()
-                    self.pyaudio_obj.terminate()
-                return False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_1:
-                    show_hud = not show_hud
-                if event.key == pygame.K_0:
-                    if not mute:
-                        self.apu.set_volume(0)
-                        mute = True
-                    else:
+        if False:
+            # Check for an exit
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    if audio:
+                        self.player.stop_stream()
+                        self.player.close()
+                        self.pyaudio_obj.terminate()
+                    return False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_1:
+                        show_hud = not show_hud
+                    if event.key == pygame.K_0:
+                        if not mute:
+                            self.apu.set_volume(0)
+                            mute = True
+                        else:
+                            self.apu.set_volume(volume)
+                            mute = False
+                    if event.key == pygame.K_3:
+                        h = 240 if self.v_overscan else 224
+                        w = 256 if self.h_overscan else 240
+                        sb = np.zeros((w, h), dtype=np.uint32)
+                        self.ppu.copy_screen_buffer_to(sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan)
+                        sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
+                        image = Image.fromarray(sb)
+                        assert image.size == (w,h)
+                        image = image.resize((w*2, h*2))
+
+                        if False:
+                            import pytesseract
+
+                            print(pytesseract.get_languages(config=''))
+                            text = pytesseract.image_to_string(image)
+                            print("OCR:", text)
+                            vlm = GptVisionLanguageModel("test")
+                            text = vlm.vlm(image, prompt="<|image_1|>What words are in this image?", system_prompt="OCR this image.  Only return the words from the image with no other text.  Do not respond like a human.")
+                            print("VLM:", text)
+                            image.save("test.png")
+
+                        if False:
+                            import easyocr
+
+                            # Create an OCR reader object
+                            reader = easyocr.Reader(['en'])
+
+                            # Read text from an image
+                            result = reader.readtext('test.png')
+
+                            # Print the extracted text
+                            for detection in result:
+                                print(detection[0], detection[1])
+
+                        if False:
+                            import keras_ocr
+                            pipeline = keras_ocr.pipeline.Pipeline()
+                            images = [keras_ocr.tools.read('test.png')]
+                            prediction_groups = pipeline.recognize(images)
+                            print("Keras OCR:", prediction_groups)
+
+                    if event.key == pygame.K_MINUS:
+                        volume = max(0, volume - 0.1)
                         self.apu.set_volume(volume)
-                        mute = False
-                if event.key == pygame.K_3:
-                    h = 240 if self.v_overscan else 224
-                    w = 256 if self.h_overscan else 240
-                    sb = np.zeros((w, h), dtype=np.uint32)
-                    self.ppu.copy_screen_buffer_to(sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan)
-                    sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
-                    image = Image.fromarray(sb)
-                    assert image.size == (w,h)
-                    image = image.resize((w*2, h*2))
+                        self.screen.add_text("volume: " + "|" * int(10 * volume),
+                                            (self.OSD_VOL_X, self.OSD_Y),
+                                            self.OSD_TEXT_COLOR, ttl=30)
+                        mute=False
+                    if event.key == pygame.K_EQUALS:
+                        volume = min(1, volume + 0.1)
+                        self.apu.set_volume(volume)
+                        self.screen.add_text("volume: " + "|" * int(10 * volume),
+                                            (self.OSD_VOL_X, self.OSD_Y),
+                                            self.OSD_TEXT_COLOR, ttl=30)
+                        mute=False
+                    if event.key == pygame.K_2:
+                        log_cpu = not log_cpu
+                    if event.key == pygame.K_5:
+                        print("SAVING")
+                        import pickle
+                        with open("save.pickle", "wb") as f:
+                            pickle.dump(self.save(), f)
+                        self.screen.add_text("State save",
+                                            (self.OSD_VOL_X, self.OSD_Y),
+                                            self.OSD_TEXT_COLOR, ttl=30)
+                    if event.key == pygame.K_6:
+                        import pickle
+                        with open("save.pickle", "rb") as f:
+                            pickled_state = pickle.load(f)
+                            print(pickled_state)
+                            self.load(pickled_state)
+                        self.screen.add_text("State load",
+                                            (self.OSD_VOL_X, self.OSD_Y),
+                                            self.OSD_TEXT_COLOR, ttl=30)
+                    if event.key == pygame.K_7:
+                        h = 240 if self.v_overscan else 224
+                        w = 256 if self.h_overscan else 240
+                        sb = np.zeros((w, h), dtype=np.uint32)
+                        self.ppu.copy_screen_buffer_to(sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan)
+                        sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
+                        image = Image.fromarray(sb)
+                        assert image.size == (w,h)
 
-                    if False:
-                        import pytesseract
+                        # image = image.resize((224,224))
 
-                        print(pytesseract.get_languages(config=''))
-                        text = pytesseract.image_to_string(image)
-                        print("OCR:", text)
-                        vlm = GptVisionLanguageModel("test")
-                        text = vlm.vlm(image, prompt="<|image_1|>What words are in this image?", system_prompt="OCR this image.  Only return the words from the image with no other text.  Do not respond like a human.")
-                        print("VLM:", text)
-                        image.save("test.png")
-
-                    if False:
-                        import easyocr
-
-                        # Create an OCR reader object
-                        reader = easyocr.Reader(['en'])
-
-                        # Read text from an image
-                        result = reader.readtext('test.png')
-
-                        # Print the extracted text
-                        for detection in result:
-                            print(detection[0], detection[1])
-
-                    if False:
-                        import keras_ocr
-                        pipeline = keras_ocr.pipeline.Pipeline()
-                        images = [keras_ocr.tools.read('test.png')]
-                        prediction_groups = pipeline.recognize(images)
-                        print("Keras OCR:", prediction_groups)
-
-                if event.key == pygame.K_MINUS:
-                    volume = max(0, volume - 0.1)
-                    self.apu.set_volume(volume)
-                    self.screen.add_text("volume: " + "|" * int(10 * volume),
-                                        (self.OSD_VOL_X, self.OSD_Y),
-                                        self.OSD_TEXT_COLOR, ttl=30)
-                    mute=False
-                if event.key == pygame.K_EQUALS:
-                    volume = min(1, volume + 0.1)
-                    self.apu.set_volume(volume)
-                    self.screen.add_text("volume: " + "|" * int(10 * volume),
-                                        (self.OSD_VOL_X, self.OSD_Y),
-                                        self.OSD_TEXT_COLOR, ttl=30)
-                    mute=False
-                if event.key == pygame.K_2:
-                    log_cpu = not log_cpu
-                if event.key == pygame.K_5:
-                    print("SAVING")
-                    import pickle
-                    with open("save.pickle", "wb") as f:
-                        pickle.dump(self.save(), f)
-                    self.screen.add_text("State save",
-                                        (self.OSD_VOL_X, self.OSD_Y),
-                                        self.OSD_TEXT_COLOR, ttl=30)
-                if event.key == pygame.K_6:
-                    import pickle
-                    with open("save.pickle", "rb") as f:
-                        pickled_state = pickle.load(f)
-                        print(pickled_state)
-                        self.load(pickled_state)
-                    self.screen.add_text("State load",
-                                        (self.OSD_VOL_X, self.OSD_Y),
-                                        self.OSD_TEXT_COLOR, ttl=30)
-                if event.key == pygame.K_7:
-                    h = 240 if self.v_overscan else 224
-                    w = 256 if self.h_overscan else 240
-                    sb = np.zeros((w, h), dtype=np.uint32)
-                    self.ppu.copy_screen_buffer_to(sb, v_overscan=self.v_overscan, h_overscan=self.h_overscan)
-                    sb = sb.view(dtype=np.uint8).reshape((w, h, 4))[:, :, np.array([2, 1, 0])].swapaxes(0, 1)
-                    image = Image.fromarray(sb)
-                    assert image.size == (w,h)
-
-                    # image = image.resize((224,224))
-
-                self.keys_pressed.append(event.key)
+                    self.keys_pressed.append(event.key)
 
         # show the display (if using SYNC_VSYNC mode, this should provide a sync, which must be at 60Hz)
         if self.screen is not None:

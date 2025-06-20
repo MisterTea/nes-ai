@@ -346,6 +346,9 @@ def _skip_start_screen(nes: Any, world_level: tuple[int, int] | None):
 
     ram = nes.ram()
 
+    # Save controller state.
+    controller_state = nes.controller1.save()
+
     LJUST = 35
 
     _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="RUNNING GAME START".ljust(LJUST))
@@ -404,6 +407,9 @@ def _skip_start_screen(nes: Any, world_level: tuple[int, int] | None):
 
     # We're now ready to play.
     _debug_level_from_ram(ram, frame_num=nes.get_frame_num(), desc="READY TO PLAY".ljust(LJUST))
+
+    # Restore original controller state.
+    nes.controller1.load(controller_state)
 
 
 def _left_pos(ram: NdArrayUint8) -> int:

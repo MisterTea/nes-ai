@@ -304,6 +304,7 @@ class ControllerBase:
 
     def __init__(self, active=True):
         self.is_pressed = np.zeros(self.NUM_BUTTONS, dtype=np.uint8)  # array to store key status
+        self.is_pressed_user = np.zeros(self.NUM_BUTTONS, dtype=np.uint8)  # array to store key status
         self._current_bit = 0
         self.strobe = False
         self.active = active  # allows the gamepad to be turned off (acting as if it were disconnected)
@@ -319,7 +320,7 @@ class ControllerBase:
 
     def load(self, data):
         is_pressed, self._current_bit, self.strobe, self.active = data
-        self.is_pressed = is_pressed.copy()
+        self.is_pressed[:] = is_pressed[:]
 
     def update(self):
         pass
@@ -405,11 +406,23 @@ class KeyboardController(ControllerBase):
             pygame.K_p: ControllerBase.A,
         }
 
-    def update(self):
+    def update(self, event: pygame.event.Event):
         """
         This should get called once every game loop and updates the internal status of the gamepad
         Read the keyboard and put the status of the keys into the key_pressed array.
         """
-        keys = pygame.key.get_pressed()
-        for k, v in self.key_map.items():
-            self.is_pressed[v] = keys[k]
+        if False:
+            keys = pygame.key.get_pressed()
+            for k, v in self.key_map.items():
+                self.is_pressed[v] = keys[k]
+        else:
+            button_index = self.key_map[event.key]
+            if event.type == pygame.KEYDOWN:
+                self.is_pressed[button_index] = 1
+                self.is_pressed_user[button_index] = 1
+            elif event.type == pygame.KEYUP:
+                self.is_pressed[button_index] = 0
+                self.is_pressed_user[button_index] = 0
+            else:
+                raise AssertionError(f"Unexpected pygame event: {event}")
+

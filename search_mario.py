@@ -61,6 +61,7 @@ class SaveInfo:
     patch_history: tuple[PatchId]
     visited_patches_x: set[PatchId]
     controller_state: NdArrayUint8
+    controller_state_user: NdArrayUint8
 
     def __post_init__(self):
         # Convert value from np.uint8 to int.
@@ -1006,6 +1007,9 @@ def main():
         # Execute action.
         _next_obs, reward, termination, truncation, info = envs.step((controller,))
 
+        # Clear out user key presses.
+        nes.keys_pressed = []
+
         # Read current state.
         world = get_world(ram)
         level = get_level(ram)
@@ -1077,11 +1081,15 @@ def main():
             nes.load(save_info.save_state)
             ram = nes.ram()
 
-            # Restore controller.
+            # Restore controller to what it was at the point of saving.  The user may have been pressing something here.
             controller[:] = nes.controller1.is_pressed[:]
 
             # Ensure loading from ram is the same as loading from the controller state.
-            assert (controller == save_info.controller_state).all(), f"Mismatched controller on load: {controller} != {save_info.controller_state}"
+            if (controller != save_info.controller_state).any():
+                if (controller == save_info.controller_state_user).all():
+                    print(f"User pressed controls on save: controller:{save_info.controller_state} user:{save_info.controller_state_user}")
+                else:
+                    raise AssertionError(f"Mismatched controller on load: {controller} != {save_info.controller_state}")
 
             if False:
                 # Flip the buttons with some probability.  If we're loading a state, we don't want to
@@ -1261,6 +1269,7 @@ def main():
                     patch_history=patch_history.copy(),
                     visited_patches_x=visited_patches_x.copy(),
                     controller_state=controller.copy(),
+                    controller_state_user=nes.controller1.is_pressed_user.copy(),
                 ))
                 next_save_id += 1
 
@@ -1324,6 +1333,7 @@ def main():
                         patch_history=patch_history.copy(),
                         visited_patches_x=visited_patches_x.copy(),
                         controller_state=controller.copy(),
+                        controller_state_user=nes.controller1.is_pressed_user.copy(),
                     )
                     saves.add(save_info)
                     next_save_id += 1
