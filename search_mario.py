@@ -607,7 +607,7 @@ def _score_patch(patch_id: PatchId, p_stats: PatchStats, max_possible_transition
     # near the frontier of exploration.
     e = 1.0
     beta = 1.0
-    frontier_score = -(len(p_stats.transitioned_to_patch) + e) / (p_stats.num_visited + beta)
+    frontier_score = (max_possible_transitions - len(p_stats.transitioned_to_patch) + e) / (p_stats.num_visited + beta)
 
     # Some sample values for score parts:
     #   productivity_score=1.0 transition_entropy=0.7219 total=5 max_possible_transitions=4
