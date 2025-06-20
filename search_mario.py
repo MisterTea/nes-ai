@@ -154,7 +154,7 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless
             raise RuntimeError("STOP")
         else:
             render_mode = "rgb" if headless else "human"
-            env = gym.make(env_id, render_mode=render_mode, world_level=world_level, screen_rc=(3,2))
+            env = gym.make(env_id, render_mode=render_mode, world_level=world_level, screen_rc=(2,2))
 
         env = gym.wrappers.RecordEpisodeStatistics(env)
 
@@ -1350,7 +1350,7 @@ def main():
         if args.vis_freq_sec > 0 and now - last_vis_time > args.vis_freq_sec:
 
             # Draw grid on screen.
-            if True:
+            if False:
                 obs_hwc = _next_obs[0]
                 img_rgb_240 = Image.fromarray(obs_hwc.swapaxes(0, 1), mode='RGB')
                 expected_size = (SCREEN_W, SCREEN_H)
