@@ -218,6 +218,31 @@ class ReservoirId:
         return s
 
 
+@dataclass
+class PatchStats:
+
+    # Number of times visited from any trajectories.
+    num_visited: int = 0
+
+    # Number of times selected as a start point.
+    num_selected: int = 0
+
+    # The total number of unique, previously unvisited cells discovered by exploring from this cell.
+    num_children: int = 0
+
+    # Number of new children found from this specific cell since last choosing this cell as a start point.
+    num_children_since_last_selected: int = 0
+
+    num_children_since_last_visited: int = 0
+
+    # Last time this cell was selected.  Useful for "recency" metrics.
+    last_selected_step: int = -1
+    last_visited_step: int = -1
+
+    transitioned_from_patch: Counter[PatchId] = field(default_factory=Counter)
+    transitioned_to_patch: Counter[PatchId] = field(default_factory=Counter)
+
+
 class PatchReservoir:
 
     def __init__(self, patch_size: int, reservoir_history_length: int, max_saves_per_reservoir: int = 1):
@@ -497,6 +522,137 @@ def _choose_save_from_history(saves: list[SaveInfo], saves_reservoir: PatchReser
         (saves_reservoir.patch_id_from_save(s), w)
         for s, w in zip(saves, probs)
     ]
+
+    return sample, patch_id_and_weight_pairs
+
+
+def _score_patch(p_stats: PatchStats, max_possible_transitions: int) -> float:
+    # Score recommended by Go-Explore paper: https://arxiv.org/abs/1901.10995, an estimate of recent productivity.
+    # If the patch has recently produced children, keep exploring.  As the patch gets selected more,
+    # its productivity will drop.
+    e = 1.0
+    beta = 1.0
+    productivity_score = (p_stats.num_children_since_last_selected + e) / (p_stats.num_selected + beta)
+
+    # If the patch always transitions to the same next patch, that's an indicator that we can't explore from there.
+    # For example, if Mario is falling in a pit, Mario can't really control where he will end up.
+    #
+    # Example calculation:
+    #  transitions = [
+    #    (1,2,3),
+    #    (1,2,3),
+    #    (4,5,6),
+    #    (4,5,6),
+    #    (7,8,9),
+    #  ]
+    #
+    # (1,2,3) → 2 times
+    # (4,5,6) → 2 times
+    # (7,8,9) → 1 time
+    #
+    # So the probabilities are [2/5, 2/5, 1/5], and the entropy is:
+    #
+    # - (2/5) * log2(2/5) * 2 - (1/5) * log2(1/5) ≈ 1.5219 bits
+    total = p_stats.transitioned_to_patch.total()
+    counts = np.fromiter(p_stats.transitioned_to_patch.values(), dtype=np.float64)
+
+    # The problem with using entropy directly is that it confuses productivity.  If we've taken only a single
+    # transition from a patch, then it will have entropy of zero.  There are too few transitions to make a good
+    # determination of entropy.  Instead, we need to assume that entropy is high when we have few transitions,
+    # and calculate entropy directly when we have a lot of transitions.
+    #
+    # We want an uncertainy-aware entropy.
+
+    # Laplace smoothing is simple, so we'll use it here.
+    if False:
+        if len(counts) == 0:
+            # We have no transitions.  Assume there's a single transition.
+            counts = np.full(1, fill_value=1, dtype=np.float64)
+
+        alpha = 1.0
+        k = max_possible_transitions
+
+        probs = (counts + alpha) / (total + k*alpha)
+        transition_entropy = -np.sum(probs * np.log2(probs))
+
+    # Threshold entropy.  When we have fewer than the max possible transitions, just assume we have max entropy.
+    if True:
+
+        if total < max_possible_transitions:
+            # Max possible entropy is a single count for every possible transition.
+            probs = np.full(max_possible_transitions, fill_value=1.0 / max_possible_transitions, dtype=np.float64)
+        else:
+            probs = counts / total
+
+        transition_entropy = -np.sum(probs * np.log2(probs))
+
+    print(f"SCORED PATCH: productivity_score={productivity_score} transition_entropy={transition_entropy:.4f} {total=} {max_possible_transitions=}")
+
+    # Some sample values for score parts:
+    #   productivity_score=1.0 transition_entropy=0.7219 total=5 max_possible_transitions=4
+    #   productivity_score=0.5 transition_entropy=2.0000 total=2 max_possible_transitions=4
+    #   productivity_score=1.0 transition_entropy=1.9219 total=5 max_possible_transitions=4
+    #   productivity_score=1.0 transition_entropy=1.0000 total=6 max_possible_transitions=4
+    #   productivity_score=0.5 transition_entropy=1.9219 total=5 max_possible_transitions=4
+    #   productivity_score=0.5 transition_entropy=1.4488 total=7 max_possible_transitions=4
+    #   productivity_score=1.0 transition_entropy=0.9852 total=7 max_possible_transitions=4
+
+    score = productivity_score + transition_entropy
+
+    return score
+
+
+def _choose_save_from_stats(saves_reservoir: PatchReservoir, patches_stats: dict[PatchId, PatchStats], rng: Any) -> SaveInfo:#
+    patch_ids = list(patches_stats.keys())
+
+    # For a given patch size and Mario movement speed, we can have different max possible transitions.
+    # Since mario can jump a number of pixels at a time, he may transition from 1, 2, or even more
+    # patches away if the patch size is small.  And, some levels teleport mario back to different
+    # locations, either through pipes or mazes.
+    #
+    # So, we'll just assume the max possible transitions is the max that we've seen so far, not the max
+    # theoretical.  Note we want the number of unique transitions, not the count of transitions.
+    max_possible_transitions = max((
+        len(p_stats.transitioned_to_patch)
+        for p_stats in patches_stats.values()
+    ), default=1)
+
+    # Calculate patch scores.
+    scores = np.fromiter((
+        _score_patch(p_stats, max_possible_transitions=max_possible_transitions)
+        for p_stats in patches_stats.values()
+    ), dtype=np.float64)
+
+    # Pick patch based on score.  Deterministic.
+    chosen_patch_index = np.argmax(scores)
+    chosen_patch = patch_ids[chosen_patch_index]
+
+    # Pick reservoir by exponential weighting.
+    reservoir_id_list = list(saves_reservoir._patch_to_reservoir_ids[chosen_patch])
+    reservoir_counts = np.fromiter((
+        #saves_reservoir._reservoir_count_since_refresh[res_id]
+        saves_reservoir._reservoir_seen_counts[res_id]
+        for res_id in reservoir_id_list
+    ), dtype=np.float64)
+
+    # Subtract max for numerical stability.
+    reservoir_counts -= reservoir_counts.max()
+
+    beta = 1.0
+    res_weights = np.exp(beta * -reservoir_counts)
+    res_weights /= res_weights.sum()
+
+    # Pick reservoir.
+    chosen_res_index = rng.choice(len(reservoir_counts), p=res_weights)
+    chosen_res = reservoir_id_list[chosen_res_index]
+
+    # Pick the first item out of the reservoir.
+    saves_list = saves_reservoir._reservoir_to_saves[chosen_res]
+    assert len(saves_list) == 1, f"Implement sampling within the reservoir"
+
+    sample = saves_list[0]
+
+    patch_id_and_weight_pairs = list(zip(patch_ids, scores))
 
     return sample, patch_id_and_weight_pairs
 
@@ -976,15 +1132,18 @@ def main():
 
     level_ticks = -1
 
+    visited_patches_in_level = set()
     patch_history = []
     visited_patches_x = set()
 
     reservoir_history_length = _history_length_for_level(args.reservoir_history_length, args.start_level)
     saves = PatchReservoir(patch_size=patch_size, reservoir_history_length=reservoir_history_length)
+    patches_stats = defaultdict(PatchStats)
     force_terminate = False
     steps_since_load = 0
     patches_x_since_load = 0
     new_patches_x_since_load = 0
+    last_selected_patch_id = None
 
     patch_id_and_weight_pairs = []
 
@@ -1048,6 +1207,7 @@ def main():
 
         # If we died, reload from a game state based on heuristic.
         if termination or force_terminate:
+
             # If we reached a new level, serialize all of the states to disk, then clear the save state buffer.
             # Also dump state histogram.
             if world != prev_world or level != prev_level:
@@ -1071,8 +1231,9 @@ def main():
             # Start reload process.
 
             # Choose save.
-            save_info, patch_id_and_weight_pairs = _choose_save(saves, rng=rng)
+            # save_info, patch_id_and_weight_pairs = _choose_save(saves, rng=rng)
             # save_info, patch_id_and_weight_pairs = _choose_save_from_history(state_history, saves, rng=rng)
+            save_info, patch_id_and_weight_pairs = _choose_save_from_stats(saves, patches_stats, rng=rng)
 
             # Reload and re-initialize.
             nes.load(save_info.save_state)
@@ -1145,6 +1306,18 @@ def main():
             patches_x_since_load = 0
             new_patches_x_since_load = 0
             force_terminate = False
+            last_selected_patch_id = patch_id
+
+            # Update patch stats.
+            p_stats = patches_stats[patch_id]
+            p_stats.num_selected += 1
+            p_stats.num_visited += 1
+            p_stats.num_children_since_last_selected = 0
+            p_stats.num_children_since_last_visited = 0
+            p_stats.last_selected_step = step
+            p_stats.last_visited_step = step
+
+            assert patch_id in visited_patches_in_level, f"Missing patch_id in visited, even though chosen as start point: {patch_id}"
 
         # Stop after some fixed number of steps.  This will force the sampling logic to run more often,
         # which means we won't waste as much time running through old states.
@@ -1206,7 +1379,7 @@ def main():
         #
         #   Overall, seems like there needs to be a smarter algorithm to find states that are
         #   accessible, but not easily accessible.
-        elif (
+        elif False and (
             patch_history and
             patch_id.patch_x != patch_history[-1].patch_x and
             patch_id.patch_x in visited_patches_x and
@@ -1232,7 +1405,11 @@ def main():
                 # Clear state.
                 action_history = []
                 state_history = []
+                visited_patches_in_level = set()
                 visited_patches_x = set()
+
+                visited_patches_in_level.add(patch_id)
+                visited_patches_x.add(patch_id.patch_x)
 
                 patch_history = []
                 patch_history.append(patch_id)
@@ -1270,6 +1447,17 @@ def main():
                 ))
                 next_save_id += 1
 
+                patches_stats = defaultdict(PatchStats)
+
+                # Fill out stats for current patch.  Do not include transitions.
+                p_stats = patches_stats[patch_id]
+                p_stats.num_visited += 1
+                p_stats.num_selected += 1
+                p_stats.last_selected_step = step
+                p_stats.last_visited_step = step
+
+                last_selected_patch_id = patch_id
+
             elif patch_id != patch_history[-1]:
                 valid_lives = lives > 1 and lives < 100
                 valid_x = True  # x < 65500
@@ -1285,6 +1473,27 @@ def main():
                     # TODO(millman): how did we get to a state where we don't have full lives?
                     print(f"Something is wrong with the lives, don't save this state: level={_str_level(world, level)} x={x} y={y} ticks-left={ticks_left} lives={lives} steps_since_load={steps_since_load} patches_x_since_load={patches_x_since_load}")
                     raise AssertionError("STOP")
+
+                prev_patch_id = patch_history[-1]
+
+                # Update patch stats.
+                p_stats = patches_stats[patch_id]
+                p_stats.num_visited += 1
+                p_stats.last_visited_step = step
+                p_stats.transitioned_from_patch[prev_patch_id] += 1
+
+                if patch_id not in visited_patches_in_level:
+                    p_stats.num_children += 1
+                    p_stats.num_children_since_last_visited += 1
+
+                    p_last_selected_stats = patches_stats[last_selected_patch_id]
+                    p_last_selected_stats.num_children += 1
+                    p_last_selected_stats.num_children_since_last_selected += 1
+
+                    visited_patches_in_level.add(patch_id)
+
+                p_prev_stats = patches_stats[prev_patch_id]
+                p_prev_stats.transitioned_to_patch[patch_id] += 1
 
                 if patch_id.patch_x not in visited_patches_x:
                     visited_patches_x.add(patch_id.patch_x)
