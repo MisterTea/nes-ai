@@ -43,8 +43,10 @@ class PatchId:
         object.__setattr__(self, 'patch_x', int(self.patch_x))
         object.__setattr__(self, 'patch_y', int(self.patch_y))
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return f"PatchId({self.patch_x},{self.patch_y})"
+
+    __str__ = __repr__
 
 
 @dataclass(frozen=True)
@@ -208,7 +210,7 @@ def _weight_hyperbolic(N: int) -> np.array:
 class ReservoirId:
     patch_history: tuple[PatchId, ...]
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         s = "ReservoirId["
         for i, p in enumerate(self.patch_history):
             if i > 0:
@@ -216,6 +218,8 @@ class ReservoirId:
             s += f"({p.patch_x},{p.patch_y})"
         s += "]"
         return s
+
+    __str__ = __repr__
 
 
 @dataclass
