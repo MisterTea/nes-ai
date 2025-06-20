@@ -1610,7 +1610,7 @@ def main():
             last_print_time = now
 
         # Visualize the distribution of save states.
-        if args.vis_freq_sec > 0 and now - last_vis_time > args.vis_freq_sec:
+        if not args.headless and args.vis_freq_sec > 0 and now - last_vis_time > args.vis_freq_sec:
 
             # Draw grid on screen.
             if False:
