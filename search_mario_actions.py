@@ -6,6 +6,9 @@ from super_mario_env_search import _to_controller_presses
 NdArrayUint8 = np.ndarray[np.dtype[np.uint8]]
 
 
+_MASK_START_AND_SELECT = _to_controller_presses(['start', 'select']).astype(bool)
+
+
 def flip_buttons(controller_presses: NdArrayUint8, flip_prob: float, ignore_button_mask: NdArrayUint8) -> NdArrayUint8:
     flip_mask = np.random.rand(len(controller_presses)) < flip_prob   # True where we want to flip
     flip_mask[ignore_button_mask] = 0

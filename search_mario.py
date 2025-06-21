@@ -78,141 +78,6 @@ class SaveInfo:
         assert self.controller_state.dtype == np.uint8, f"Unexpected controller state type: {self.controller_state.dtype} != np.uint8"
 
 
-@dataclass
-class Args:
-    r"""
-    Run example:
-        > WANDB_API_KEY=<key> python3 ppo_nes.py --wandb-project-name mariorl --track
-
-        ...
-        wandb: Tracking run with wandb version 0.19.9
-        wandb: Run data is saved locally in /Users/dave/rl/nes-ai/wandb/run-20250418_130130-SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
-        wandb: Run `wandb offline` to turn off syncing.
-        wandb: Syncing run SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
-        wandb: ⭐️ View project at https://wandb.ai/millman-none/mariorl
-        wandb: 🚀 View run at https://wandb.ai/millman-none/mariorl/runs/SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
-
-    Resume example:
-        > WANDB_API_KEY=<key> WANDB_RUN_ID=SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30 WANDB_RESUME=must python3 ppo_nes.py --wandb-project-name mariorl --track
-
-        ...
-        wandb: Tracking run with wandb version 0.19.9
-        wandb: Run data is saved locally in /Users/dave/rl/nes-ai/wandb/run-20250418_133317-SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
-        wandb: Run `wandb offline` to turn off syncing.
-    --> wandb: Resuming run SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
-        wandb: ⭐️ View project at https://wandb.ai/millman-none/mariorl
-        wandb: 🚀 View run at https://wandb.ai/millman-none/mariorl/runs/SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
-        ...
-    --> resumed at update 9
-        ...
-    """
-
-    exp_name: str = os.path.basename(__file__)[: -len(".py")]
-    """the name of this experiment"""
-    seed: int = 1
-    """seed of the experiment"""
-    torch_deterministic: bool = True
-    """if toggled, `torch.backends.cudnn.deterministic=False`"""
-    cuda: bool = True
-    """if toggled, cuda will be enabled by default"""
-    track: bool = False
-    """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "MarioRL"
-    """the wandb's project name"""
-    wandb_entity: str | None = None
-    """the entity (team) of wandb's project"""
-    wandb_run_id: str | None = None
-    """the id of a wandb run to resume"""
-    capture_video: bool = False
-    """whether to capture videos of the agent performances (check out `videos` folder)"""
-    checkpoint_frequency: float = 30
-    """create a checkpoint every N seconds"""
-    train_agent: bool = True
-    """enable or disable training of the agent"""
-
-    # Specific experiments
-    headless: bool = False
-    print_freq_sec: float = 1.0
-    start_level: tuple[int,int] = (7,4)
-
-    patch_size: int = 32
-
-     # About 30 frames/tick
-    action_bucket_size: int = 150
-
-    # TODO(millman): need enough history to distinguish between paths for 7-4 and 8-4; works with len=20.
-    #   All other levels are much faster with history of length 3, or even 1.
-    reservoir_history_length: int = 1
-
-    max_trajectory_steps: int = 150
-    max_trajectory_patches_x: int = 3
-    max_trajectory_revisit_x: int = 2
-
-    flip_prob: float = 0.03
-
-    # Visualization
-    vis_freq_sec: float = 0.15
-
-    # Algorithm specific arguments
-    env_id: str = "smb-search-v0"
-
-
-def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless: bool, world_level: tuple[int, int]):
-    def thunk():
-        if capture_video and idx == 0:
-            env = gym.make(env_id, render_mode="rgb_array")
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-            raise RuntimeError("STOP")
-        else:
-            render_mode = "rgb" if headless else "human"
-            env = gym.make(env_id, render_mode=render_mode, world_level=world_level, screen_rc=(2,2))
-
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-
-        return env
-
-    return thunk
-
-
-def _seconds_to_hms(seconds):
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    secs = seconds % 60
-    return f"{int(hours):02}:{int(minutes):02}:{int(secs):02}"
-
-
-def _print_saves_list(saves: list[SaveInfo]):
-    # Determine weighting as a multiple of the first weight.
-    weights = _weight_hyperbolic(len(saves))
-    weights /= weights[0]
-
-    N = 2
-
-    # Print bottom-N and top-N saves.
-    for i, (s, w) in enumerate(zip(saves[:N], weights[:N])):
-        print(f"  [{i}] {w:.4f}x {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id}")
-
-    num_top = min(len(saves) - N, N)
-    if num_top > 0:
-        print('  ...')
-        for e, (s, w) in enumerate(zip(saves[-num_top:], weights[-num_top:])):
-            i = len(saves) - num_top + e
-            print(f"  [{i}] {w:.4f}x {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id}")
-
-
-def _weight_hyperbolic(N: int) -> np.array:
-    # Hyperbolic, last saves have the highest weighting.
-    indices = np.arange(N)
-    c = 1.0  # Offset to avoid divide-by-zero
-
-    # Weights: highest at the end, slow decay toward the beginning
-    # Formula: w_i ∝ 1 / (N - i + c)
-    weights = 1.0 / (N - indices + c)
-    weights /= weights.sum()  # Normalize to sum to 1
-
-    return weights
-
-
 @dataclass(frozen=True)
 class ReservoirId:
     patch_history: tuple[PatchId, ...]
@@ -463,7 +328,6 @@ def _score_patch(patch_id: PatchId, p_stats: PatchStats, max_possible_transition
 
     # Threshold entropy.  When we have fewer than the max possible transitions, just assume we have max entropy.
     if True:
-
         if total < max_possible_transitions:
             # Max possible entropy is a single count for every possible transition.
             max_probs = np.full(max_possible_transitions, fill_value=1.0 / max_possible_transitions, dtype=np.float64)
@@ -474,25 +338,19 @@ def _score_patch(patch_id: PatchId, p_stats: PatchStats, max_possible_transition
         # Reminder: entropy is positive, because it's a negative times a negative from the log.
         transition_entropy = -np.sum(probs * np.log2(probs))
 
-        # Ensure the transition score includes the number of times the state is selected.  It's
-        # possible that Mario is about to die, in which case we want to reduce the probability
-        # that this cell gets selected.  Otherwise, Mario can get stuck on this cell if it's
-        # entropy score is very high.
-        e = 0.0
-        beta = 0.0
-        transition_score = (transition_entropy + e) / (p_stats.num_visited + beta)
-    else:
-        transition_entropy = 0
-        transition_score = 0
+    # Ensure the transition score includes the number of times the state is selected.  It's
+    # possible that Mario is about to die, in which case we want to reduce the probability
+    # that this cell gets selected.  Otherwise, Mario can get stuck on this cell if it's
+    # entropy score is very high.
+    e = 0.0
+    beta = 0.0
+    transition_score = (transition_entropy + e) / (p_stats.num_visited + beta)
 
     # Prefer states that have unexplored neighbors.  This makes it more likely that we pick patches
     # near the frontier of exploration.
-    if True:
-        e = 0.0
-        beta = 0.0
-        frontier_score = (max_possible_transitions - len(p_stats.transitioned_to_patch) + e) / (p_stats.num_visited + beta)
-    else:
-        frontier_score = 0
+    e = 0.0
+    beta = 0.0
+    frontier_score = (max_possible_transitions - len(p_stats.transitioned_to_patch) + e) / (p_stats.num_visited + beta)
 
     # Some sample values for score parts:
     #   productivity_score=1.0 transition_entropy=0.7219 total=5 max_possible_transitions=4
@@ -595,13 +453,6 @@ def _choose_save_from_stats(saves_reservoir: PatchReservoir, patches_stats: dict
     return sample, patch_id_and_weight_pairs
 
 
-_MASK_START_AND_SELECT = _to_controller_presses(['start', 'select']).astype(bool)
-
-def _str_level(world_ram: int, level_ram: int) -> str:
-    world, level = encode_world_level(world_ram, level_ram)
-    return f"{world}-{level}"
-
-
 def _validate_save_state(save_info: SaveInfo, ram: NdArrayUint8):
     world = get_world(ram)
     level = get_level(ram)
@@ -620,6 +471,31 @@ def _validate_save_state(save_info: SaveInfo, ram: NdArrayUint8):
     assert save_info.level == level, f"Mismatched save state!"
     assert save_info.x == x, f"Mismatched save state!"
     assert save_info.y == y, f"Mismatched save state!"
+
+
+def _str_level(world_ram: int, level_ram: int) -> str:
+    world, level = encode_world_level(world_ram, level_ram)
+    return f"{world}-{level}"
+
+
+def _seconds_to_hms(seconds):
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    return f"{int(hours):02}:{int(minutes):02}:{int(secs):02}"
+
+
+def _print_saves_list(saves: list[SaveInfo], N: int = 2):
+    # Print bottom-N and top-N saves.
+    for i, s in enumerate(saves[:N]):
+        print(f"  [{i}] {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id}")
+
+    num_top = min(len(saves) - N, N)
+    if num_top > 0:
+        print('  ...')
+        for e, (s, w) in enumerate(saves[-num_top:]):
+            i = len(saves) - num_top + e
+            print(f"  [{i}] {_str_level(s.world, s.level)} x={s.x} y={s.y} save_id={s.save_id}")
 
 
 def _print_info(
@@ -680,6 +556,104 @@ def _history_length_for_level(default_history_length: int, natural_world_level: 
     else:
         print(f"Satisfied history length, required for level {world}-{level}: {default_history_length}")
         return default_history_length
+
+
+@dataclass
+class Args:
+    r"""
+    Run example:
+        > WANDB_API_KEY=<key> python3 ppo_nes.py --wandb-project-name mariorl --track
+
+        ...
+        wandb: Tracking run with wandb version 0.19.9
+        wandb: Run data is saved locally in /Users/dave/rl/nes-ai/wandb/run-20250418_130130-SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+        wandb: Run `wandb offline` to turn off syncing.
+        wandb: Syncing run SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+        wandb: ⭐️ View project at https://wandb.ai/millman-none/mariorl
+        wandb: 🚀 View run at https://wandb.ai/millman-none/mariorl/runs/SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+
+    Resume example:
+        > WANDB_API_KEY=<key> WANDB_RUN_ID=SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30 WANDB_RESUME=must python3 ppo_nes.py --wandb-project-name mariorl --track
+
+        ...
+        wandb: Tracking run with wandb version 0.19.9
+        wandb: Run data is saved locally in /Users/dave/rl/nes-ai/wandb/run-20250418_133317-SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+        wandb: Run `wandb offline` to turn off syncing.
+    --> wandb: Resuming run SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+        wandb: ⭐️ View project at https://wandb.ai/millman-none/mariorl
+        wandb: 🚀 View run at https://wandb.ai/millman-none/mariorl/runs/SuperMarioBros-v0__ppo_nes__1__2025-04-18_13-01-30
+        ...
+    --> resumed at update 9
+        ...
+    """
+
+    exp_name: str = os.path.basename(__file__)[: -len(".py")]
+    """the name of this experiment"""
+    seed: int = 1
+    """seed of the experiment"""
+    torch_deterministic: bool = True
+    """if toggled, `torch.backends.cudnn.deterministic=False`"""
+    cuda: bool = True
+    """if toggled, cuda will be enabled by default"""
+    track: bool = False
+    """if toggled, this experiment will be tracked with Weights and Biases"""
+    wandb_project_name: str = "MarioRL"
+    """the wandb's project name"""
+    wandb_entity: str | None = None
+    """the entity (team) of wandb's project"""
+    wandb_run_id: str | None = None
+    """the id of a wandb run to resume"""
+    capture_video: bool = False
+    """whether to capture videos of the agent performances (check out `videos` folder)"""
+    checkpoint_frequency: float = 30
+    """create a checkpoint every N seconds"""
+    train_agent: bool = True
+    """enable or disable training of the agent"""
+
+    # Configuration.
+    headless: bool = False
+    print_freq_sec: float = 1.0
+    start_level: tuple[int,int] = (7,4)
+
+    # Specific experiments
+    patch_size: int = 32
+
+     # About 30 frames/tick
+    action_bucket_size: int = 150
+
+    # NOTE: Need enough history to distinguish between paths for 7-4 and 8-4; works with len=20.
+    #   All other levels are much faster with history of length 3, or even 1.  This value may be
+    #   overwritten elsewhere based on the level, if the specified value is too small.
+    reservoir_history_length: int = 1
+
+    max_trajectory_steps: int = 150
+    max_trajectory_patches_x: int = 3
+    max_trajectory_revisit_x: int = 2
+
+    flip_prob: float = 0.03
+
+    # Visualization
+    vis_freq_sec: float = 0.15
+
+    # Algorithm specific arguments
+    env_id: str = "smb-search-v0"
+
+
+def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, headless: bool, world_level: tuple[int, int]):
+    def thunk():
+        if capture_video and idx == 0:
+            env = gym.make(env_id, render_mode="rgb_array")
+            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
+            raise RuntimeError("STOP")
+        else:
+            render_mode = "rgb" if headless else "human"
+            env = gym.make(env_id, render_mode=render_mode, world_level=world_level, screen_rc=(2,2))
+
+        env = gym.wrappers.RecordEpisodeStatistics(env)
+
+        return env
+
+    return thunk
 
 
 def main():
@@ -757,7 +731,6 @@ def main():
 
     # Approximate the size of the histogram based on how many patches we need.
     _MAX_PATCHES_X = int(np.ceil(_MAX_LEVEL_DIST / patch_size))
-    _MAX_EXTRA_PATCHES_X = 5
     _MAX_PATCHES_Y = int(np.ceil(240 / patch_size))
     _NUM_MAX_PATCHES = _MAX_PATCHES_X * _MAX_PATCHES_Y
 
@@ -858,17 +831,6 @@ def main():
         # Trajectory ending criteria
         # ---------------------------------------------------------------------
 
-        if False: # x > 65000:
-            # 0x006D  Current screen (in which the player is currently in, increase or decrease depending on player's position)
-            # 0x0086  Player x position on screen
-            # 0x071A  Current screen (in level, always increasing)
-            # 0x071C  ScreenEdge X-Position
-            screen_x = ram[0x006D]
-            level_screen_x = ram[0x071A]
-            screen_pos = ram[0x0086]
-            print(f"WEIRD X POS: level={_str_level(world, level)} screen[0x006D]={screen_x} level_screen[0x071A]={level_screen_x} screen_pos[0x0086]={screen_pos} x={x} y={y} lives={lives}")
-
-        # TODO(millman): something is broken with the termination flag?
         if lives < prev_lives and not termination:
             print(f"Lost a life: x={x} ticks_left={ticks_left}")
             raise AssertionError("Missing termination flag for lost life")
@@ -1027,7 +989,7 @@ def main():
         # Track patch stats even if we terminate on this patch.
 
         if patch_id != patch_history[-1]:
-            if _DEBUG_SCORE_PATCH and termination or force_terminate:
+            if _DEBUG_SCORE_PATCH and (termination or force_terminate):
                 print(f"Updating patch stats on terminate: {patch_id}")
 
             prev_patch_id = patch_history[-1]
