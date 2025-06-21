@@ -136,6 +136,9 @@ class Args:
 
     patch_size: int = 32
 
+     # About 30 frames/tick
+    action_bucket_size: int = 150
+
     # TODO(millman): need enough history to distinguish between paths for 7-4 and 8-4; works with len=20.
     #   All other levels are much faster with history of length 3, or even 1.
     reservoir_history_length: int = 1
@@ -252,8 +255,9 @@ class PatchStats:
 
 class PatchReservoir:
 
-    def __init__(self, patch_size: int, reservoir_history_length: int, max_saves_per_reservoir: int = 1):
+    def __init__(self, patch_size: int, action_bucket_size: int, reservoir_history_length: int, max_saves_per_reservoir: int = 1):
         self.patch_size = patch_size
+        self.action_bucket_size = action_bucket_size
         self.reservoir_history_length = reservoir_history_length
         self.max_saves_per_reservoir = max_saves_per_reservoir
 
@@ -305,14 +309,20 @@ class PatchReservoir:
 
                     # Replace the save state with the most action steps.  We assume that it's better to
                     # get to a state with fewer action steps.
-                    if len(save.action_history) < len(max_item.action_history):
+                    #
+                    # Bucket the action history size, since we only want to consider meaningfully better histories,
+                    # not just a second or 2 difference.
+
+                    if len(save.action_history) // self.action_bucket_size < len(max_item.action_history) // self.action_bucket_size:
                         saves_in_reservoir[max_index] = save
 
                         self._patch_count_since_refresh[patch_id] -= self._reservoir_count_since_refresh[reservoir_id]
                         # self._patch_count_since_refresh[patch_id] = 0
                         self._reservoir_count_since_refresh[reservoir_id] = 0
 
-                    did_kick_new_item = False
+                        did_kick_new_item = False
+                    else:
+                        did_kick_new_item = True
 
                 if False:
                     saves_in_reservoir = self._reservoir_to_saves[reservoir_id]
@@ -403,7 +413,7 @@ class PatchReservoir:
 
 def _choose_save(saves_reservoir: PatchReservoir, rng: Any) -> SaveInfo:
     # Principles:
-    #   - primary object: find new states
+    #   - primary objective: find new states
     #   - when a new state is found, explore it
     #   - when we need to choose among already-explored states, choose the states that
     #     we've explored the least
@@ -1032,6 +1042,11 @@ def _print_info(
 ):
     steps_per_sec = step / dt
 
+    approx_max_actions = max((
+        len(saves_in_res[-1].action_history)
+        for _r_id, saves_in_res in saves._reservoir_to_saves.items()
+    ), default=0)
+
     # screen_x = ram[0x006D]
     # level_screen_x = ram[0x071A]
     # screen_pos = ram[0x0086]
@@ -1044,7 +1059,8 @@ def _print_info(
         f"states={len(saves)} "
         f"steps/sec={steps_per_sec:.4f} "
         f"steps_since_load={steps_since_load} "
-        f"patches_x_since_load={patches_x_since_load}"
+        f"patches_x_since_load={patches_x_since_load} "
+        f"max_actions={approx_max_actions}"
     )
 
 
@@ -1186,7 +1202,10 @@ def main():
     revisited_x = 0
 
     reservoir_history_length = _history_length_for_level(args.reservoir_history_length, args.start_level)
-    saves = PatchReservoir(patch_size=patch_size, reservoir_history_length=reservoir_history_length)
+
+    action_bucket_size = args.action_bucket_size
+
+    saves = PatchReservoir(patch_size=patch_size, action_bucket_size=action_bucket_size, reservoir_history_length=reservoir_history_length)
     patches_stats = defaultdict(PatchStats)
     force_terminate = False
     steps_since_load = 0
@@ -1378,7 +1397,7 @@ def main():
 
             natural_world_level = encode_world_level(world, level)
             reservoir_history_length = _history_length_for_level(args.reservoir_history_length, natural_world_level)
-            saves = PatchReservoir(patch_size=patch_size, reservoir_history_length=reservoir_history_length)
+            saves = PatchReservoir(patch_size=patch_size, action_bucket_size=action_bucket_size, reservoir_history_length=reservoir_history_length)
             saves.add(SaveInfo(
                 save_id=next_save_id,
                 x=x,
