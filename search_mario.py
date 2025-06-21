@@ -143,7 +143,7 @@ class Args:
     #   All other levels are much faster with history of length 3, or even 1.
     reservoir_history_length: int = 1
 
-    max_trajectory_steps: int = -1
+    max_trajectory_steps: int = 150
     max_trajectory_patches_x: int = 3
     max_trajectory_revisit_x: int = 2
 
@@ -462,29 +462,33 @@ def _score_patch(patch_id: PatchId, p_stats: PatchStats, max_possible_transition
 
     # Threshold entropy.  When we have fewer than the max possible transitions, just assume we have max entropy.
     if True:
+
         if total < max_possible_transitions:
             # Max possible entropy is a single count for every possible transition.
-            probs = np.full(max_possible_transitions, fill_value=1.0 / max_possible_transitions, dtype=np.float64)
+            max_probs = np.full(max_possible_transitions, fill_value=1.0 / max_possible_transitions, dtype=np.float64)
+            probs = max_probs
         else:
             probs = counts / total
 
+        # Reminder: entropy is positive, because it's a negative times a negative from the log.
         transition_entropy = -np.sum(probs * np.log2(probs))
 
         # Ensure the transition score includes the number of times the state is selected.  It's
         # possible that Mario is about to die, in which case we want to reduce the probability
         # that this cell gets selected.  Otherwise, Mario can get stuck on this cell if it's
         # entropy score is very high.
-        e = 1.0
-        beta = 1.0
+        e = 0.0
+        beta = 0.0
         transition_score = (transition_entropy + e) / (p_stats.num_visited + beta)
     else:
+        transition_entropy = 0
         transition_score = 0
 
     # Prefer states that have unexplored neighbors.  This makes it more likely that we pick patches
     # near the frontier of exploration.
-    if False:
-        e = 1.0
-        beta = 1.0
+    if True:
+        e = 0.0
+        beta = 0.0
         frontier_score = (max_possible_transitions - len(p_stats.transitioned_to_patch) + e) / (p_stats.num_visited + beta)
     else:
         frontier_score = 0
@@ -501,7 +505,13 @@ def _score_patch(patch_id: PatchId, p_stats: PatchStats, max_possible_transition
     if _DEBUG_SCORE_PATCH:
         print(f"Scored patch: {patch_id}: productivity_score={productivity_score:.4f} transition_entropy={transition_entropy:.4f} transition_score={transition_score:.4f} frontier_score={frontier_score:.4f} {total=} {max_possible_transitions=}")
 
-    score = productivity_score + transition_score + frontier_score
+    # TODO(millman): separate the frontier into x and y components, then weight them differently.  Vertical frontier is not
+    #   really interesting.
+
+    p_coef = 1.0
+    t_coef = 0.3
+    f_coef = 0.1
+    score = p_coef * productivity_score + t_coef * transition_score + f_coef * frontier_score
 
     return score
 
@@ -1553,11 +1563,6 @@ def main():
                 pixel_size=_HIST_PIXEL_SIZE,
             )
             screen.blit_image(img_rgb_240, screen_index=3)
-
-            # TODO(millman): avoid this?
-            if False:
-                # _sample, patch_id_and_weight_pairs = _choose_save_from_history(state_history, saves, rng=rng)
-                _sample, patch_id_and_weight_pairs = _choose_save(saves, rng=rng)
 
             # Histogram of sampling weight.
             img_rgb_240 = _build_patch_histogram_rgb(
