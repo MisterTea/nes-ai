@@ -651,6 +651,7 @@ def _choose_save_from_stats(saves_reservoir: PatchReservoir, patches_stats: dict
         print("Missing reservoir for patches:")
         for patch_id, p_stats in patches_with_missing_reservoir.items():
             print(f"  {patch_id}: {p_stats}")
+        raise AssertionError(f"Missing reservoir for patches: #={len(patches_with_missing_reservoir)}")
 
     # For a given patch size and Mario movement speed, we can have different max possible transitions.
     # Since mario can jump a number of pixels at a time, he may transition from 1, 2, or even more
@@ -1434,7 +1435,7 @@ def main():
         # Track patch stats even if we terminate on this patch.
 
         if patch_id != patch_history[-1]:
-            if termination or force_terminate:
+            if _DEBUG_SCORE_PATCH and termination or force_terminate:
                 print(f"Updating patch stats on terminate: {patch_id}")
 
             prev_patch_id = patch_history[-1]
@@ -1459,7 +1460,11 @@ def main():
             p_prev_stats.transitioned_to_patch[patch_id] += 1
 
 
-        if patch_id != patch_history[-1] and not (termination or force_terminate):
+        # Save state info on transition.  It's ok to save when we intentionally end a trajectory
+        # early, but not when the termination is due to the environment (e.g. Mario dying).
+        #
+        if patch_id != patch_history[-1] and not termination:
+
             valid_lives = lives > 1 and lives < 100
             valid_x = True  # x < 65500
 
