@@ -3,7 +3,7 @@
 import os
 import random
 import time
-from collections import Counter, defaultdict, deque
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
@@ -13,12 +13,13 @@ import numpy as np
 
 import tyro
 
-from PIL import Image, ImageDraw
+from PIL import Image
 from torch.utils.tensorboard import SummaryWriter
 
 from search_mario_actions import ACTION_INDEX_TO_CONTROLLER, CONTROLLER_TO_ACTION_INDEX, build_controller_transition_matrix, flip_buttons_by_action_in_place
+from search_mario_viz import build_patch_histogram_rgb, draw_patch_grid, draw_patch_path, optimal_patch_layout
 from super_mario_env_search import SuperMarioEnv, SCREEN_H, SCREEN_W, get_x_pos, get_y_pos, get_level, get_world, _to_controller_presses, get_time_left, life
-from super_mario_env_ram_hacks import decode_world_level, encode_world_level
+from super_mario_env_ram_hacks import encode_world_level
 
 from gymnasium.envs.registration import register
 
@@ -601,292 +602,6 @@ def _str_level(world_ram: int, level_ram: int) -> str:
     return f"{world}-{level}"
 
 
-def _optimal_patch_layout(screen_width, screen_height, n_patches):
-    max_patch_size = 0
-    best_cols = best_rows = None
-
-    # Try all possible number of columns from 1 to n_patches (but can't exceed screen_width)
-    for n_cols in range(1, n_patches + 1):
-        patch_size = screen_width // n_cols
-        n_rows = int(np.ceil(n_patches / n_cols))
-        total_height = patch_size * n_rows
-
-        if total_height <= screen_height:
-            # Maximize patch size
-            if patch_size > max_patch_size:
-                max_patch_size = patch_size
-                best_cols = n_cols
-                best_rows = n_rows
-
-    return (best_rows, best_cols, max_patch_size)
-
-
-def _build_patch_histogram_rgb(
-    patch_id_and_weight_pairs: list[PatchId, int],
-    current_patch: PatchId,
-    patch_size: int,
-    max_patch_x: int,
-    max_patch_y: int,
-    hist_rows: int,
-    hist_cols: int,
-    pixel_size: int,
-) -> NdArrayRGB8:
-    hr, hc = hist_rows, hist_cols
-
-    patch_histogram = np.zeros((hr + 1, hc + 1), dtype=np.float64)
-
-    if False:
-        patch_id_and_weight_pairs = list(patch_id_and_weight_pairs)
-        print(f"FIRST patch_id_and_weight_pairs: {patch_id_and_weight_pairs[0]}")
-        raise AssertionError("DEBUG")
-
-    special_section_offsets = {}
-    next_special_section_id = [0]
-
-    # Sometimes we get a discontinuous jump, like:
-    #   Discountinuous x position: 1013 -> 65526
-    #
-    # Seems to happen when crossing boundaries in discontinuous levels like 4-4.
-    def _calc_c_for_special_section(check_patch_x: PatchId, hr: int, hc: int):
-        # print(f"REWRITING SPECIAL SECTION: patch={check_patch_x.patch_x},{check_patch_x.patch_y} hr={hr} hc={hc}")
-        # TODO(millman): this isn't right, special section is overlapping other things
-
-        # The section here is the 255-width pixel section that the level is divided into.
-        # Also called "screen" in the memory map.
-        x = check_patch_x.patch_x * patch_size
-
-        section_x = (x // 256) * 256
-        section_patch_x = section_x // patch_size
-
-        offset_x = x - section_x
-        offset_patch_x = offset_x // patch_size
-
-        # Determine how many full-screen offsets we need from the edge of the histogram.
-        if section_patch_x not in special_section_offsets:
-            special_section_offsets[section_patch_x] = next_special_section_id[0]
-            next_special_section_id[0] += 1
-
-        section_id = special_section_offsets[section_patch_x]
-        patches_in_section = 256 // patch_size
-
-        # Calculate the starting patch of the section.
-        section_c = hc - (1 + section_id) * patches_in_section
-
-        # Calculate how much offset we need from the start of the section.
-        # Rewrite the x and y position, for display into this after-level section.
-        c = section_c + offset_patch_x
-
-        # print(f"REWRITING SPECIAL SECTION: patch={check_patch_x.patch_x},{check_patch_x.patch_y} hr={hr} hc={hc} -> c={c}")
-
-        return c
-
-
-    for save_patch_id, weight in patch_id_and_weight_pairs:
-        patch_x, patch_y = save_patch_id.patch_x, save_patch_id.patch_y
-
-        # For display purposes only, if we're at one of the special offscreen locations,
-        # Use an offset, but still show it in the histogram.
-        if patch_x <= max_patch_x:
-            # What row of the level we're in.  Wrap around if past the end of the screen.
-            wrap_i = patch_x // hc
-
-            r = wrap_i * (max_patch_y + _SPACE_R) + patch_y
-            c = patch_x % hc
-        else:
-            # Special case, we're past the end of the level for some special section.
-            r = hr - max_patch_y + patch_y
-            c = _calc_c_for_special_section(save_patch_id, hr=hr, hc=hc)
-
-        try:
-            patch_histogram[r][c] = weight
-        except IndexError:
-            print(f"PATCH LAYOUT: max_patches_x={max_patch_x} max_patches_y={max_patch_y} pixel_size={pixel_size} hr={hr} hc={hc}")
-            print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
-
-            patch_histogram[hr][hc] += 1
-
-    #print(f"HISTOGRAM min={patch_histogram.min()} max={patch_histogram.max()}")
-
-    w_zero = patch_histogram == 0
-
-    # Normalize counts to range (0, 255)
-    grid_f = patch_histogram - patch_histogram.min()
-    grid_g = (grid_f / grid_f.max() * 255).astype(np.uint8)
-
-    # Reset untouched patches to zero.
-    grid_g[w_zero] = 0
-
-    # Convert to RGB,
-    grid_rgb = np.stack([grid_g]*3, axis=-1)
-
-    # Mark current patch.
-    if current_patch.patch_x <= max_patch_x:
-        px, py = current_patch.patch_x, current_patch.patch_y
-        wrap_i = px // hc
-        patch_r = wrap_i * (max_patch_y + _SPACE_R) + py
-        patch_c = px % hc
-    else:
-        # Special case, we're past the end of the level for some special section.
-        patch_r = hr - max_patch_y + current_patch.patch_y
-        patch_c = _calc_c_for_special_section(current_patch, hr=hr, hc=hc)
-
-    try:
-        grid_rgb[patch_r][patch_c] = (0, 255, 0)
-    except IndexError:
-        print(f"PATCH LAYOUT: max_patches_x={max_patch_x} max_patches_y={max_patch_y} pixel_size={pixel_size} hr={hr} hc={hc}")
-        print(f"BAD CALC? wrap_i={wrap_i} hr={hr} hc={hc} r={r} c={c} patch_x={patch_x} patch_y={patch_y}")
-
-        grid_rgb[hr][hc] = (0, 255, 0)
-
-    # Convert to screen.
-    img_gray = Image.fromarray(grid_rgb, mode='RGB')
-    img_rgb_240 = img_gray.resize((SCREEN_W, SCREEN_H), resample=Image.NEAREST)
-
-    return img_rgb_240
-
-
-def _draw_patch_path(
-    img_rgb_240: NdArrayRGB8,
-    patch_history: list[PatchId],
-    patch_size: int,
-    max_patch_x: int,
-    max_patch_y: int,
-    hist_rows: int,
-    hist_cols: int,
-    pixel_size: int,
-) -> NdArrayRGB8:
-    hr, hc = hist_rows, hist_cols
-
-    special_section_offsets = {}
-    next_special_section_id = [0]
-
-    # Sometimes we get a discontinuous jump, like:
-    #   Discountinuous x position: 1013 -> 65526
-    #
-    # Seems to happen when crossing boundaries in discontinuous levels like 4-4.
-    def _calc_c_for_special_section(check_patch_x: PatchId, hr: int, hc: int):
-        # print(f"REWRITING SPECIAL SECTION: patch={check_patch_x.patch_x},{check_patch_x.patch_y} hr={hr} hc={hc}")
-        # TODO(millman): this isn't right, special section is overlapping other things
-
-        # The section here is the 255-width pixel section that the level is divided into.
-        # Also called "screen" in the memory map.
-        x = check_patch_x.patch_x * patch_size
-
-        section_x = (x // 256) * 256
-        section_patch_x = section_x // patch_size
-
-        offset_x = x - section_x
-        offset_patch_x = offset_x // patch_size
-
-        # Determine how many full-screen offsets we need from the edge of the histogram.
-        if section_patch_x not in special_section_offsets:
-            special_section_offsets[section_patch_x] = next_special_section_id[0]
-            next_special_section_id[0] += 1
-
-        section_id = special_section_offsets[section_patch_x]
-        patches_in_section = 256 // patch_size
-
-        # Calculate the starting patch of the section.
-        section_c = hc - (1 + section_id) * patches_in_section
-
-        # Calculate how much offset we need from the start of the section.
-        # Rewrite the x and y position, for display into this after-level section.
-        c = section_c + offset_patch_x
-
-        # print(f"REWRITING SPECIAL SECTION: patch={check_patch_x.patch_x},{check_patch_x.patch_y} hr={hr} hc={hc} -> c={c}")
-
-        return c
-
-    draw = ImageDraw.Draw(img_rgb_240)
-
-    # print(f"PATCH HISTORY TO DRAW: {patch_history}")
-    prev_xy = None
-    prev_special = False
-    for i, p in enumerate(patch_history):
-        patch_x, patch_y = p.patch_x, p.patch_y
-
-        # For display purposes only, if we're at one of the special offscreen locations,
-        # Use an offset, but still show it in the histogram.
-        if patch_x <= max_patch_x:
-            # What row of the level we're in.  Wrap around if past the end of the screen.
-            wrap_i = patch_x // hc
-
-            r = wrap_i * (max_patch_y + _SPACE_R) + patch_y
-            c = patch_x % hc
-
-            is_special = False
-        else:
-            # Special case, we're past the end of the level for some special section.
-            r = hr - max_patch_y + patch_y
-            c = _calc_c_for_special_section(p, hr=hr, hc=hc)
-
-            is_special = True
-
-        # Convert r,c patch to center of pixel for patch.
-        #  pixel size: 4
-        #  hr = 60
-        #  screen_h = 224
-        #
-        #  hr * pixel_size = 224
-        #  hc * pixel_size = 240
-        scale_x = SCREEN_W / ((hc + 1) * pixel_size)
-        scale_y = SCREEN_H / ((hr + 1) * pixel_size)
-        y = (r + 0.5) * pixel_size * scale_y
-        x = (c + 0.5) * pixel_size * scale_x
-
-        if prev_xy is None or prev_special != is_special:
-            draw.line([(x,y), (x,y)], fill=(0, 255, 0), width=1)
-        else:
-            draw.line([prev_xy, (x,y)], fill=(0, 255, 0), width=1)
-
-        prev_xy = x, y
-        prev_special = is_special
-
-    return img_rgb_240
-
-
-def _draw_patch_grid(
-    img_rgb_240: NdArrayRGB8,
-    patch_size: int,
-    ram: NdArrayUint8,
-    x: int,
-    y: int,
-) -> NdArrayRGB8:
-
-    # Player x pos within current screen offset.
-    screen_offset_x = ram[0x03AD]
-
-    # Patches are based on player position, but the view is based on screen position.
-    # The first patch is going to be offset from the left side of the screen.
-    left_x = x - int(screen_offset_x)
-
-    # The first vertical line is going to be at an offset:
-    #   if the viewport is at 0, then the offset is 0
-    #   if the viewport is at 10, then the first patch will be drawn at 32-10 or 22
-    #   if the viewport is at 100, then first patch will be drawn at 32 - (100 % 32) or 28
-
-    x_offset = patch_size - left_x % patch_size
-    y_offset = 0
-
-    draw = ImageDraw.Draw(img_rgb_240)
-
-    # Draw all horizontal lines.
-    for j in range(SCREEN_H // patch_size + 1):
-        x0 = 0
-        x1 = SCREEN_W
-        y0 = j * patch_size + y_offset
-        draw.line([(x0, y0), (x1, y0)], fill=(0, 255, 0), width=1)
-
-    # Draw all vertical lines.
-    for i in range(SCREEN_W // patch_size + 1):
-        y0 = 0
-        y1 = SCREEN_H
-        x0 = x_offset + i * patch_size
-        draw.line([(x0, y0), (x0, y1)], fill=(0, 255, 0), width=1)
-
-    return img_rgb_240
-
-
 def _validate_save_state(save_info: SaveInfo, ram: NdArrayUint8):
     world = get_world(ram)
     level = get_level(ram)
@@ -945,7 +660,6 @@ def _print_info(
 
 
 _MAX_LEVEL_DIST = 6400
-_SPACE_R = 0
 
 
 def _history_length_for_level(default_history_length: int, natural_world_level: tuple[int, int]) -> int:
@@ -1058,7 +772,7 @@ def main():
     # We want the pixel size to be maximized, as long as everything fits on the screen.
     # When everything fits exactly,
     # We don't know the patches_per_row or the patch_pixel_size.
-    _HIST_ROWS, _HIST_COLS, _HIST_PIXEL_SIZE = _optimal_patch_layout(screen_width=240, screen_height=224, n_patches=_NUM_MAX_PATCHES)
+    _HIST_ROWS, _HIST_COLS, _HIST_PIXEL_SIZE = optimal_patch_layout(screen_width=240, screen_height=224, n_patches=_NUM_MAX_PATCHES)
 
     # Start searching the Mario game tree.
     envs.reset()
@@ -1526,7 +1240,7 @@ def main():
                 img_rgb_240 = Image.fromarray(obs_hwc.swapaxes(0, 1), mode='RGB')
                 expected_size = (SCREEN_W, SCREEN_H)
                 assert img_rgb_240.size == expected_size, f"Unexpected img_rgb_240 size: {img_rgb_240.size} != {expected_size}"
-                _draw_patch_grid(img_rgb_240, patch_size=patch_size, ram=ram, x=x, y=y)
+                draw_patch_grid(img_rgb_240, patch_size=patch_size, ram=ram, x=x, y=y)
                 screen.blit_image(img_rgb_240, screen_index=4)
 
             # Histogram of number of saves in each patch reservoir.
@@ -1535,7 +1249,7 @@ def main():
                 (p_id, len(res_ids))
                 for p_id, res_ids in saves._patch_to_reservoir_ids.items()
             ]
-            img_rgb_240 = _build_patch_histogram_rgb(
+            img_rgb_240 = build_patch_histogram_rgb(
                 patch_id_and_num_saves_pairs,
                 current_patch=patch_id,
                 patch_size=patch_size,
@@ -1552,7 +1266,7 @@ def main():
                 (p_id, p_stats.num_visited)
                 for p_id, p_stats in patches_stats.items()
             ]
-            img_rgb_240 = _build_patch_histogram_rgb(
+            img_rgb_240 = build_patch_histogram_rgb(
                 patch_id_and_seen_count_pairs,
                 current_patch=patch_id,
                 patch_size=patch_size,
@@ -1565,7 +1279,7 @@ def main():
             screen.blit_image(img_rgb_240, screen_index=3)
 
             # Histogram of sampling weight.
-            img_rgb_240 = _build_patch_histogram_rgb(
+            img_rgb_240 = build_patch_histogram_rgb(
                 patch_id_and_weight_pairs,
                 current_patch=patch_id,
                 patch_size=patch_size,
@@ -1575,7 +1289,7 @@ def main():
                 hist_cols=_HIST_COLS,
                 pixel_size=_HIST_PIXEL_SIZE,
             )
-            _draw_patch_path(
+            draw_patch_path(
                 img_rgb_240,
                 patch_history,
                 patch_size=patch_size,
