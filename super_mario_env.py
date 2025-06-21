@@ -301,7 +301,7 @@ class SimpleScreenRxC:
             pygame.quit()
 
 
-_DEBUG_LEVEL_START = True
+_DEBUG_LEVEL_START = False
 
 def _debug_level_from_ram(ram: NdArrayUint8, frame_num: int, desc: str):
     if not _DEBUG_LEVEL_START:
@@ -336,13 +336,18 @@ def _set_world_level(ram: NdArrayUint8, world: int, level: int):
     ram[0x0760] = np.uint8(target_level - 1)
 
 
+_DEBUG_WORLD_LEVEL_DECODING = False
+
+
 def _skip_start_screen(nes: Any, world_level: tuple[int, int] | None):
-    if True:
+    if _DEBUG_WORLD_LEVEL_DECODING:
+        print("World level decoding:")
+
         # Decode levels
         for w in range(1, 9):
             for l in range(1, 5):
                 target_world, target_stage, target_level = decode_world_level(w, l, lost_levels=False)
-                print(f"SETTING WORLD LEVEL: {w}-{l} decoded -> {target_world}, {target_stage}, {target_level}")
+                print(f"  {w}-{l} decoded -> {target_world}, {target_stage}, {target_level}")
 
     ram = nes.ram()
 
